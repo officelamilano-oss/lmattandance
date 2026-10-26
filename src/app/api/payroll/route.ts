@@ -131,6 +131,7 @@ export async function GET(request: Request) {
     );
     for (const day of attendanceDays) {
       for (const entry of day.entries) {
+        if (entry.unmarked) continue;
         const employeeId = entry.employeeId.toHexString();
         const employee = employeeById.get(employeeId);
         if (
@@ -456,7 +457,7 @@ export async function POST(request: Request) {
             const entry = attendanceByDate
               .get(date)
               ?.entries.find((item) => item.employeeId.equals(employee._id));
-            if (!entry)
+            if (!entry || entry.unmarked)
               throw new Error(
                 `ATTENDANCE_ENTRY_MISSING:${employee.employeeCode}:${date}`,
               );

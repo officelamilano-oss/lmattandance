@@ -1,4 +1,5 @@
 import { ObjectId } from "mongodb";
+import { cache } from "react";
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
 import { authOptions } from "@/lib/auth";
@@ -8,7 +9,7 @@ import { legacyOutletDefaultPermissions } from "@/lib/access-control";
 
 export interface Actor { id: ObjectId; email: string; name: string; role: UserRole; outletIds: ObjectId[]; permissions: Permission[] }
 
-export async function getActor(): Promise<Actor | null> {
+export const getActor = cache(async function getActor(): Promise<Actor | null> {
   const session = await getServerSession(authOptions);
   const email = session?.user?.email?.trim().toLowerCase();
   if (!email) return null;
@@ -23,7 +24,7 @@ export async function getActor(): Promise<Actor | null> {
         ? legacyOutletDefaultPermissions
         : user.permissions ?? [];
   return { id: user._id, email, name: user.name, role: user.role, outletIds: user.outletIds, permissions };
-}
+});
 
 export async function requireActor(permission?: Permission): Promise<Actor> {
   const actor = await getActor();

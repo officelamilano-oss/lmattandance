@@ -42,3 +42,4 @@ client_secret_*.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+/.private-employee-documents/

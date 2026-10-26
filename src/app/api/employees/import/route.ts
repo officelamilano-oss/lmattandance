@@ -220,9 +220,13 @@ export async function PUT(request: Request) {
         );
         continue;
       }
+      const { acceptedBy, ...employeeFields } = input.data;
       employees.push({
         _id: new ObjectId(),
-        ...input.data,
+        ...employeeFields,
+        ...(acceptedBy
+          ? { acceptedBy: new ObjectId(acceptedBy) }
+          : {}),
         employeeCodeNormalized: normalizedCode,
         outletId: targetOutletId,
         active: true,

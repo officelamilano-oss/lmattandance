@@ -9,7 +9,11 @@ export const employeeSchema = z.object({
   employeeCode: z.string().trim().min(1).max(30),
   fullName: z.string().trim().min(2).max(120),
   dateOfJoining: dateOnlySchema,
+  dateOfBirth: dateOnlySchema.nullable().optional(),
+  gender: z.enum(["MALE", "FEMALE"]).nullable().optional(),
   designation: z.string().trim().min(1).max(80),
+  designationKey: z.string().trim().max(80).nullable().optional(),
+  designationGroup: z.enum(["HEAD_OFFICE", "OUTLET"]).nullable().optional(),
   employmentType: z.enum(["FULL_TIME", "PART_TIME"]).default("FULL_TIME"),
   mobile: z.string().trim().min(7).max(20),
   outletId: objectIdSchema,
@@ -21,6 +25,66 @@ export const employeeSchema = z.object({
   esiEnabled: z.boolean().optional().default(false),
   esiPercent: z.number().min(0).max(100).optional().default(0.75),
   notes: z.string().trim().max(1000).optional().default(""),
+  beneficiaryName: z.string().trim().max(120).nullable().optional(),
+  bankName: z.string().trim().max(120).nullable().optional(),
+  branchName: z.string().trim().max(120).nullable().optional(),
+  accountNumber: z
+    .string()
+    .trim()
+    .regex(/^\d{9,18}$/, "Account number must contain 9 to 18 digits.")
+    .nullable()
+    .optional(),
+  ifscCode: z
+    .string()
+    .trim()
+    .regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, "Enter a valid IFSC code.")
+    .nullable()
+    .optional(),
+  panNumber: z
+    .string()
+    .trim()
+    .regex(/^[A-Z]{5}\d{4}[A-Z]$/, "Enter PAN in the format AAAAA9999A.")
+    .nullable()
+    .optional(),
+  aadhaarNumber: z
+    .string()
+    .trim()
+    .regex(/^\d{12}$/, "Aadhaar number must contain exactly 12 digits.")
+    .nullable()
+    .optional(),
+  drivingLicenceNumber: z.string().trim().max(40).nullable().optional(),
+  termsAccepted: z.literal(true).optional(),
+  termsVersion: z.string().trim().max(20).optional(),
+  acceptedAt: z.date().optional(),
+  acceptedBy: objectIdSchema.optional(),
+}).superRefine((employee, context) => {
+  if (!employee.dateOfBirth) return;
+  if (employee.dateOfBirth >= employee.dateOfJoining) {
+    context.addIssue({
+      code: "custom",
+      path: ["dateOfBirth"],
+      message: "Date of birth must be before the joining date.",
+    });
+    return;
+  }
+  const [birthYear, birthMonth, birthDay] = employee.dateOfBirth
+    .split("-")
+    .map(Number);
+  const [joinYear, joinMonth, joinDay] = employee.dateOfJoining
+    .split("-")
+    .map(Number);
+  let age = joinYear - birthYear;
+  if (
+    joinMonth < birthMonth ||
+    (joinMonth === birthMonth && joinDay < birthDay)
+  )
+    age -= 1;
+  if (age < 18)
+    context.addIssue({
+      code: "custom",
+      path: ["dateOfBirth"],
+      message: "Employee must be at least 18 on the joining date.",
+    });
 });
 
 export const attendanceSchema = z.object({
@@ -30,7 +94,7 @@ export const attendanceSchema = z.object({
     .array(
       z.object({
         employeeId: objectIdSchema,
-        status: z.enum(["P", "A", "WO", "HD"]),
+        status: z.enum(["P", "A", "WO", "HD"]).nullable(),
       }),
     )
     .max(500),

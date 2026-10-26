@@ -419,7 +419,11 @@ async function getRows(
     const rows: ExportRow[] = [];
     for (const day of days) {
       for (const entry of day.entries) {
-        if (entry.status !== "A" && entry.status !== "HD") continue;
+        if (
+          entry.unmarked ||
+          (entry.status !== "A" && entry.status !== "HD")
+        )
+          continue;
         const employee = employeeById.get(entry.employeeId.toHexString());
         if (
           !employee ||
@@ -532,6 +536,11 @@ async function getRows(
             item.employeeId.equals(employee._id),
           );
           if (!day || !entry) {
+            missingDates.push(date);
+            monthData.complete = false;
+            continue;
+          }
+          if (entry.unmarked) {
             missingDates.push(date);
             monthData.complete = false;
             continue;
@@ -702,6 +711,7 @@ async function getRows(
     >();
     for (const day of attendanceDays) {
       for (const entry of day.entries) {
+        if (entry.unmarked) continue;
         const employeeId = entry.employeeId.toHexString();
         const employee = employeeById.get(employeeId);
         if (

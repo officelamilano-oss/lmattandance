@@ -11,6 +11,7 @@
     "start": "next start",
     "lint": "eslint",
     "setup:db": "node --env-file-if-exists=.env.local scripts/setup-db.mjs",
+    "migrate:employee-profile": "node --env-file-if-exists=.env.local scripts/migrate-employee-profile.mjs",
     "bootstrap:admin": "node --env-file-if-exists=.env.local scripts/bootstrap-admin.mjs",
     "test": "tsx --test"
   },

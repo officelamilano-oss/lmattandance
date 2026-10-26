@@ -63,7 +63,11 @@ export interface EmployeeDocument {
   employeeCodeNormalized: string;
   fullName: string;
   dateOfJoining: string;
+  dateOfBirth?: string | null;
+  gender?: "MALE" | "FEMALE" | null;
   designation: string;
+  designationKey?: string | null;
+  designationGroup?: "HEAD_OFFICE" | "OUTLET" | null;
   employmentType?: EmploymentType;
   mobile: string;
   outletId: ObjectId;
@@ -74,6 +78,18 @@ export interface EmployeeDocument {
   employerPfPercent: number;
   esiEnabled?: boolean;
   esiPercent?: number;
+  beneficiaryName?: string | null;
+  bankName?: string | null;
+  branchName?: string | null;
+  accountNumber?: string | null;
+  ifscCode?: string | null;
+  panNumber?: string | null;
+  aadhaarNumber?: string | null;
+  drivingLicenceNumber?: string | null;
+  termsAccepted?: boolean;
+  termsVersion?: string;
+  acceptedAt?: Date;
+  acceptedBy?: ObjectId;
   active: boolean;
   deactivatedAt?: string;
   notes?: string;
@@ -82,8 +98,27 @@ export interface EmployeeDocument {
   updatedAt: Date;
 }
 
+export type EmployeeDocumentType =
+  | "AADHAAR"
+  | "PAN"
+  | "BANK_PROOF"
+  | "DRIVING_LICENCE"
+  | "PHOTO"
+  | "OTHER";
+
+export interface EmployeeFileDocument {
+  _id: ObjectId;
+  employeeId: ObjectId;
+  documentType: EmployeeDocumentType;
+  storageKey: string;
+  mimeType: string;
+  size: number;
+  uploadedBy: ObjectId;
+  uploadedAt: Date;
+}
+
 export type AttendanceStatus = "P" | "A" | "WO" | "HD";
-export interface AttendanceEntry { employeeId: ObjectId; status: AttendanceStatus; updatedAt: Date; updatedBy: ObjectId; correctionCount?: number; submitted?: boolean }
+export interface AttendanceEntry { employeeId: ObjectId; status: AttendanceStatus; updatedAt: Date; updatedBy: ObjectId; correctionCount?: number; submitted?: boolean; unmarked?: boolean }
 export interface AttendanceDayDocument {
   _id: ObjectId;
   outletId: ObjectId;

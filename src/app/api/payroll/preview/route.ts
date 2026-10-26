@@ -135,7 +135,7 @@ export async function GET(request: Request) {
       const entry = attendanceByDate
         .get(date)
         ?.entries.find((item) => item.employeeId.equals(employee._id));
-      if (!entry)
+      if (!entry || entry.unmarked)
         return NextResponse.json(
           {
             error: `Submitted attendance is required for ${date} before payroll can be generated.`,

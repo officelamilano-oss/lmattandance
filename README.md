@@ -26,6 +26,7 @@ ADMIN_PASSWORD=<unique-password-at-least-10-characters>
 BOOTSTRAP_ADMIN_EMAIL=<admin-email-used-by-the-app>
 BOOTSTRAP_ADMIN_NAME=<admin-display-name>
 BUSINESS_TIMEZONE=Asia/Kolkata
+EMPLOYEE_DOCUMENT_STORAGE_PROVIDER=mongodb
 ```
 
 Replace every MongoDB URI placeholder with your Atlas values, and keep its database name consistent with `MONGODB_DB`. Encode special characters in the MongoDB username and password for use in a URI. Set `NEXTAUTH_URL` to the local URL for development and to the canonical site URL in the deployment environment. Keep it server-side; do not expose it or database settings through `next.config.ts`'s `env` option or `NEXT_PUBLIC_` variables. Generate an Auth.js secret with:
@@ -46,6 +47,8 @@ npm run setup:db
 
 If a unique index conflicts with existing records, setup stops with the index name. Review and resolve duplicate data or an incompatible existing index manually; do not drop production data to make setup pass. Run setup again after correction. Confirm Atlas network access and grant the database user read/write access to the configured database.
 
+For the employee profile fields, run `npm run migrate:employee-profile` once after configuring MongoDB. It fills only missing nullable fields and preserves existing profile data. Employee documents are stored privately in the MongoDB GridFS bucket; the app serves them through authenticated, outlet-scoped routes.
+
 The application uses the existing collections: `users`, `outlets`, `employees`, `attendance`, `advances`, `loans`, `salaryRecords`, `accessPermissions`, `auditLogs`, `settings`, and `roles`. Attendance is stored as one date/outlet document with employee entries; this supports an atomic submit/lock transition.
 
 ## Employee Sheet Import and Outlet Attendance
@@ -53,6 +56,8 @@ The application uses the existing collections: `users`, `outlets`, `employees`, 
 From **Employees → Import employee sheet**, a `MAIN_ADMIN` can preview and import CSV or `.xlsx` files (up to 5 MB and 500 workers). Map the sheet headings to employee fields and choose the destination outlet. Employee code is the unique match key: matching workers at that outlet are updated; new codes are added. Rows are fully validated before writes, and duplicate codes or codes owned by another outlet are rejected. The importer never evaluates spreadsheet formulas: in sheet mode it reads Excel's last saved formula result; missing results can be entered manually. In app-payroll mode, formula cells are ignored and their monthly base salary must be entered manually; the existing app payroll rules calculate pay from attendance and salary settings. CSV files contain values only. PDF and legacy `.xls` files are not supported.
 
 For example, a sheet can include `Employee Code`, `Full Name`, `Date of Joining`, `Designation`, `Mobile`, and `Monthly Base Salary`; other supported optional headings include `PF Enabled`, `Employee PF %`, `Employer PF %`, `ESI Enabled`, `Employee ESI %`, and `Notes`. Salary calculations use the app's fixed 30-day basis.
+
+Use **Add employee** to open the employee form. Employee codes can be auto-generated from the outlet name, and selecting a Delivery Rider requires a driving licence for authorized users. Creating a record requires reviewing and accepting the bilingual employment terms. Admin users can manage the additional personal, bank, identity, and private document fields; the add-form draft stores only non-sensitive fields in that user's browser. Uploaded documents accept JPG, PNG, WEBP, and PDF files up to 5 MB each and are available only to authorized head-office users.
 
 Create an account from **Access management** using the person's email and password, assign its outlet or outlets, and select a designation or configure custom permissions. A `MAIN_ADMIN` can reset an account password from its **Password** action; the existing password cannot be viewed because credentials are stored as one-way hashes. An `OUTLET_USER` can be assigned one active outlet; other staff roles can be assigned multiple outlets. The permissions granted by a designation control which dashboard, attendance, employee, advances, salary, and report pages/actions the account can use. Updating a designation updates the permissions for all accounts assigned to it. Outlets, Access management, and global Settings remain `MAIN_ADMIN`-only. The confirmation on **Submit & lock** saves the outlet's attendance to the master attendance record; only an authorized administrator can unlock a submitted sheet.
 

@@ -225,6 +225,11 @@
                 monthData.complete = false;
                 continue;
               }
+              if (entry.unmarked) {
+                missingDates.push(date);
+                monthData.complete = false;
+                continue;
+              }
               dates[entry.status].push(date);
               if (day.status !== "SUBMITTED") {
                 unsubmittedDates.push(date);

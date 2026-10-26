@@ -70,11 +70,23 @@ export async function GET(request: Request) {
       );
       const counts = { P: 0, A: 0, WO: 0, HD: 0 };
       for (const day of days)
-        for (const entry of day.entries) counts[entry.status] += 1;
+        for (const entry of day.entries)
+          if (!entry.unmarked) counts[entry.status] += 1;
       return NextResponse.json({
         counts,
         outletCount: outlets.length,
         submittedCount: days.filter((day) => day.status === "SUBMITTED").length,
+        attendanceOutlets: outlets.map((outlet) => {
+          const day = dayByOutletId.get(outlet._id.toHexString());
+          return {
+            _id: outlet._id,
+            code: outlet.code,
+            name: outlet.name,
+            status: day?.status,
+            submittedAt: day?.submittedAt,
+            corrections: day?.corrections ?? [],
+          };
+        }),
         employees: employees.map((employee) => {
           const outlet = outletById.get(employee.outletId.toHexString());
           const day = dayByOutletId.get(employee.outletId.toHexString());
@@ -89,7 +101,7 @@ export async function GET(request: Request) {
             outletId: employee.outletId,
             outletCode: outlet?.code,
             outletName: outlet?.name,
-            attendanceStatus: entry?.status ?? null,
+            attendanceStatus: entry && !entry.unmarked ? entry.status : null,
             attendanceEntryExists: !!entry,
             attendanceSubmitted:
               !!entry &&
@@ -128,7 +140,8 @@ export async function GET(request: Request) {
       ]),
     );
     const counts = { P: 0, A: 0, WO: 0, HD: 0 };
-    for (const entry of entries.values()) counts[entry.status] += 1;
+    for (const entry of entries.values())
+      if (!entry.unmarked) counts[entry.status] += 1;
     return NextResponse.json({
       outlet: { id: outlet._id, code: outlet.code, name: outlet.name },
       day,
@@ -142,8 +155,10 @@ export async function GET(request: Request) {
         outletCode: outlet.code,
         outletName: outlet.name,
         ...(actor.role === "OUTLET_USER" ? {} : { mobile: employee.mobile }),
-        attendanceStatus:
-          entries.get(employee._id.toHexString())?.status ?? null,
+        attendanceStatus: (() => {
+          const entry = entries.get(employee._id.toHexString());
+          return entry && !entry.unmarked ? entry.status : null;
+        })(),
         attendanceEntryExists: entries.has(employee._id.toHexString()),
         attendanceSubmitted:
           !!entries.get(employee._id.toHexString()) &&
@@ -248,7 +263,10 @@ export async function PUT(request: Request) {
     }
     const now = new Date();
     const wasUnlocked = existingDay?.corrections.at(-1)?.action === "UNLOCK";
-    if (body.action === "SUBMIT" && input.entries.length === 0)
+    if (
+      body.action === "SUBMIT" &&
+      !input.entries.some((entry) => entry.status !== null)
+    )
       return NextResponse.json(
         { error: "Mark at least one employee before submitting attendance." },
         { status: 400 },
@@ -264,11 +282,13 @@ export async function PUT(request: Request) {
       const isAlreadySubmitted =
         !!previous &&
         existingDay?.status === "SUBMITTED" &&
-        previous.submitted !== false;
+        previous.submitted !== false &&
+        !previous.unmarked;
+      const previousStatus = previous?.unmarked ? null : previous?.status;
       if (
         isAlreadySubmitted &&
         previous &&
-        previous.status !== entry.status
+        previousStatus !== entry.status
       )
         return NextResponse.json(
           {
@@ -281,7 +301,7 @@ export async function PUT(request: Request) {
       if (
         wasUnlocked &&
         actor.role !== "MAIN_ADMIN" &&
-        previous?.status !== entry.status &&
+        previousStatus !== entry.status &&
         correctionCount >= 2
       )
         return NextResponse.json(
@@ -302,15 +322,34 @@ export async function PUT(request: Request) {
     );
     for (const entry of input.entries) {
       const previous = previousEntries.get(entry.employeeId);
-      const changed = previous?.status !== entry.status;
+      const previousStatus = previous?.unmarked ? null : previous?.status;
+      const changed = previousStatus !== entry.status;
+      if (entry.status === null) {
+        if (previous && !previous.unmarked) {
+          entries.set(entry.employeeId, {
+            ...previous,
+            unmarked: true,
+            updatedAt: now,
+            updatedBy: actor.id,
+            correctionCount:
+              wasUnlocked && changed
+                ? (previous.correctionCount ?? 0) + 1
+                : (previous.correctionCount ?? 0),
+            submitted: false,
+          });
+        }
+        continue;
+      }
       const isAlreadySubmitted =
         !!previous &&
         existingDay?.status === "SUBMITTED" &&
-        previous.submitted !== false;
+        previous.submitted !== false &&
+        !previous.unmarked;
       if (isAlreadySubmitted) continue;
       entries.set(entry.employeeId, {
         employeeId: new ObjectId(entry.employeeId),
         status: entry.status,
+        unmarked: false,
         updatedAt: now,
         updatedBy: actor.id,
         correctionCount:
@@ -322,8 +361,9 @@ export async function PUT(request: Request) {
     }
     const hasSubmittedEntries = [...entries.values()].some(
       (entry) =>
-        entry.submitted ||
-        (existingDay?.status === "SUBMITTED" && entry.submitted !== false),
+        !entry.unmarked &&
+        (entry.submitted ||
+          (existingDay?.status === "SUBMITTED" && entry.submitted !== false)),
     );
     const shouldBeSubmitted =
       body.action === "SUBMIT" || hasSubmittedEntries;

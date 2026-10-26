@@ -5,6 +5,7 @@
     useEffectEvent,
     useRef,
     useState,
+    useTransition,
     type FormEvent,
   } from "react";
   import Link from "next/link";
@@ -26,7 +27,14 @@
     Search,
     Send,
     SlidersHorizontal,
+    BriefcaseBusiness,
+    CalendarCheck,
+    Clock3,
+    Store,
+    Users,
+    Wallet,
     X,
+    type LucideIcon,
   } from "lucide-react";
   import type {
     AttendanceStatus,
@@ -36,6 +44,7 @@
   } from "@/lib/models";
   import type {
     AttendanceCounts,
+    AttendanceOutletView,
     DashboardOutlet,
     DesignationView,
     EmployeeView,
@@ -54,6 +63,7 @@
     legacyOutletDefaultPermissions,
   } from "@/lib/access-control";
   import { EmployeeImportPanel } from "@/components/employee-import-panel";
+  import { EmployeeCreatePanel } from "@/components/employee-create-panel";
   import { AutoDismissNotice } from "@/components/auto-dismiss-notice";
   import { getIndiaDate, getIndiaMonth } from "@/lib/payroll/dates";
   import { formatDate, formatDateTime } from "@/lib/date-format";
@@ -70,7 +80,7 @@
     XAxis,
   } from "recharts";
 
-  type Section =
+  export type WorkspaceSection =
     | "dashboard"
     | "attendance"
     | "salary"
@@ -85,7 +95,12 @@
   type Outlet = DashboardOutlet;
   type Employee = EmployeeView;
 
-  async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  type ExportFormat = "xlsx" | "csv";
+
+  async function performRequest<T>(
+    url: string,
+    init?: RequestInit,
+  ): Promise<T> {
     const response = await fetch(url, {
       ...init,
       headers: { "Content-Type": "application/json", ...init?.headers },
@@ -111,7 +126,36 @@
     return payload as T;
   }
 
-  type ExportFormat = "xlsx" | "csv";
+  async function request<T>(url: string, init?: RequestInit): Promise<T> {
+    const requestKey =
+      (init?.method?.toUpperCase() ?? "GET") === "GET" && !init?.signal
+        ? url
+        : undefined;
+    const existing = requestKey
+      ? inFlightGetRequests.get(requestKey)
+      : undefined;
+    if (existing) return (await existing) as T;
+
+    const pending = performRequest<T>(url, init);
+    if (requestKey) inFlightGetRequests.set(requestKey, pending);
+    try {
+      return await pending;
+    } finally {
+      if (requestKey && inFlightGetRequests.get(requestKey) === pending)
+        inFlightGetRequests.delete(requestKey);
+    }
+  }
+  const inFlightGetRequests = new Map<string, Promise<unknown>>();
+  const attendanceStatusOptions: Array<{
+    value: AttendanceStatus;
+    label: string;
+    title: string;
+  }> = [
+    { value: "P", label: "P", title: "Present" },
+    { value: "A", label: "A", title: "Absent" },
+    { value: "WO", label: "WO", title: "Week off" },
+    { value: "HD", label: "HD", title: "Half day" },
+  ];
 
   async function downloadReport(url: string, format: ExportFormat) {
     const response = await fetch(url);
@@ -199,7 +243,7 @@
     section,
     user,
   }: {
-    section: Section;
+    section: WorkspaceSection;
     user: {
       name: string;
       email: string;
@@ -210,12 +254,13 @@
     const [outlets, setOutlets] = useState<Outlet[]>([]);
     const employeeOutlets = outlets.filter((outlet) => outlet.active);
     const [selectedOutlet, setSelectedOutlet] = useState("");
-    const [newEmployeeOutletId, setNewEmployeeOutletId] = useState("");
     const attendanceOutlets = outlets.filter((outlet) => outlet.active);
     const attendanceOutletId =
       attendanceOutlets.length === 1 ? attendanceOutlets[0]._id : selectedOutlet;
     const attendanceAllOutlets =
       attendanceOutlets.length > 1 && !selectedOutlet;
+    const attendanceReloadKey =
+      section === "attendance" ? attendanceOutlets.length : 0;
     const today = getIndiaDate();
     const [busy, setBusy] = useState(false);
     const [loading, setLoading] = useState(true);
@@ -225,7 +270,7 @@
     const [data, setData] = useState<WorkspaceData>({});
     const [date, setDate] = useState(() => getIndiaDate());
     const [month, setMonth] = useState(() => getIndiaMonth());
-    const [dashboardDate, setDashboardDate] = useState(() => getIndiaDate());
+    const dashboardDate = today;
     const [dashboardFrom, setDashboardFrom] = useState(
       () => `${getIndiaMonth()}-01`,
     );
@@ -234,10 +279,17 @@
     const [dashboardEmployeeId, setDashboardEmployeeId] = useState("");
     const [dashboardExportBusy, setDashboardExportBusy] =
       useState<ExportFormat | null>(null);
-    const [awayPeriod, setAwayPeriod] = useState("TODAY");
+    const [awayPeriod, setAwayPeriod] = useState("THIS_MONTH");
     const [awayFrom, setAwayFrom] = useState(() => `${getIndiaMonth()}-01`);
     const [awayTo, setAwayTo] = useState(() => getIndiaDate());
+    const [loadingAttendanceRange, startAttendanceRangeTransition] =
+      useTransition();
+    const [loadingWhoIsAway, startWhoIsAwayTransition] = useTransition();
+    const [attendanceRangeError, setAttendanceRangeError] = useState("");
+    const [whoIsAwayError, setWhoIsAwayError] = useState("");
+    const [rangeRefreshKey, setRangeRefreshKey] = useState(0);
     const [search, setSearch] = useState("");
+    const [debouncedSearch, setDebouncedSearch] = useState("");
     const [page, setPage] = useState(1);
     const [advanceStatus, setAdvanceStatus] = useState<
       "ALL" | "PENDING" | "APPROVED" | "REJECTED"
@@ -245,6 +297,10 @@
     const [isAdvanceFormOpen, setIsAdvanceFormOpen] = useState(false);
     const [isAttendanceUnlockOpen, setIsAttendanceUnlockOpen] = useState(false);
     const [attendanceUnlockReason, setAttendanceUnlockReason] = useState("");
+    const [attendanceActionOutletId, setAttendanceActionOutletId] = useState("");
+    const [attendanceSubmitOutletIds, setAttendanceSubmitOutletIds] = useState<
+      string[]
+    >([]);
     const [isAttendanceConfirmOpen, setIsAttendanceConfirmOpen] =
       useState(false);
     const [attendanceSubmitConfirmation, setAttendanceSubmitConfirmation] =
@@ -263,17 +319,9 @@
       try {
         if (section === "dashboard") {
           const dashboardParams = new URLSearchParams({ date: dashboardDate });
-          const awayDates = getAwayDateRange(
-            awayPeriod,
-            awayFrom,
-            awayTo,
-            today,
-          );
-          dashboardParams.set("awayFrom", awayDates.from);
-          dashboardParams.set("awayTo", awayDates.to);
+          dashboardParams.set("includeAway", "false");
           if (selectedOutlet) dashboardParams.set("outletId", selectedOutlet);
           const dashboardUrl = `/api/dashboard?${dashboardParams.toString()}`;
-          const dashboard = await request<WorkspaceData>(dashboardUrl);
           if (user.permissions.includes("employees.read")) {
             const reportParams = new URLSearchParams({
               from: dashboardFrom,
@@ -283,11 +331,38 @@
             if (dashboardEmployeeId)
               reportParams.set("employeeId", dashboardEmployeeId);
             const reportUrl = `/api/reports/employee-attendance?${reportParams.toString()}`;
-            const employeeAttendance =
-              await request<EmployeeAttendanceReport>(reportUrl);
-            setData({ ...dashboard, employeeAttendance });
+            const dashboardRequest = request<WorkspaceData>(dashboardUrl);
+            const reportRequest =
+              request<EmployeeAttendanceReport>(reportUrl);
+            const dashboard = await dashboardRequest;
+            if (reloadId === attendanceReloadId.current)
+              setData((previous) => ({
+                ...previous,
+                ...dashboard,
+                whoIsAway: previous.whoIsAway,
+                attendanceRange: previous.attendanceRange,
+                attendanceRangeOutlets: previous.attendanceRangeOutlets,
+              }));
+            const employeeAttendance = await reportRequest;
+            if (reloadId === attendanceReloadId.current)
+              setData((previous) => ({
+                ...previous,
+                ...dashboard,
+                employeeAttendance,
+                whoIsAway: previous.whoIsAway,
+                attendanceRange: previous.attendanceRange,
+                attendanceRangeOutlets: previous.attendanceRangeOutlets,
+              }));
           } else {
-            setData(dashboard);
+            const dashboard = await request<WorkspaceData>(dashboardUrl);
+            if (reloadId === attendanceReloadId.current)
+              setData((previous) => ({
+                ...previous,
+                ...dashboard,
+                whoIsAway: previous.whoIsAway,
+                attendanceRange: previous.attendanceRange,
+                attendanceRangeOutlets: previous.attendanceRangeOutlets,
+              }));
           }
         }
         if (section === "attendance") {
@@ -307,12 +382,12 @@
             setData({});
           }
         }
-        if (section === "employees")
-          setData(
-            await request<WorkspaceData>(
-              `/api/employees?page=${page}&pageSize=20&q=${encodeURIComponent(search)}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
-            ),
+        if (section === "employees") {
+          const employeeData = await request<WorkspaceData>(
+            `/api/employees?page=${page}&pageSize=20&q=${encodeURIComponent(debouncedSearch)}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
           );
+          if (reloadId === attendanceReloadId.current) setData(employeeData);
+        }
         if (section === "advances") {
           const advanceParams = new URLSearchParams({ page: String(page) });
           if (selectedOutlet) advanceParams.set("outletId", selectedOutlet);
@@ -379,6 +454,13 @@
       void reload();
     });
     useEffect(() => {
+      const timer = window.setTimeout(() => {
+        setDebouncedSearch(search);
+        setPage(1);
+      }, 250);
+      return () => window.clearTimeout(timer);
+    }, [search]);
+    useEffect(() => {
       let cancelled = false;
       void request<{ outlets: Outlet[] }>("/api/outlets")
         .then((result) => {
@@ -410,24 +492,102 @@
         );
     }, [user.email, user.role]);
     useEffect(() => {
+      if (section === "attendance" && attendanceReloadKey === 0) return;
       void Promise.resolve().then(() => reloadCurrentView());
     }, [
       section,
       selectedOutlet,
       attendanceOutletId,
-      attendanceOutlets.length,
+      attendanceReloadKey,
       date,
       month,
       dashboardDate,
       dashboardFrom,
       dashboardTo,
       dashboardEmployeeId,
+      debouncedSearch,
+      page,
+      advanceStatus,
+    ]);
+
+    useEffect(() => {
+      if (section !== "dashboard") return;
+      const range = getAwayDateRange(awayPeriod, awayFrom, awayTo, today);
+      if (!range.from || !range.to || range.from > range.to) return;
+      let active = true;
+      const params = new URLSearchParams({
+        date: dashboardDate,
+        from: range.from,
+        to: range.to,
+        view: "attendance-range",
+      });
+      if (selectedOutlet) params.set("outletId", selectedOutlet);
+      const attendanceRequest = request<{
+        attendanceRange: AttendanceCounts;
+        attendanceRangeOutlets: DashboardOutlet[];
+      }>(`/api/dashboard?${params.toString()}`);
+      startAttendanceRangeTransition(async () => {
+        try {
+          const attendanceResult = await attendanceRequest;
+          if (!active) return;
+          setData((previous) => ({
+            ...previous,
+            ...attendanceResult,
+          }));
+          setAttendanceRangeError("");
+        } catch (caught) {
+          if (active)
+            setAttendanceRangeError(
+              caught instanceof Error
+                ? caught.message
+                : "Unable to load attendance for the selected range.",
+            );
+        }
+      });
+      if (user.permissions.includes("attendance.read")) {
+        const awayParams = new URLSearchParams({
+          date: dashboardDate,
+          from: range.from,
+          to: range.to,
+          view: "who-is-away",
+        });
+        if (selectedOutlet) awayParams.set("outletId", selectedOutlet);
+        const awayRequest = request<{ whoIsAway: WhoIsAwayView[] }>(
+          `/api/dashboard?${awayParams.toString()}`,
+        );
+        startWhoIsAwayTransition(async () => {
+          try {
+            const awayResult = await awayRequest;
+            if (!active) return;
+            setData((previous) => ({
+              ...previous,
+              whoIsAway: awayResult.whoIsAway,
+            }));
+            setWhoIsAwayError("");
+          } catch (caught) {
+            if (active)
+              setWhoIsAwayError(
+                caught instanceof Error
+                  ? caught.message
+                  : "Unable to load Who’s Away for the selected range.",
+              );
+          }
+        });
+      }
+
+      return () => {
+        active = false;
+      };
+    }, [
+      section,
       awayPeriod,
       awayFrom,
       awayTo,
-      search,
-      page,
-      advanceStatus,
+      today,
+      dashboardDate,
+      selectedOutlet,
+      user.permissions,
+      rangeRefreshKey,
     ]);
 
     function applyDashboardPreset(value: string) {
@@ -588,23 +748,59 @@
         ))}
       </select>
     );
+    const dashboardRange = getAwayDateRange(
+      awayPeriod,
+      awayFrom,
+      awayTo,
+      today,
+    );
     const toolbar = (
       <div className="toolbar">
         {outletSelect}
         {section === "dashboard" && (
-          <input
-            type="date"
-            aria-label="Dashboard date"
-            value={dashboardDate}
-            max={today}
-            onChange={(event) => setDashboardDate(event.target.value)}
-          />
+          <>
+            <select
+              aria-label="Dashboard attendance date range"
+              value={awayPeriod}
+              onChange={(event) => setAwayPeriod(event.target.value)}
+            >
+              <option value="TODAY">Today</option>
+              <option value="THIS_MONTH">This month</option>
+              <option value="LAST_WEEK">Last 7 days</option>
+              <option value="LAST_MONTH">Last month</option>
+              <option value="ALL_TIME">All time</option>
+              <option value="CUSTOM">Custom range</option>
+            </select>
+            {awayPeriod === "CUSTOM" && (
+              <>
+                <input
+                  type="date"
+                  aria-label="Dashboard range start date"
+                  value={awayFrom}
+                  max={awayTo || today}
+                  onChange={(event) => setAwayFrom(event.target.value)}
+                />
+                <input
+                  type="date"
+                  aria-label="Dashboard range end date"
+                  value={awayTo}
+                  min={awayFrom}
+                  max={today}
+                  onChange={(event) => setAwayTo(event.target.value)}
+                />
+              </>
+            )}
+          </>
         )}
         <button
           className="icon-button"
           title="Refresh"
           aria-label="Refresh"
-          onClick={() => void reload()}
+          onClick={() => {
+            void reload();
+            if (section === "dashboard")
+              setRangeRefreshKey((value) => value + 1);
+          }}
         >
           <RefreshCw size={17} />
         </button>
@@ -616,36 +812,44 @@
         <div className="content-area">
           <PageHead
             title="Good service starts with a good team."
-            description={`Live operations snapshot for ${data.today ?? "today"}.`}
+            description={`Live operations snapshot for ${data.today ?? "today"}. Attendance range: ${formatDate(dashboardRange.from)} to ${formatDate(dashboardRange.to)}.`}
             action={toolbar}
           />
-          <Notice error={error} success={success} />
-          {loading ? (
+          <Notice
+            error={error || attendanceRangeError || whoIsAwayError}
+            success={success}
+          />
+          {loading && data.metrics === undefined ? (
             <Loading />
           ) : (
             <>
+              {loading && <div className="sub-cell">Refreshing dashboard…</div>}
               <div className="metric-grid">
                 <Metric
                   title="Active employees"
                   value={data.metrics?.activeEmployees ?? 0}
                   accent="red"
+                  icon={Users}
                 />
                 <Metric
                   title="Full-time"
                   value={data.metrics?.fullTimeEmployees ?? "—"}
                   detail="Active team members"
                   accent="green"
+                  icon={BriefcaseBusiness}
                 />
                 <Metric
                   title="Part-time"
                   value={data.metrics?.partTimeEmployees ?? "—"}
                   detail="Active team members"
                   accent="gold"
+                  icon={Clock3}
                 />
                 <Metric
                   title="Active outlets"
                   value={data.metrics?.activeOutlets ?? 0}
                   accent="green"
+                  icon={Store}
                 />
                 <Metric
                   title="Attendance today"
@@ -655,6 +859,7 @@
                   )}
                   detail={`${data.metrics?.missingSubmissions ?? 0} outlets not submitted`}
                   accent="gold"
+                  icon={CalendarCheck}
                 />
                 <Metric
                   title="Net payroll"
@@ -669,19 +874,29 @@
                       : `Accrued through ${dashboardDate} · ${data.metrics.pendingApprovals ?? 0} pending approvals`
                   }
                   accent="ink"
+                  icon={Wallet}
                 />
               </div>
               <div className="dashboard-charts">
                 <AttendanceStatusChart
                   attendance={
-                    data.metrics?.attendance ?? { P: 0, A: 0, HD: 0, WO: 0 }
+                    data.attendanceRange ?? { P: 0, A: 0, HD: 0, WO: 0 }
                   }
+                  from={dashboardRange.from}
+                  to={dashboardRange.to}
+                  loading={loadingAttendanceRange}
                 />
-                <OutletChart outlets={data.outlets ?? []} />
+                <OutletChart
+                  outlets={data.attendanceRangeOutlets ?? []}
+                  from={dashboardRange.from}
+                  to={dashboardRange.to}
+                  loading={loadingAttendanceRange}
+                />
               </div>
               {user.permissions.includes("attendance.read") && (
                 <WhoIsAwayPanel
                   employees={data.whoIsAway ?? []}
+                  loading={loadingWhoIsAway}
                   period={awayPeriod}
                   customFrom={awayFrom}
                   customTo={awayTo}
@@ -782,6 +997,27 @@
       );
 
     const attendanceEmployees = data.employees ?? [];
+    const currentAttendanceCounts: AttendanceCounts = {
+      P: 0,
+      A: 0,
+      WO: 0,
+      HD: 0,
+    };
+    const attendanceEmployeesByOutlet = new Map<string, Employee[]>();
+    for (const employee of attendanceEmployees) {
+      if (employee.attendanceStatus)
+        currentAttendanceCounts[employee.attendanceStatus] += 1;
+      const employees = attendanceEmployeesByOutlet.get(employee.outletId) ?? [];
+      employees.push(employee);
+      attendanceEmployeesByOutlet.set(employee.outletId, employees);
+    }
+    const attendanceOutletSummaries: AttendanceOutletView[] =
+      data.attendanceOutlets ??
+      attendanceOutlets.map((outlet) => ({
+        _id: outlet._id,
+        code: outlet.code,
+        name: outlet.name,
+      }));
     const markedAttendanceCount = attendanceEmployees.filter(
       (employee) => employee.attendanceStatus,
     ).length;
@@ -795,10 +1031,6 @@
       (employee) =>
         employee.attendanceStatus && !employee.attendanceSubmitted,
     );
-    const hasUnsubmittedEmployees = attendanceEmployees.some(
-      (employee) => !employee.attendanceSubmitted,
-    );
-
     if (section === "attendance")
       return (
         <div className="content-area">
@@ -899,10 +1131,10 @@
                   )}
                 </div>
                 <div className="toolbar">
-                  <span className="count-chip">P {data.counts?.P ?? 0}</span>
-                  <span className="count-chip">A {data.counts?.A ?? 0}</span>
-                  <span className="count-chip">WO {data.counts?.WO ?? 0}</span>
-                  <span className="count-chip">HD {data.counts?.HD ?? 0}</span>
+                  <span className="count-chip">P {currentAttendanceCounts.P} · Present</span>
+                  <span className="count-chip">A {currentAttendanceCounts.A} · Absent</span>
+                  <span className="count-chip">WO {currentAttendanceCounts.WO} · Week Off</span>
+                  <span className="count-chip">HD {currentAttendanceCounts.HD} · Half Day</span>
                 </div>
               </div>
               <div className="table-wrap">
@@ -931,49 +1163,53 @@
                             {employee.employeeCode}
                           </span>
                         </td>
-                        <td>{employee.designation}</td>
+                        <td>{employee.designation}                        </td>
                         <td>
-                          <select
-                            className={`attendance-status-select${employee.attendanceSubmitted || attendanceAllOutlets ? " attendance-locked" : ""}`}
-                            disabled={
-                              !attendanceOutletId ||
-                              attendanceAllOutlets ||
-                              employee.attendanceSubmitted ||
-                              (user.role !== "MAIN_ADMIN" &&
-                                (employee.attendanceCorrectionCount ?? 0) >= 2)
-                            }
-                            value={employee.attendanceStatus ?? ""}
-                            onChange={(event) =>
-                              setData((old) => ({
-                                ...old,
-                                employees: (old.employees ?? []).map((item) =>
-                                  item._id === employee._id
-                                    ? {
-                                        ...item,
-                                        attendanceStatus: event.target.value
-                                          ? (event.target
-                                              .value as AttendanceStatus)
-                                          : null,
-                                      }
-                                    : item,
-                                ),
-                              }))
-                            }
+                          <div
+                            className="attendance-status-options"
+                            role="group"
+                            aria-label={`Attendance status for ${employee.fullName}`}
                           >
-                            <option
-                              value=""
-                              disabled={
-                                data.day?.corrections?.at(-1)?.action ===
-                                  "UNLOCK" && !!employee.attendanceStatus
-                              }
-                            >
-                              Choose
-                            </option>
-                            <option value="P">P · Present</option>
-                            <option value="A">A · Absent</option>
-                            <option value="WO">WO · Week off</option>
-                            <option value="HD">HD · Half day</option>
-                          </select>
+                            {attendanceStatusOptions.map((option) => {
+                              const disabled =
+                                employee.attendanceSubmitted ||
+                                !user.permissions.includes("attendance.write") ||
+                                (user.role !== "MAIN_ADMIN" &&
+                                  (employee.attendanceCorrectionCount ?? 0) >= 2);
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  className={`attendance-status-option${employee.attendanceStatus === option.value ? " is-selected" : ""}`}
+                                  aria-label={option.title}
+                                  aria-pressed={
+                                    employee.attendanceStatus === option.value
+                                  }
+                                  title={option.title}
+                                  disabled={disabled}
+                                  onClick={() =>
+                                    setData((old) => ({
+                                      ...old,
+                                      employees: (old.employees ?? []).map(
+                                        (item) =>
+                                          item._id === employee._id
+                                            ? {
+                                                ...item,
+                                                attendanceStatus:
+                                                  item.attendanceStatus === option.value
+                                                    ? null
+                                                    : option.value,
+                                              }
+                                            : item,
+                                      ),
+                                    }))
+                                  }
+                                >
+                                  {option.label}
+                                </button>
+                              );
+                            })}
+                          </div>
                           {user.role !== "MAIN_ADMIN" &&
                             (employee.attendanceCorrectionCount ?? 0) >= 2 && (
                               <span className="sub-cell attendance-correction-lock">
@@ -1011,60 +1247,119 @@
                   {markedAttendanceCount} of {attendanceEmployees.length} marked
                 </span>
                 <div className="toolbar">
-                  {attendanceAllOutlets ? (
-                    <span className="sub-cell">
-                      Choose an outlet above to edit or submit attendance.
-                    </span>
-                  ) : (
-                    <>
-                      {data.day?.status === "SUBMITTED" &&
-                        user.permissions.includes("attendance.unlock") && (
-                          <button
-                            className="button button-secondary"
-                            disabled={busy}
-                            onClick={() => setIsAttendanceUnlockOpen(true)}
-                          >
-                            Unlock for correction
-                          </button>
-                        )}
-                      {(data.day?.status !== "SUBMITTED" ||
-                        !allAttendanceSubmitted) && (
-                        <>
-                          <button
-                            disabled={
-                              busy ||
-                              !attendanceOutletId ||
-                              !hasUnsubmittedEmployees
-                            }
-                            className="button button-secondary"
-                            onClick={() => saveAttendance("SAVE")}
-                          >
-                            <Check size={16} /> Save draft
-                          </button>
-                          <button
-                            disabled={
-                              busy ||
-                              !attendanceOutletId ||
-                              !hasMarkedUnsubmittedAttendance
-                            }
-                            className="button button-primary"
-                            onClick={() => saveAttendance("SUBMIT")}
-                          >
-                            <Send size={16} /> Submit & lock
-                          </button>
-                        </>
-                      )}
-                      {allAttendanceSubmitted &&
-                        data.day?.status === "SUBMITTED" &&
-                        !user.permissions.includes("attendance.unlock") && (
-                          <span className="sub-cell">
-                            Attendance submitted and locked.
-                          </span>
-                        )}
-                    </>
-                  )}
+                  {!attendanceAllOutlets &&
+                    data.day?.status === "SUBMITTED" &&
+                    user.permissions.includes("attendance.unlock") && (
+                      <button
+                        className="button button-secondary"
+                        disabled={busy}
+                        onClick={() => {
+                          setAttendanceActionOutletId(attendanceOutletId);
+                          setIsAttendanceUnlockOpen(true);
+                        }}
+                      >
+                        Unlock for correction
+                      </button>
+                    )}
+                  <button
+                    disabled={
+                      busy ||
+                      !user.permissions.includes("attendance.write") ||
+                      !hasMarkedUnsubmittedAttendance
+                    }
+                    className="button button-secondary"
+                    onClick={() =>
+                      saveAttendance("SAVE", attendanceOutletId || undefined)
+                    }
+                  >
+                    <Check size={16} /> Save draft
+                  </button>
+                  <button
+                    disabled={
+                      busy ||
+                      !user.permissions.includes("attendance.write") ||
+                      !user.permissions.includes("attendance.submit") ||
+                      !hasMarkedUnsubmittedAttendance
+                    }
+                    className="button button-primary"
+                    onClick={() =>
+                      saveAttendance("SUBMIT", attendanceOutletId || undefined)
+                    }
+                  >
+                    <Send size={16} /> Submit & lock
+                  </button>
+                  {!attendanceAllOutlets &&
+                    allAttendanceSubmitted &&
+                    data.day?.status === "SUBMITTED" &&
+                    !user.permissions.includes("attendance.unlock") && (
+                      <span className="sub-cell">
+                        Attendance submitted and locked.
+                      </span>
+                    )}
                 </div>
               </div>
+              {attendanceAllOutlets && (
+                <div className="attendance-outlet-actions">
+                  {attendanceOutletSummaries.map((outlet) => {
+                    const employees =
+                      attendanceEmployeesByOutlet.get(outlet._id) ?? [];
+                    const hasUnsubmitted = employees.some(
+                      (employee) => !employee.attendanceSubmitted,
+                    );
+                    const isSubmitted = outlet.status === "SUBMITTED";
+                    const submittedEmployeesCount = employees.filter(
+                      (employee) => employee.attendanceSubmitted,
+                    ).length;
+                    const isOutletLocked =
+                      isSubmitted && !hasUnsubmitted;
+                    const wasUnlocked =
+                      outlet.corrections?.at(-1)?.action === "UNLOCK";
+                    return (
+                      <div
+                        className="attendance-outlet-action"
+                        key={outlet._id}
+                      >
+                        <div>
+                          <strong>
+                            {outlet.code} · {outlet.name}
+                          </strong>
+                          <span className="sub-cell">
+                            {isOutletLocked
+                              ? `Submitted${outlet.submittedAt ? ` ${formatDateTime(outlet.submittedAt)}` : ""} · locked`
+                              : isSubmitted
+                                ? `${submittedEmployeesCount} submitted · ${employees.length - submittedEmployeesCount} remaining employees are unlocked`
+                              : wasUnlocked
+                                ? "Unlocked for correction"
+                                : "Draft · not submitted"}
+                          </span>
+                        </div>
+                        <div className="toolbar">
+                          {isSubmitted &&
+                            user.permissions.includes("attendance.unlock") && (
+                              <button
+                                className="button button-secondary"
+                                disabled={busy}
+                                onClick={() => {
+                                  setAttendanceActionOutletId(outlet._id);
+                                  setIsAttendanceUnlockOpen(true);
+                                }}
+                              >
+                                Unlock for correction
+                              </button>
+                            )}
+                          {isSubmitted &&
+                            isOutletLocked &&
+                            !user.permissions.includes("attendance.unlock") && (
+                              <span className="sub-cell">
+                                Attendance submitted and locked.
+                              </span>
+                            )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </section>
           )}
           {isAttendanceUnlockOpen && (
@@ -1081,7 +1376,14 @@
                       Unlock attendance for correction
                     </h2>
                     <p>
-                      Attendance for {data.outlet?.name ?? "this outlet"} on{" "}
+                      Attendance for{" "}
+                      {attendanceActionOutletId
+                        ? attendanceOutletSummaries.find(
+                            (outlet) =>
+                              outlet._id === attendanceActionOutletId,
+                          )?.name ?? data.outlet?.name ?? "this outlet"
+                        : data.outlet?.name ?? "this outlet"}{" "}
+                      on{" "}
                       {formatDate(date)} will unlock immediately. A reason is optional.
                     </p>
                   </div>
@@ -1150,7 +1452,15 @@
                     </h2>
                     <p>
                       Confirm attendance for{" "}
-                      {data.outlet?.name ?? data.outlet?.code ?? "this outlet"}{" "}
+                      {attendanceSubmitOutletIds.length > 1
+                        ? `${attendanceSubmitOutletIds.length} accessible outlets`
+                        : attendanceOutletSummaries.find(
+                            (outlet) =>
+                              outlet._id === attendanceSubmitOutletIds[0],
+                          )?.name ??
+                          data.outlet?.name ??
+                          data.outlet?.code ??
+                          "this outlet"}{" "}
                       on {formatDate(date)}? This will save and lock only the
                       marked employees. Unmarked employees will remain
                       editable. For any changes, contact KULDEEP YADAV.
@@ -1172,7 +1482,7 @@
                     disabled={busy}
                     onClick={() => {
                       setIsAttendanceConfirmOpen(false);
-                      void submitAttendance();
+                      void submitAttendance("SUBMIT", attendanceSubmitOutletIds);
                     }}
                   >
                     Confirm
@@ -1184,39 +1494,113 @@
         </div>
       );
 
-    async function saveAttendance(action: "SAVE" | "SUBMIT") {
+    async function saveAttendance(
+      action: "SAVE" | "SUBMIT",
+      outletId?: string,
+    ) {
+      const outletIds = outletId
+        ? [outletId]
+        : attendanceAllOutlets
+          ? attendanceOutletSummaries.map((outlet) => outlet._id)
+          : [];
       if (
         action === "SUBMIT" &&
         (user.role !== "MAIN_ADMIN" || attendanceSubmitConfirmation)
       ) {
+        setAttendanceSubmitOutletIds(outletIds);
         setIsAttendanceConfirmOpen(true);
         return;
       }
-      await submitAttendance(action);
+      await submitAttendance(action, outletIds);
     }
 
-    async function submitAttendance(action: "SAVE" | "SUBMIT" = "SUBMIT") {
-      const entries = (data.employees ?? [])
-        .filter((employee: Employee) => employee.attendanceStatus)
-        .map((employee: Employee) => ({
-          employeeId: employee._id,
-          status: employee.attendanceStatus,
-        }));
-      await mutate(
-        "/api/attendance",
-        { outletId: attendanceOutletId, date, entries, action },
-        "PUT",
-        action === "SUBMIT"
-          ? "Attendance submitted successfully."
-          : "Attendance draft saved.",
-      );
+    async function submitAttendance(
+      action: "SAVE" | "SUBMIT",
+      outletIds: string[],
+    ) {
+      const requests = outletIds.flatMap((outletId) => {
+        const entries = (data.employees ?? [])
+          .filter(
+            (employee: Employee) =>
+              employee.outletId === outletId &&
+              !employee.attendanceSubmitted &&
+              (employee.attendanceStatus || employee.attendanceEntryExists),
+          )
+          .map((employee: Employee) => ({
+            employeeId: employee._id,
+            status: employee.attendanceStatus,
+          }));
+        if (!entries.length) return [];
+        const requestAction =
+          action === "SUBMIT" &&
+          entries.some((entry) => entry.status !== null)
+            ? "SUBMIT"
+            : "SAVE";
+        return [{ outletId, entries, action: requestAction }];
+      });
+      if (
+        !requests.length ||
+        (action === "SUBMIT" &&
+          !requests.some((item) =>
+            item.entries.some((entry) => entry.status !== null),
+          ))
+      ) {
+        setError(
+          action === "SUBMIT"
+            ? "Mark at least one unlocked employee before submitting attendance."
+            : "There are no marked, unlocked attendance entries to save.",
+        );
+        return;
+      }
+
+      setBusy(true);
+      setError("");
+      setSuccess("");
+      const succeeded: string[] = [];
+      const failed: string[] = [];
+      try {
+        for (const item of requests) {
+          try {
+            await request("/api/attendance", {
+              method: "PUT",
+              body: JSON.stringify({ ...item, date, action: item.action }),
+            });
+            succeeded.push(item.outletId);
+          } catch (caught) {
+            const outlet = attendanceOutletSummaries.find(
+              (candidate) => candidate._id === item.outletId,
+            );
+            failed.push(
+              `${outlet?.code ?? item.outletId}: ${
+                caught instanceof Error
+                  ? caught.message
+                  : "Unable to save attendance."
+              }`,
+            );
+          }
+        }
+        await reload();
+        if (failed.length) {
+          setError(
+            `${succeeded.length} outlet(s) saved; ${failed.length} failed. ${failed.join(" ")}`,
+          );
+        } else {
+          setSuccess(
+            action === "SUBMIT"
+              ? `Attendance submitted for ${succeeded.length} outlet(s). Marked employees are locked; unmarked employees remain editable.`
+              : `Attendance draft saved for ${succeeded.length} outlet(s).`,
+          );
+        }
+      } finally {
+        setBusy(false);
+      }
     }
 
     async function unlockAttendance(event: FormEvent<HTMLFormElement>) {
       event.preventDefault();
-      if (!attendanceOutletId) return;
+      if (!attendanceActionOutletId) return;
       const unlocked = await mutate("/api/attendance/unlock", {
-        outletId: attendanceOutletId,
+        outletId: attendanceActionOutletId,
         date,
         reason: attendanceUnlockReason.trim() || undefined,
       });
@@ -1238,10 +1622,7 @@
                   <Search size={16} />
                   <input
                     value={search}
-                    onChange={(event) => {
-                      setPage(1);
-                      setSearch(event.target.value);
-                    }}
+                    onChange={(event) => setSearch(event.target.value)}
                     placeholder="Search employees"
                   />
                 </label>
@@ -1251,135 +1632,13 @@
           />
           <Notice error={error} success={success} />
           {user.permissions.includes("employees.create") && (
-            <details className="panel form-panel">
-              <summary>
-                <Plus size={17} /> Add employee
-              </summary>
-              <form
-                className="form-grid"
-                onSubmit={(event) => submit(event, "/api/employees")}
-              >
-                <EmployeeCodeField
-                  key={
-                    newEmployeeOutletId ||
-                    selectedOutlet ||
-                    employeeOutlets[0]?._id ||
-                    "no-outlet"
-                  }
-                  outletId={
-                    newEmployeeOutletId ||
-                    selectedOutlet ||
-                    employeeOutlets[0]?._id ||
-                    ""
-                  }
-                  outletPrefix={
-                    outletCodePrefix(
-                      employeeOutlets.find(
-                        (outlet) =>
-                          outlet._id ===
-                          (newEmployeeOutletId ||
-                            selectedOutlet ||
-                            employeeOutlets[0]?._id),
-                      )?.name ?? "",
-                    )
-                  }
-                />
-                <Field label="Full name" name="fullName" required />
-                <Field
-                  label="Date of joining"
-                  name="dateOfJoining"
-                  type="date"
-                  required
-                />
-                <Field label="Designation" name="designation" required />
-                <label className="field">
-                  <span>Employment type</span>
-                  <select name="employmentType" defaultValue="FULL_TIME">
-                    <option value="FULL_TIME">Full-time</option>
-                    <option value="PART_TIME">Part-time</option>
-                  </select>
-                </label>
-                <Field label="Mobile" name="mobile" required />
-                <Field
-                  label="Monthly base salary"
-                  name="monthlyBaseSalary"
-                  type="number"
-                  min="0"
-                  required
-                />
-                <label className="field">
-                  <span>Outlet</span>
-                  <select
-                    name="outletId"
-                    value={
-                      newEmployeeOutletId ||
-                      selectedOutlet ||
-                      employeeOutlets[0]?._id ||
-                      ""
-                    }
-                    onChange={(event) =>
-                      setNewEmployeeOutletId(event.target.value)
-                    }
-                    required
-                  >
-                    {employeeOutlets.map((outlet) => (
-                      <option key={outlet._id} value={outlet._id}>
-                        {outlet.code} · {outlet.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <input
-                  type="hidden"
-                  name="salaryMethod"
-                  value="FIXED_30_DAYS"
-                />
-                <label className="field">
-                  <span>PF enabled</span>
-                  <select name="pfEnabled">
-                    <option value="false">No</option>
-                    <option value="true">Yes</option>
-                  </select>
-                  </label>
-                <Field
-                  label="Employee PF %"
-                  name="employeePfPercent"
-                  type="number"
-                  min="0"
-                  max="100"
-                  defaultValue="0"
-                />
-                <Field
-                  label="Employer PF %"
-                  name="employerPfPercent"
-                  type="number"
-                  min="0"
-                  max="100"
-                  defaultValue="0"
-                />
-                <label className="field">
-                  <span>ESI enabled</span>
-                  <select name="esiEnabled" defaultValue="false">
-                    <option value="false">No</option>
-                    <option value="true">Yes</option>
-                  </select>
-                </label>
-                <Field
-                  label="Employee ESI %"
-                  name="esiPercent"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  defaultValue="0.75"
-                />
-                <div className="form-actions">
-                  <button className="button button-primary" disabled={busy}>
-                    <Plus size={16} /> Create employee
-                  </button>
-                </div>
-              </form>
-            </details>
+            <EmployeeCreatePanel
+              user={{ email: user.email, role: user.role }}
+              outlets={employeeOutlets}
+              initialOutletId={selectedOutlet}
+              canManageDocuments={user.permissions.includes("employees.update")}
+              onCreated={reload}
+            />
           )}
           {user.role === "MAIN_ADMIN" && (
             <EmployeeImportPanel
@@ -1388,10 +1647,12 @@
               onImported={reload}
             />
           )}
-          {loading ? (
+          {loading && data.employees === undefined ? (
             <Loading />
           ) : (
-            <DataTable
+            <>
+              {loading && <div className="sub-cell">Refreshing employee list…</div>}
+              <DataTable
               headers={[
                 "Employee",
                 "Outlet",
@@ -1414,7 +1675,12 @@
                   </span>,
                   outlets.find((outlet) => outlet._id === employee.outletId)
                     ?.code ?? "—",
-                  employee.designation,
+                  <span className="employee-designation-cell" key="designation">
+                    {employee.designation}
+                    {employee.licencePending && (
+                      <span className="badge badge-amber">Licence pending</span>
+                    )}
+                  </span>,
                 ];
                 if (user.role !== "OUTLET_USER")
                   cells.push(employee.mobile ?? "—");
@@ -1461,6 +1727,7 @@
               total={data.total ?? 0}
               onPageChange={setPage}
             />
+          </>
           )}
         </div>
       );
@@ -3270,6 +3537,7 @@
 
   function WhoIsAwayPanel({
     employees,
+    loading,
     period,
     customFrom,
     customTo,
@@ -3281,6 +3549,7 @@
     onExport,
   }: {
     employees: WhoIsAwayView[];
+    loading: boolean;
     period: string;
     customFrom: string;
     customTo: string;
@@ -3298,9 +3567,9 @@
             <h2>Who’s Away</h2>
             <p>Submitted attendance marked Absent or Half-day.</p>
           </div>
-          <div className="toolbar">
+          <div className="toolbar who-is-away-controls">
             <label className="field">
-            <span>Range</span>
+              <span>Range</span>
               <select
                 aria-label="Attendance date range"
                 value={period}
@@ -3320,12 +3589,14 @@
                   aria-label="Attendance start date"
                   type="date"
                   value={customFrom}
+                  max={customTo || undefined}
                   onChange={(event) => onCustomFromChange(event.target.value)}
                 />
                 <input
                   aria-label="Attendance end date"
                   type="date"
                   value={customTo}
+                  min={customFrom || undefined}
                   onChange={(event) => onCustomToChange(event.target.value)}
                 />
               </>
@@ -3355,7 +3626,13 @@
               ))}
           </div>
         </div>
-        <div className="table-wrap">
+        <div className="table-wrap dashboard-range-table" aria-busy={loading}>
+          {loading && (
+            <div className="range-loading-indicator" role="status">
+              <LoaderCircle className="spin" size={15} />
+              Loading this range…
+            </div>
+          )}
           <table>
             <thead>
               <tr>
@@ -3385,7 +3662,7 @@
               ))}
             </tbody>
           </table>
-          {!employees.length && (
+          {!employees.length && !loading && (
             <Empty>No submitted absent or half-day records for this range.</Empty>
           )}
         </div>
@@ -3393,16 +3670,35 @@
     );
   }
 
-  function OutletChart({ outlets }: { outlets: DashboardOutlet[] }) {
+  function OutletChart({
+    outlets,
+    from,
+    to,
+    loading,
+  }: {
+    outlets: DashboardOutlet[];
+    from: string;
+    to: string;
+    loading: boolean;
+  }) {
     return (
       <section className="panel chart-panel">
         <div className="panel-heading">
           <div>
             <h2>Attendance by outlet</h2>
-            <p>Present, absent and half-day counts for today</p>
+            <p>
+              Present, absent and half-day · {formatDate(from)} to{" "}
+              {formatDate(to)}
+            </p>
           </div>
         </div>
-        <div className="chart-area">
+        <div className="chart-area dashboard-range-chart" aria-busy={loading}>
+          {loading && (
+            <div className="range-loading-indicator" role="status">
+              <LoaderCircle className="spin" size={15} />
+              Loading this range…
+            </div>
+          )}
           {outlets.length ? (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
@@ -3427,24 +3723,24 @@
                 <Bar
                   dataKey="attendance.P"
                   name="Present"
-                  fill="#4b8a6e"
+                  fill="#2ba640"
                   radius={[3, 3, 0, 0]}
                 />
                 <Bar
                   dataKey="attendance.A"
                   name="Absent"
-                  fill="#cc6556"
+                  fill="#ff0000"
                   radius={[3, 3, 0, 0]}
                 />
                 <Bar
                   dataKey="attendance.HD"
                   name="Half day"
-                  fill="#d2a34d"
+                  fill="#fb8c00"
                   radius={[3, 3, 0, 0]}
                 />
               </BarChart>
             </ResponsiveContainer>
-          ) : (
+          ) : loading ? null : (
             <Empty>No accessible outlets.</Empty>
           )}
         </div>
@@ -3454,14 +3750,20 @@
 
   function AttendanceStatusChart({
     attendance,
+    from,
+    to,
+    loading,
   }: {
     attendance: AttendanceCounts;
+    from: string;
+    to: string;
+    loading: boolean;
   }) {
     const data = [
-      { name: "Present", value: attendance.P, color: "#4b8a6e" },
-      { name: "Absent", value: attendance.A, color: "#cc6556" },
-      { name: "Half day", value: attendance.HD, color: "#d2a34d" },
-      { name: "Week off", value: attendance.WO, color: "#7485b8" },
+      { name: "Present", value: attendance.P, color: "#2ba640" },
+      { name: "Absent", value: attendance.A, color: "#ff0000" },
+      { name: "Half day", value: attendance.HD, color: "#fb8c00" },
+      { name: "Week off", value: attendance.WO, color: "#606060" },
     ].filter((item) => item.value > 0);
 
     return (
@@ -3469,10 +3771,19 @@
         <div className="panel-heading">
           <div>
             <h2>Attendance Summary</h2>
-            <p>Today’s marked staff by attendance status</p>
+            <p>
+              Marked staff by attendance status · {formatDate(from)} to{" "}
+              {formatDate(to)}
+            </p>
           </div>
         </div>
-        <div className="chart-area">
+        <div className="chart-area dashboard-range-chart" aria-busy={loading}>
+          {loading && (
+            <div className="range-loading-indicator" role="status">
+              <LoaderCircle className="spin" size={15} />
+              Loading this range…
+            </div>
+          )}
           {data.length ? (
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -3496,8 +3807,8 @@
                 />
               </PieChart>
             </ResponsiveContainer>
-          ) : (
-            <Empty>No attendance has been marked for this date.</Empty>
+          ) : loading ? null : (
+            <Empty>No attendance has been marked for this range.</Empty>
           )}
         </div>
       </section>
@@ -3615,17 +3926,21 @@
     value,
     detail,
     accent,
+    icon: Icon,
   }: {
     title: string;
     value: string | number;
     detail?: string;
     accent: string;
+    icon: LucideIcon;
   }) {
     return (
       <article className={`metric-card metric-${accent}`}>
         <div className="metric-top">
           <span>{title}</span>
-          <i />
+          <span className="metric-icon" aria-hidden="true">
+            <Icon size={18} strokeWidth={1.8} />
+          </span>
         </div>
         <strong>{value}</strong>
         <small>{detail ?? "Current period"}</small>
@@ -3791,96 +4106,6 @@
         <strong>{children}</strong>
       </div>
     );
-  }
-
-  function EmployeeCodeField({
-    outletId,
-    outletPrefix,
-  }: {
-    outletId: string;
-    outletPrefix: string;
-  }) {
-    const [code, setCode] = useState("");
-    const [autoGenerated, setAutoGenerated] = useState(false);
-    const [generating, setGenerating] = useState(false);
-    const [error, setError] = useState("");
-
-    async function generateCode() {
-      setGenerating(true);
-      setError("");
-      try {
-        const result = await request<{ employeeCode: string }>(
-          `/api/employees?nextCode=true&outletId=${encodeURIComponent(outletId)}`,
-        );
-        setCode(result.employeeCode);
-        setAutoGenerated(true);
-      } catch (caught) {
-        setError(
-          caught instanceof Error
-            ? caught.message
-            : "Unable to generate an employee code.",
-        );
-      } finally {
-        setGenerating(false);
-      }
-    }
-
-    return (
-      <div
-        className="field"
-        onReset={() => {
-          setCode("");
-          setAutoGenerated(false);
-        }}
-      >
-        <div className="field-label-row">
-          <label htmlFor="new-employee-code">
-            Employee code ({outletPrefix || "outlet"} + 4 digits)
-          </label>
-        </div>
-        <div className="employee-code-input">
-          <input
-            id="new-employee-code"
-            name="employeeCode"
-            type="text"
-            value={code}
-            inputMode="text"
-            pattern={`${outletPrefix}[0-9]{4}`}
-            maxLength={outletPrefix.length + 4}
-            title={`Enter ${outletPrefix} followed by exactly 4 digits.`}
-            required
-            onChange={(event) => {
-              setCode(event.target.value.toUpperCase());
-              setAutoGenerated(false);
-            }}
-          />
-          <input type="hidden" name="autoGenerate" value={String(autoGenerated)} readOnly />
-          <button
-            className="button button-secondary"
-            type="button"
-            onClick={() => void generateCode()}
-            disabled={generating || !outletId || outletPrefix.length !== 3}
-          >
-            {generating ? "Generating..." : "Auto-generate"}
-          </button>
-        </div>
-        <small>
-          {outletPrefix
-            ? `Code uses ${outletPrefix} from the selected outlet name, followed by a 4-digit number.`
-            : "Select an outlet with a name of at least 3 letters."}
-        </small>
-        {error && <small className="employee-code-error">{error}</small>}
-      </div>
-    );
-  }
-
-  function outletCodePrefix(name: string) {
-    return name
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z]/gi, "")
-      .slice(0, 3)
-      .toUpperCase();
   }
 
   function currency(value: number | undefined) {

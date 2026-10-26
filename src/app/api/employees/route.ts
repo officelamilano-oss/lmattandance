@@ -1,4 +1,4 @@
-import { ObjectId, type Collection } from "mongodb";
+import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
@@ -8,8 +8,18 @@ import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
 import type { EmployeeDocument, OutletDocument } from "@/lib/models";
 import { z } from "zod";
+import {
+  getEmployeeCodePrefix,
+  getNextEmployeeCode,
+} from "@/lib/employee-code";
+import {
+  isDeliveryRiderDesignation,
+  isEmployeeDesignationAllowed,
+  EMPLOYEE_DESIGNATIONS,
+} from "@/lib/employee-designations";
+import { EMPLOYEE_TERMS_VERSION } from "@/lib/employee-terms";
 
-const employeeCreateSchema = employeeSchema.extend({
+const employeeCreateSchema = employeeSchema.safeExtend({
   employeeCode: z
     .string()
     .regex(/^[A-Z]{3}\d{4}$/, "Employee code must be a 3-letter outlet prefix followed by 4 digits."),
@@ -26,7 +36,9 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const wantsNextCode = url.searchParams.get("nextCode") === "true";
     if (
-      (wantsNextCode && !actor.permissions.includes("employees.create")) ||
+      (wantsNextCode &&
+        !actor.permissions.includes("employees.create") &&
+        !actor.permissions.includes("employees.update")) ||
       (!wantsNextCode &&
         !actor.permissions.includes("employees.read") &&
       !actor.permissions.includes("attendance.read") &&
@@ -41,6 +53,23 @@ export async function GET(request: Request) {
           { status: 400 },
         );
       assertOutletAccess(actor, outletId);
+      const excludeEmployeeId = url.searchParams.get("employeeId");
+      if (
+        excludeEmployeeId &&
+        (!ObjectId.isValid(excludeEmployeeId) ||
+          !actor.permissions.includes("employees.update"))
+      )
+        return NextResponse.json(
+          { error: "Invalid employee for code generation." },
+          { status: 400 },
+        );
+      if (excludeEmployeeId) {
+        const employee = await (await getDb())
+          .collection<EmployeeDocument>("employees")
+            .findOne({ _id: new ObjectId(excludeEmployeeId) });
+        if (!employee) throw new Error("NOT_FOUND");
+          assertOutletAccess(actor, employee.outletId);
+        }
       const db = await getDb();
       const outlet = await db
         .collection<OutletDocument>("outlets")
@@ -59,6 +88,7 @@ export async function GET(request: Request) {
       const employeeCode = await getNextEmployeeCode(
         db.collection<EmployeeDocument>("employees"),
         prefix,
+        excludeEmployeeId ? new ObjectId(excludeEmployeeId) : undefined,
       );
       if (!employeeCode)
         return NextResponse.json(
@@ -156,12 +186,73 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     const payload = body as Record<string, unknown>;
-    if (typeof payload.outletId !== "string" || !ObjectId.isValid(payload.outletId))
+    if (payload.termsAccepted !== true)
+      return NextResponse.json(
+        { error: "Employee terms must be accepted before creating this record." },
+        { status: 400 },
+      );
+    const isOutletUser = actor.role === "OUTLET_USER";
+    const canManageCompensation = actor.role === "MAIN_ADMIN";
+    if (
+      isOutletUser &&
+      [
+        "dateOfBirth",
+        "gender",
+        "monthlyBaseSalary",
+        "salaryMethod",
+        "pfEnabled",
+        "employeePfPercent",
+        "employerPfPercent",
+        "esiEnabled",
+        "esiPercent",
+        "beneficiaryName",
+        "bankName",
+        "branchName",
+        "accountNumber",
+        "ifscCode",
+        "panNumber",
+        "aadhaarNumber",
+        "drivingLicenceNumber",
+        "documents",
+      ].some((field) => field in payload)
+    )
+      return NextResponse.json(
+        { error: "Outlet users cannot submit restricted employee details." },
+        { status: 403 },
+      );
+    if (
+      !canManageCompensation &&
+      [
+        "monthlyBaseSalary",
+        "salaryMethod",
+        "pfEnabled",
+        "employeePfPercent",
+        "employerPfPercent",
+        "esiEnabled",
+        "esiPercent",
+      ].some((field) => field in payload)
+    )
+      return NextResponse.json(
+        { error: "Only MAIN_ADMIN can submit employee compensation details." },
+        { status: 403 },
+      );
+    if (isOutletUser && actor.outletIds.length !== 1)
+      return NextResponse.json(
+        { error: "Your account must have exactly one assigned outlet." },
+        { status: 403 },
+      );
+    const requestedOutletId = isOutletUser
+      ? actor.outletIds[0].toHexString()
+      : payload.outletId;
+    if (
+      typeof requestedOutletId !== "string" ||
+      !ObjectId.isValid(requestedOutletId)
+    )
       return NextResponse.json(
         { error: "Choose a valid outlet before creating an employee." },
         { status: 400 },
       );
-    const outletId = new ObjectId(payload.outletId);
+    const outletId = new ObjectId(requestedOutletId);
     assertOutletAccess(actor, outletId);
     const db = await getDb();
     const outlet = await db.collection<OutletDocument>("outlets").findOne({
@@ -201,14 +292,75 @@ export async function POST(request: Request) {
         },
         { status: 400 },
       );
+    const designationKey =
+      typeof payload.designationKey === "string"
+        ? payload.designationKey
+        : undefined;
+    const designationDefinition = EMPLOYEE_DESIGNATIONS.find(
+      (designation) => designation.key === designationKey,
+    );
+    if (
+      designationKey &&
+      !isEmployeeDesignationAllowed(designationKey, outlet.code)
+    )
+      return NextResponse.json(
+        { error: "Choose a designation that matches the selected outlet." },
+        { status: 400 },
+      );
+    if (
+      isOutletUser &&
+      (!designationKey || designationDefinition?.group !== "OUTLET")
+    )
+      return NextResponse.json(
+        { error: "Outlet users must select an outlet designation." },
+        { status: 400 },
+      );
+    const normalizedPayload = normalizeSensitiveFields(payload);
+    if (
+      !isOutletUser &&
+      isDeliveryRiderDesignation({
+        designationKey,
+        designation: designationDefinition?.label ?? String(payload.designation ?? ""),
+      }) &&
+      !normalizedPayload.drivingLicenceNumber
+    )
+      return NextResponse.json(
+        { error: "Driving licence number is required for Delivery Rider." },
+        { status: 400 },
+      );
     const input = employeeCreateSchema.parse({
       ...payload,
+      ...normalizedPayload,
+      ...(!canManageCompensation
+        ? {
+            monthlyBaseSalary: 0,
+            salaryMethod: "FIXED_30_DAYS",
+            pfEnabled: false,
+            employeePfPercent: 0,
+            employerPfPercent: 0,
+            esiEnabled: false,
+            esiPercent: 0.75,
+          }
+        : {}),
+      ...(designationDefinition
+        ? {
+            designation: designationDefinition.label,
+            designationKey: designationDefinition.key,
+            designationGroup: designationDefinition.group,
+          }
+        : {}),
       employeeCode: employeeCode.toUpperCase(),
+      outletId: outletId.toHexString(),
+      termsAccepted: true,
+      termsVersion: EMPLOYEE_TERMS_VERSION,
+      acceptedAt: new Date(),
+      acceptedBy: actor.id.toHexString(),
     });
     const now = new Date();
     const document: EmployeeDocument = {
       _id: new ObjectId(),
       ...input,
+      acceptedBy: new ObjectId(input.acceptedBy!),
       employeeCodeNormalized: input.employeeCode.trim().toUpperCase(),
       outletId,
       active: true,
@@ -216,7 +368,21 @@ export async function POST(request: Request) {
       createdAt: now,
       updatedAt: now,
     };
-    await db.collection<EmployeeDocument>("employees").insertOne(document);
+    try {
+      await db.collection<EmployeeDocument>("employees").insertOne(document);
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === 11000
+      )
+        return NextResponse.json(
+          { error: "This employee code is already in use. Generate another code." },
+          { status: 409 },
+        );
+      throw error;
+    }
     await writeAudit({
       actorId: actor.id,
       actorEmail: actor.email,
@@ -236,34 +402,6 @@ export async function POST(request: Request) {
   }
 }
 
-async function getNextEmployeeCode(
-  employees: Collection<EmployeeDocument>,
-  prefix: string,
-) {
-  const rows = await employees
-    .find(
-      { employeeCode: { $regex: new RegExp(`^${prefix}\\d{4}$`, "i") } },
-      { projection: { employeeCode: 1 } },
-    )
-    .toArray();
-  const maximum = rows.reduce((highest, employee) => {
-    const value = Number(employee.employeeCode.slice(prefix.length));
-    return Number.isInteger(value) ? Math.max(highest, value) : highest;
-  }, 0);
-  return maximum < 9999
-    ? `${prefix}${String(maximum + 1).padStart(4, "0")}`
-    : null;
-}
-
-function getEmployeeCodePrefix(outletName: string) {
-  return outletName
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z]/gi, "")
-    .slice(0, 3)
-    .toUpperCase();
-}
-
 function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -273,28 +411,64 @@ function employeeResponse(
   canViewCompensation: boolean,
   canViewContact: boolean,
 ) {
-  if (canViewCompensation && canViewContact)
-    return {
-      ...employee,
-      employmentType: employee.employmentType ?? "FULL_TIME",
-      salaryMethod: "FIXED_30_DAYS",
-    };
   const visible = {
     ...employee,
     employmentType: employee.employmentType ?? "FULL_TIME",
     salaryMethod: "FIXED_30_DAYS",
   } as Record<string, unknown>;
+  for (const key of [
+    "beneficiaryName",
+    "bankName",
+    "branchName",
+    "accountNumber",
+    "ifscCode",
+    "panNumber",
+    "aadhaarNumber",
+    "drivingLicenceNumber",
+    "acceptedBy",
+    "acceptedAt",
+  ])
+    delete visible[key];
+  visible.licencePending =
+    (employee.designationKey === "DELIVERY_RIDER_OUTLET" ||
+      employee.designation.trim().toLowerCase() === "delivery rider") &&
+    !employee.drivingLicenceNumber;
+  if (!canViewContact) delete visible.mobile;
   if (!canViewCompensation)
     for (const key of [
-    "monthlyBaseSalary",
-    "salaryMethod",
-    "pfEnabled",
-    "employeePfPercent",
-    "employerPfPercent",
-    "esiEnabled",
-    "esiPercent",
+      "monthlyBaseSalary",
+      "salaryMethod",
+      "pfEnabled",
+      "employeePfPercent",
+      "employerPfPercent",
+      "esiEnabled",
+      "esiPercent",
     ])
       delete visible[key];
-  if (!canViewContact) delete visible.mobile;
   return visible;
+}
+
+function normalizeSensitiveFields(payload: Record<string, unknown>) {
+  const normalized = { ...payload };
+  for (const field of [
+    "beneficiaryName",
+    "bankName",
+    "branchName",
+    "accountNumber",
+    "ifscCode",
+    "panNumber",
+    "aadhaarNumber",
+    "drivingLicenceNumber",
+  ]) {
+    const value = normalized[field];
+    if (typeof value === "string") {
+      const clean = value.trim();
+      normalized[field] = clean || null;
+    }
+  }
+  for (const field of ["ifscCode", "panNumber"]) {
+    if (typeof normalized[field] === "string")
+      normalized[field] = (normalized[field] as string).toUpperCase();
+  }
+  return normalized;
 }

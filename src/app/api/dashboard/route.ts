@@ -44,8 +44,14 @@ export async function GET(request: Request) {
         { status: 400 },
       );
     const dashboardDate = dateResult.data;
-    const requestedAwayFrom = url.searchParams.get("awayFrom") ?? dashboardDate;
-    const requestedAwayTo = url.searchParams.get("awayTo") ?? dashboardDate;
+    const requestedAwayFrom =
+      url.searchParams.get("from") ??
+      url.searchParams.get("awayFrom") ??
+      dashboardDate;
+    const requestedAwayTo =
+      url.searchParams.get("to") ??
+      url.searchParams.get("awayTo") ??
+      dashboardDate;
     const awayFromResult = dateOnlySchema.safeParse(requestedAwayFrom);
     const awayToResult = dateOnlySchema.safeParse(requestedAwayTo);
     if (
@@ -88,25 +94,150 @@ export async function GET(request: Request) {
       .sort({ code: 1 })
       .toArray();
     const outletIds = outlets.map((outlet) => outlet._id);
-    const [activeEmployees, fullTimeEmployees, partTimeEmployees, todayDays, salaryRecords, pendingAdvances, employees, monthDays] =
+    const view = url.searchParams.get("view");
+    if (view === "attendance-range") {
+      const days = outletIds.length
+        ? await db
+            .collection<AttendanceDayDocument>("attendance")
+            .find({
+              outletId: { $in: outletIds },
+              date: { $gte: awayFrom, $lte: awayTo },
+            })
+            .toArray()
+        : [];
+      const attendanceRange = { P: 0, A: 0, WO: 0, HD: 0 };
+      const countsByOutlet = new Map<
+        string,
+        { P: number; A: number; WO: number; HD: number }
+      >();
+      const submittedOutlets = new Set<string>();
+      for (const day of days) {
+        const key = day.outletId.toHexString();
+        const counts = countsByOutlet.get(key) ?? {
+          P: 0,
+          A: 0,
+          WO: 0,
+          HD: 0,
+        };
+        for (const entry of day.entries) {
+          if (entry.unmarked) continue;
+          counts[entry.status] += 1;
+          attendanceRange[entry.status] += 1;
+        }
+        countsByOutlet.set(key, counts);
+        if (day.status === "SUBMITTED") submittedOutlets.add(key);
+      }
+      return NextResponse.json({
+        attendanceRange,
+        attendanceRangeOutlets: outlets.map((outlet) => ({
+          id: outlet._id.toHexString(),
+          _id: outlet._id.toHexString(),
+          code: outlet.code,
+          name: outlet.name,
+          active: outlet.active,
+          attendance: countsByOutlet.get(outlet._id.toHexString()) ?? {
+            P: 0,
+            A: 0,
+            WO: 0,
+            HD: 0,
+          },
+          submitted: submittedOutlets.has(outlet._id.toHexString()),
+        })),
+      });
+    }
+    if (view === "who-is-away") {
+      if (!actor.permissions.includes("attendance.read"))
+        return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+      if (!outletIds.length) return NextResponse.json({ whoIsAway: [] });
+      const [awayDays, awayEmployees] = await Promise.all([
+        db
+          .collection<AttendanceDayDocument>("attendance")
+          .find({
+            outletId: { $in: outletIds },
+            date: { $gte: awayFrom, $lte: awayTo },
+            status: "SUBMITTED",
+            "entries.status": { $in: ["A", "HD"] },
+          })
+          .sort({ date: -1 })
+          .toArray(),
+        db
+          .collection<EmployeeDocument>("employees")
+          .find({
+            outletId: { $in: outletIds },
+            dateOfJoining: { $lte: awayTo },
+            $or: [
+              { deactivatedAt: { $exists: false } },
+              { deactivatedAt: { $gte: awayFrom } },
+            ],
+          })
+          .toArray(),
+      ]);
+      const employeeById = new Map(
+        awayEmployees.map((employee) => [
+          employee._id.toHexString(),
+          employee,
+        ]),
+      );
+      const outletCodeById = new Map(
+        outlets.map((outlet) => [outlet._id.toHexString(), outlet.code]),
+      );
+      const whoIsAway: Array<{
+        employeeId: string;
+        employeeName: string;
+        employeeCode: string;
+        outletCode: string;
+        date: string;
+        status: "A" | "HD";
+      }> = [];
+      for (const day of awayDays) {
+        for (const entry of day.entries) {
+          if (
+            entry.unmarked ||
+            (entry.status !== "A" && entry.status !== "HD")
+          )
+            continue;
+          const employee = employeeById.get(entry.employeeId.toHexString());
+          if (
+            !employee ||
+            day.date < employee.dateOfJoining ||
+            (employee.deactivatedAt && day.date > employee.deactivatedAt)
+          )
+            continue;
+          whoIsAway.push({
+            employeeId: employee._id.toHexString(),
+            employeeName: employee.fullName,
+            employeeCode: employee.employeeCode,
+            outletCode: outletCodeById.get(day.outletId.toHexString()) ?? "",
+            date: day.date,
+            status: entry.status,
+          });
+        }
+      }
+      return NextResponse.json({ whoIsAway });
+    }
+    const [employeeCounts, todayDays, salaryRecords, pendingAdvances, employees, monthDays] =
       await Promise.all([
         db
           .collection<EmployeeDocument>("employees")
-          .countDocuments({ active: true, outletId: { $in: outletIds } }),
-        db
-          .collection<EmployeeDocument>("employees")
-          .countDocuments({
-            active: true,
-            outletId: { $in: outletIds },
-            employmentType: { $ne: "PART_TIME" },
-          }),
-        db
-          .collection<EmployeeDocument>("employees")
-          .countDocuments({
-            active: true,
-            outletId: { $in: outletIds },
-            employmentType: "PART_TIME",
-          }),
+          .aggregate<{
+            _id: EmployeeDocument["outletId"];
+            count: number;
+            partTimeCount: number;
+          }>([
+            { $match: { active: true, outletId: { $in: outletIds } } },
+            {
+              $group: {
+                _id: "$outletId",
+                count: { $sum: 1 },
+                partTimeCount: {
+                  $sum: {
+                    $cond: [{ $eq: ["$employmentType", "PART_TIME"] }, 1, 0],
+                  },
+                },
+              },
+            },
+          ])
+          .toArray(),
         db
           .collection<AttendanceDayDocument>("attendance")
           .find({ date: dashboardDate, outletId: { $in: outletIds } })
@@ -140,6 +271,18 @@ export async function GET(request: Request) {
                 .toArray()
             : Promise.resolve([]),
       ]);
+    const activeEmployees = employeeCounts.reduce(
+      (total, item) => total + item.count,
+      0,
+    );
+    const partTimeEmployees = employeeCounts.reduce(
+      (total, item) => total + item.partTimeCount,
+      0,
+    );
+    const fullTimeEmployees = activeEmployees - partTimeEmployees;
+    const employeeCountsByOutlet = new Map(
+      employeeCounts.map((item) => [item._id.toHexString(), item.count]),
+    );
     const whoIsAway: Array<{
       employeeId: string;
       employeeName: string;
@@ -148,7 +291,11 @@ export async function GET(request: Request) {
       date: string;
       status: "A" | "HD";
     }> = [];
-    if (actor.permissions.includes("attendance.read") && outletIds.length) {
+    if (
+      actor.permissions.includes("attendance.read") &&
+      outletIds.length &&
+      url.searchParams.get("includeAway") !== "false"
+    ) {
       const [awayDays, awayEmployees] = await Promise.all([
         db
           .collection<AttendanceDayDocument>("attendance")
@@ -183,7 +330,11 @@ export async function GET(request: Request) {
       );
       for (const day of awayDays) {
         for (const entry of day.entries) {
-          if (entry.status !== "A" && entry.status !== "HD") continue;
+          if (
+            entry.unmarked ||
+            (entry.status !== "A" && entry.status !== "HD")
+          )
+            continue;
           const employee = employeeById.get(entry.employeeId.toHexString());
           if (
             !employee ||
@@ -243,6 +394,7 @@ export async function GET(request: Request) {
       );
       for (const day of monthDays) {
         for (const entry of day.entries) {
+            if (entry.unmarked) continue;
             const employeeId = entry.employeeId.toHexString();
             const employee = employeeById.get(employeeId);
             if (
@@ -344,20 +496,21 @@ export async function GET(request: Request) {
     }
     const attendance = { P: 0, A: 0, WO: 0, HD: 0 };
     for (const day of todayDays)
-      for (const entry of day.entries) attendance[entry.status] += 1;
+      for (const entry of day.entries)
+        if (!entry.unmarked) attendance[entry.status] += 1;
     const submittedOutlets = new Set(
       todayDays
         .filter((day) => day.status === "SUBMITTED")
         .map((day) => day.outletId.toHexString()),
     );
-    const outletSummaries = await Promise.all(
-      outlets.map(async (outlet) => {
-        const employeeCount = await db
-          .collection<EmployeeDocument>("employees")
-          .countDocuments({ outletId: outlet._id, active: true });
+    const outletSummaries = outlets.map((outlet) => {
+        const employeeCount =
+          employeeCountsByOutlet.get(outlet._id.toHexString()) ?? 0;
         const day = todayDays.find((item) => item.outletId.equals(outlet._id));
         const counts = { P: 0, A: 0, WO: 0, HD: 0 };
-        if (day) for (const entry of day.entries) counts[entry.status] += 1;
+        if (day)
+          for (const entry of day.entries)
+            if (!entry.unmarked) counts[entry.status] += 1;
         return {
           id: outlet._id.toHexString(),
           _id: outlet._id.toHexString(),
@@ -368,8 +521,7 @@ export async function GET(request: Request) {
           attendance: counts,
           submitted: submittedOutlets.has(outlet._id.toHexString()),
         };
-      }),
-    );
+      });
     return NextResponse.json({
       today: dashboardDate,
       month,

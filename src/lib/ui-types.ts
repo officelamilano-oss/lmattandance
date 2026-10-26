@@ -45,6 +45,20 @@ export interface EmployeeView {
   active: boolean;
   outletId: string;
   dateOfJoining?: string;
+  dateOfBirth?: string | null;
+  gender?: "MALE" | "FEMALE" | null;
+  designationKey?: string | null;
+  designationGroup?: "HEAD_OFFICE" | "OUTLET" | null;
+  beneficiaryName?: string | null;
+  bankName?: string | null;
+  branchName?: string | null;
+  accountNumber?: string | null;
+  ifscCode?: string | null;
+  panNumber?: string | null;
+  aadhaarNumber?: string | null;
+  drivingLicenceNumber?: string | null;
+  termsAccepted?: boolean;
+  licencePending?: boolean;
   monthlyBaseSalary?: number;
   salaryMethod?: SalaryMethod;
   pfEnabled?: boolean;
@@ -59,6 +73,19 @@ export interface EmployeeView {
   attendanceSubmitted?: boolean;
   attendanceEntryExists?: boolean;
   attendanceCorrectionCount?: number;
+}
+
+export interface AttendanceOutletView {
+  _id: string;
+  code: string;
+  name: string;
+  status?: "DRAFT" | "SUBMITTED";
+  submittedAt?: string;
+  corrections?: Array<{
+    reason: string;
+    action: "UNLOCK" | "RELOCK";
+    at: string;
+  }>;
 }
 
 export interface AdvanceView {
@@ -220,8 +247,11 @@ export interface WorkspaceData {
   };
   outlets?: DashboardOutlet[];
   whoIsAway?: WhoIsAwayView[];
+  attendanceRange?: AttendanceCounts;
+  attendanceRangeOutlets?: DashboardOutlet[];
   employeeAttendance?: EmployeeAttendanceReport;
   outlet?: { id: string; code: string; name: string };
+  attendanceOutlets?: AttendanceOutletView[];
   day?: {
     status?: "DRAFT" | "SUBMITTED";
     submittedAt?: string;

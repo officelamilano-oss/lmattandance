@@ -1,11 +1,18 @@
 import { WorkspacePanel } from "@/components/workspace-panel";
-import { connection } from "next/server";
+import { WorkspacePageBoundary } from "@/components/workspace-page-boundary";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { getActor } from "@/lib/permissions";
 
-export const instant = false;
+export default function DashboardPage() {
+  return (
+    <WorkspacePageBoundary>
+      <DashboardContent />
+    </WorkspacePageBoundary>
+  );
+}
 
-export default async function DashboardPage() {
+async function DashboardContent() {
   await connection();
   const actor = await getActor();
   if (!actor) redirect("/login");

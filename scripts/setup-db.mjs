@@ -163,6 +163,11 @@ try {
       { name: "employees_outlet_active_name" },
     ],
     [
+      "employeeFiles",
+      { employeeId: 1, uploadedAt: -1 },
+      { name: "employee_files_employee_uploaded" },
+    ],
+    [
       "attendance",
       { outletId: 1, date: 1 },
       { unique: true, name: "attendance_outlet_date_unique" },
