@@ -35,6 +35,28 @@ export interface WhoIsAwayView {
   status: "A" | "HD";
 }
 
+export interface DashboardAttendanceEmployee {
+  employeeId: string;
+  employeeName: string;
+  employeeCode: string;
+  designation: string;
+  outletCode: string;
+  status: AttendanceStatus | null;
+  submitted: boolean;
+}
+
+export interface DashboardTrendDay {
+  date: string;
+  attendance: AttendanceCounts;
+  submittedOutlets: number;
+  markedEmployees: number;
+  outlets: Array<{
+    id: string;
+    code: string;
+    attendance: AttendanceCounts;
+  }>;
+}
+
 export interface EmployeeView {
   _id: string;
   employeeCode: string;
@@ -45,6 +67,20 @@ export interface EmployeeView {
   active: boolean;
   outletId: string;
   dateOfJoining?: string;
+  dateOfBirth?: string | null;
+  gender?: "MALE" | "FEMALE" | null;
+  designationKey?: string | null;
+  designationGroup?: "HEAD_OFFICE" | "OUTLET" | null;
+  beneficiaryName?: string | null;
+  bankName?: string | null;
+  branchName?: string | null;
+  accountNumber?: string | null;
+  ifscCode?: string | null;
+  panNumber?: string | null;
+  aadhaarNumber?: string | null;
+  drivingLicenceNumber?: string | null;
+  termsAccepted?: boolean;
+  licencePending?: boolean;
   monthlyBaseSalary?: number;
   salaryMethod?: SalaryMethod;
   pfEnabled?: boolean;
@@ -54,6 +90,7 @@ export interface EmployeeView {
   esiPercent?: number;
   notes?: string;
   attendanceStatus?: AttendanceStatus | null;
+  savedAttendanceStatus?: AttendanceStatus | null;
   outletCode?: string;
   outletName?: string;
   attendanceSubmitted?: boolean;
@@ -84,6 +121,27 @@ export interface LoanView {
   outletId: string;
   totalAmount: number;
   outstandingAmount: number;
+  monthlyDeductionAmount?: number;
+  deductionStartMonth?: string;
+  repaymentMethod?: "FIXED_AMOUNT" | "FIXED_INSTALLMENTS" | "DATE_RANGE";
+  installmentCount?: number;
+  deductionEndMonth?: string;
+  repaidAmount?: number;
+  status?: "ACTIVE" | "PAUSED" | "COMPLETED";
+  completedAt?: string;
+  completionReason?: string;
+  completionAmount?: number;
+  currentPayrollMonth?: string;
+  currentInstallmentStatus?:
+    | "SCHEDULED"
+    | "POSTED"
+    | "SKIPPED"
+    | "REVERSED"
+    | "PAUSED"
+    | "COMPLETED"
+    | "NOT_DUE";
+  currentScheduledDeduction?: number;
+  currentActualDeduction?: number;
   notes: string;
   employeeName?: string;
   employeeCode?: string;
@@ -104,6 +162,16 @@ export interface SalaryView {
       employeeCode: string;
       monthlyBaseSalary?: number;
     };
+    loans?: Array<{
+      loanId: string;
+      originalAmount: number;
+      openingBalance: number;
+      scheduledDeduction: number;
+      actualDeduction: number;
+      closingBalance: number;
+      status: string;
+      payrollMonth?: string;
+    }>;
   };
   calculation: PayrollCalculation;
   paidAt?: string;
@@ -175,6 +243,9 @@ export interface EmployeeAttendanceReportRow {
   employeePf?: number;
   employerPf?: number;
   loanDeduction?: number;
+  originalLoanAmount?: number;
+  remainingLoanBalance?: number;
+  monthlyLoanDeduction?: number;
   presentDays: number;
   absentDays: number;
   halfDays: number;
@@ -212,13 +283,22 @@ export interface WorkspaceData {
     activeOutlets?: number;
     attendance?: AttendanceCounts;
     missingSubmissions?: number;
+    submittedOutlets?: number;
     payrollCount?: number | null;
     pendingPayroll?: number | null;
     pendingApprovals?: number;
+    pendingAdvanceApprovals?: number;
     grossSalary?: number | null;
     netPayable?: number | null;
+    projectedMonthEndBase?: number | null;
+    approvedAdvancesPendingPayroll?: number | null;
+    recordedLoanDeductions?: number | null;
+    recordedPayrollGross?: number | null;
+    recordedPayrollNet?: number | null;
   };
   outlets?: DashboardOutlet[];
+  attendanceEmployees?: DashboardAttendanceEmployee[];
+  attendanceTrend?: DashboardTrendDay[];
   whoIsAway?: WhoIsAwayView[];
   employeeAttendance?: EmployeeAttendanceReport;
   outlet?: { id: string; code: string; name: string };

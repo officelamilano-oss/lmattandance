@@ -1,3 +1,4 @@
+import "../../../globals.css";
 import { notFound } from "next/navigation";
 import { EmployeeDetail } from "@/components/employee-detail";
 import { requireActor } from "@/lib/permissions";
@@ -15,6 +16,7 @@ export default async function EmployeeDetailPage({
       id={id}
       canEdit={actor.permissions.includes("employees.update")}
       mainAdmin={actor.role === "MAIN_ADMIN"}
+      canViewSensitive={actor.role !== "OUTLET_USER"}
     />
   );
 }

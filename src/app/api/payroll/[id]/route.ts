@@ -5,7 +5,12 @@ import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb, getMongoClient } from "@/lib/mongodb";
 import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
-import type { LoanDocument, SalaryRecordDocument } from "@/lib/models";
+import type {
+  LoanDocument,
+  LoanInstallmentDocument,
+  SalaryRecordDocument,
+} from "@/lib/models";
+import { calculateLoanInstallment } from "@/lib/payroll/calculate";
 import { z } from "zod";
 
 const actionSchema = z.discriminatedUnion("action", [
@@ -52,6 +57,19 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       if (record.status !== "PAID")
         return NextResponse.json(
           { error: "Only paid payroll records can be corrected here." },
+          { status: 409 },
+        );
+      if (
+        Math.abs(
+          input.amounts.loanDeduction -
+            Number(record.calculation.loanDeduction ?? 0),
+        ) > 0.009
+      )
+        return NextResponse.json(
+          {
+            error:
+              "Paid loan deductions must be corrected through the authorized loan installment reversal workflow.",
+          },
           { status: 409 },
         );
       const client = await getMongoClient();
@@ -270,140 +288,13 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       if (!actor.permissions.includes("salary.adjust")) return NextResponse.json({ error: "Forbidden." }, { status: 403 });
       if (record.status !== "DRAFT") return NextResponse.json({ error: "Only draft salaries may be adjusted." }, { status: 409 });
       if (input.kind === "LOAN") {
-        if (actor.role !== "MAIN_ADMIN")
-          return NextResponse.json({ error: "Only MAIN_ADMIN can record a loan repayment." }, { status: 403 });
-        const client = await getMongoClient();
-        const session = client.startSession();
-        const loanChanges: Array<{ loan: LoanDocument; outstandingAmount: number }> = [];
-        let calculation: SalaryRecordDocument["calculation"] = record.calculation;
-        try {
-          await session.withTransaction(async () => {
-            loanChanges.length = 0;
-            const currentRecord = await collection.findOne(
-              { _id: record._id, status: "DRAFT" },
-              { session },
-            );
-            if (!currentRecord) throw new Error("SALARY_CHANGED");
-            const loans = await db
-              .collection<LoanDocument>("loans")
-              .find(
-                {
-                  employeeId: record.employeeId,
-                  outletId: record.outletId,
-                  outstandingAmount: { $gt: 0 },
-                },
-                { session },
-              )
-              .sort({ createdAt: 1, _id: 1 })
-              .toArray();
-            const outstandingTotal = loans.reduce(
-              (sum, loan) => sum.plus(loan.outstandingAmount),
-              new Decimal(0),
-            );
-            if (new Decimal(input.amount).greaterThan(outstandingTotal))
-              throw new Error("LOAN_BALANCE_INSUFFICIENT");
-
-            let remaining = new Decimal(input.amount);
-            for (const loan of loans) {
-              if (remaining.lessThanOrEqualTo(0)) break;
-              const outstanding = new Decimal(loan.outstandingAmount);
-              const applied = Decimal.min(outstanding, remaining);
-              const outstandingAmount = outstanding.minus(applied).toDecimalPlaces(2).toNumber();
-              const result = await db.collection<LoanDocument>("loans").updateOne(
-                { _id: loan._id, outstandingAmount: loan.outstandingAmount },
-                {
-                  $set: {
-                    outstandingAmount,
-                    updatedBy: actor.id,
-                    updatedAt: now,
-                  },
-                },
-                { session },
-              );
-              if (!result.modifiedCount) throw new Error("LOAN_CHANGED");
-              loanChanges.push({ loan, outstandingAmount });
-              remaining = remaining.minus(applied);
-            }
-
-            const loanDeduction = new Decimal(
-              Number(currentRecord.calculation.loanDeduction ?? 0),
-            )
-              .plus(input.amount)
-              .toDecimalPlaces(2)
-              .toNumber();
-            const netPayable = calculateNetPayable({
-              ...currentRecord.calculation,
-              loanDeduction,
-            });
-            calculation = {
-              ...currentRecord.calculation,
-              loanDeduction,
-              netPayable,
-            };
-            const updated = await collection.updateOne(
-              { _id: record._id, status: "DRAFT" },
-              {
-                $set: {
-                  "calculation.loanDeduction": loanDeduction,
-                  "calculation.netPayable": netPayable,
-                  updatedAt: now,
-                },
-                $push: {
-                  adjustments: {
-                    label: input.label,
-                    amount: input.amount,
-                    reason: input.reason,
-                    actorId: actor.id,
-                    at: now,
-                  },
-                },
-              },
-              { session },
-            );
-            if (!updated.modifiedCount) throw new Error("SALARY_CHANGED");
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "";
-          if (message === "LOAN_BALANCE_INSUFFICIENT")
-            return NextResponse.json(
-              { error: "Loan repayment exceeds the employee's outstanding loan balance." },
-              { status: 400 },
-            );
-          if (message === "LOAN_CHANGED" || message === "SALARY_CHANGED")
-            return NextResponse.json(
-              { error: "Salary or loan changed concurrently. Refresh and try again." },
-              { status: 409 },
-            );
-          throw error;
-        } finally {
-          await session.endSession();
-        }
-        await writeAudit({
-          actorId: actor.id,
-          actorEmail: actor.email,
-          action: "SALARY_LOAN_REPAYMENT",
-          entityType: "salary",
-          entityId: id,
-          outletId: record.outletId,
-          reason: input.reason,
-          changes: {
-            loanDeduction: {
-              before: Number(record.calculation.loanDeduction ?? 0),
-              after: Number(calculation.loanDeduction ?? 0),
-            },
-            netPayable: {
-              before: Number(record.calculation.netPayable ?? 0),
-              after: Number(calculation.netPayable ?? 0),
-            },
-            ...Object.fromEntries(
-              loanChanges.map(({ loan, outstandingAmount }) => [
-                `loan:${loan._id.toHexString()}`,
-                { before: loan.outstandingAmount, after: outstandingAmount },
-              ]),
-            ),
+        return NextResponse.json(
+          {
+            error:
+              "Loan repayments are generated from the active loan schedule. Change loan terms on the Employee loans page or use the authorized reversal workflow.",
           },
-        });
-        return NextResponse.json({ ok: true, calculation });
+          { status: 409 },
+        );
       }
       const current = record.calculation;
       const key = input.kind === "OVERTIME" ? "overtime" : input.kind === "ALLOWANCE" ? "allowances" : "otherDeductions";
@@ -419,9 +310,239 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     }
     if (input.action === "APPROVE") {
       if (!actor.permissions.includes("salary.approve")) return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-      const result = await collection.updateOne({ _id: record._id, status: "DRAFT" }, { $set: { status: "APPROVED", approvedBy: actor.id, approvedAt: now, updatedAt: now } });
-      if (!result.modifiedCount) return NextResponse.json({ error: "Only draft salaries can be approved." }, { status: 409 });
-      await writeAudit({ actorId: actor.id, actorEmail: actor.email, action: "SALARY_APPROVED", entityType: "salary", entityId: id, outletId: record.outletId });
+      if (record.status !== "DRAFT")
+        return NextResponse.json({ error: "Only draft salaries can be approved." }, { status: 409 });
+      const client = await getMongoClient();
+      const session = client.startSession();
+      const posted: LoanInstallmentDocument[] = [];
+      let updatedLoanDeduction = 0;
+      let updatedNetPayable = 0;
+      try {
+        await session.withTransaction(async () => {
+          posted.length = 0;
+          const current = await collection.findOne(
+            { _id: record._id, status: "DRAFT", updatedAt: record.updatedAt },
+            { session },
+          );
+          if (!current) throw new Error("SALARY_CHANGED");
+          const skipped = await db
+            .collection<LoanInstallmentDocument>("loanInstallments")
+            .find(
+              {
+                employeeId: record.employeeId,
+                outletId: record.outletId,
+                payrollMonth: record.month,
+                status: "SKIPPED",
+              },
+              { session },
+            )
+            .project<{ loanId: ObjectId }>({ loanId: 1 })
+            .toArray();
+          const skippedIds = skipped.map((entry) => entry.loanId);
+          const loans = await db
+            .collection<LoanDocument>("loans")
+            .find(
+              {
+                employeeId: record.employeeId,
+                outletId: record.outletId,
+                _id: { $nin: skippedIds },
+                outstandingAmount: { $gt: 0 },
+                status: { $nin: ["PAUSED", "COMPLETED"] },
+                $or: [
+                  { deductionStartMonth: { $exists: false } },
+                  { deductionStartMonth: { $lte: record.month } },
+                ],
+              },
+              { session },
+            )
+            .sort({ createdAt: 1, _id: 1 })
+            .toArray();
+          const scheduled = loans.reduce(
+            (sum, loan) =>
+              sum + calculateLoanInstallment([loan], record.month),
+            0,
+          );
+          const targetLoanDeduction = scheduled;
+          let remaining = new Decimal(targetLoanDeduction).toDecimalPlaces(2);
+          const nowApproved = new Date();
+          for (const loan of loans) {
+            if (remaining.lessThanOrEqualTo(0)) break;
+            const scheduledAmount = calculateLoanInstallment(
+              [loan],
+              record.month,
+            );
+            const applied = Decimal.min(
+              new Decimal(loan.outstandingAmount),
+              remaining,
+            );
+            if (applied.lessThanOrEqualTo(0)) continue;
+            const closingBalance = new Decimal(loan.outstandingAmount)
+              .minus(applied)
+              .toDecimalPlaces(2)
+              .toNumber();
+            const changed = await db
+              .collection<LoanDocument>("loans")
+              .updateOne(
+                {
+                  _id: loan._id,
+                  outstandingAmount: loan.outstandingAmount,
+                  updatedAt: loan.updatedAt,
+                },
+                {
+                  $set: {
+                    outstandingAmount: closingBalance,
+                    repaidAmount: new Decimal(
+                      loan.repaidAmount ??
+                        loan.totalAmount - loan.outstandingAmount,
+                    )
+                      .plus(applied)
+                      .toDecimalPlaces(2)
+                      .toNumber(),
+                    ...(closingBalance === 0
+                      ? {
+                          status: "COMPLETED",
+                          completedAt: nowApproved,
+                          completedBy: actor.id,
+                          completionReason: "Fully repaid through payroll.",
+                          completionAmount: applied.toDecimalPlaces(2).toNumber(),
+                          statusUpdatedAt: nowApproved,
+                          statusUpdatedBy: actor.id,
+                        }
+                      : {}),
+                    updatedBy: actor.id,
+                    updatedAt: nowApproved,
+                  },
+                  ...(closingBalance === 0
+                    ? {
+                        $push: {
+                          statusHistory: {
+                            status: "COMPLETED" as const,
+                            effectiveAt: nowApproved,
+                            actorId: actor.id,
+                            reason: "Fully repaid through payroll.",
+                          },
+                        },
+                      }
+                    : {}),
+                },
+                { session },
+              );
+            if (!changed.modifiedCount) throw new Error("LOAN_CHANGED");
+            posted.push({
+              _id: new ObjectId(),
+              loanId: loan._id,
+              employeeId: loan.employeeId,
+              outletId: loan.outletId,
+              payrollMonth: record.month,
+              openingBalance: loan.outstandingAmount,
+              scheduledDeduction: scheduledAmount,
+              actualDeduction: applied.toDecimalPlaces(2).toNumber(),
+              closingBalance,
+              status: "POSTED",
+              payrollRecordId: record._id,
+              actorId: actor.id,
+              createdAt: nowApproved,
+              updatedAt: nowApproved,
+            });
+            remaining = remaining.minus(applied);
+          }
+          updatedLoanDeduction = new Decimal(targetLoanDeduction)
+            .minus(remaining)
+            .toDecimalPlaces(2)
+            .toNumber();
+          const nextCalculation = {
+            ...current.calculation,
+            loanDeduction: updatedLoanDeduction,
+          };
+          updatedNetPayable = calculateNetPayable(nextCalculation);
+          const loanSnapshot = loans.map((loan) => {
+            const installment = posted.find((entry) =>
+              entry.loanId.equals(loan._id),
+            );
+            return {
+              loanId: loan._id,
+              payrollMonth: record.month,
+              originalAmount: loan.totalAmount,
+              openingBalance: loan.outstandingAmount,
+              scheduledDeduction: calculateLoanInstallment(
+                [loan],
+                record.month,
+              ),
+              actualDeduction: installment?.actualDeduction ?? 0,
+              closingBalance:
+                installment?.closingBalance ?? loan.outstandingAmount,
+              status: installment ? "POSTED" : "SCHEDULED",
+            };
+          });
+          for (const installment of posted) {
+            const { _id: ignoredId, ...postedFields } = installment;
+            void ignoredId;
+            const scheduledUpdate = await db
+              .collection<LoanInstallmentDocument>("loanInstallments")
+              .updateOne(
+                {
+                  loanId: installment.loanId,
+                  payrollMonth: installment.payrollMonth,
+                  status: "SCHEDULED",
+                },
+                { $set: postedFields },
+                { session },
+              );
+            if (!scheduledUpdate.matchedCount)
+              await db
+                .collection<LoanInstallmentDocument>("loanInstallments")
+                .insertOne(installment, { session });
+          }
+          const approved = await collection.updateOne(
+            {
+              _id: record._id,
+              status: "DRAFT",
+              updatedAt: current.updatedAt,
+            },
+            {
+              $set: {
+                status: "APPROVED",
+                approvedBy: actor.id,
+                approvedAt: nowApproved,
+                "calculation.loanDeduction": updatedLoanDeduction,
+                "calculation.netPayable": updatedNetPayable,
+                "inputSnapshot.loans": loanSnapshot,
+                updatedAt: nowApproved,
+              },
+            },
+            { session },
+          );
+          if (!approved.modifiedCount) throw new Error("SALARY_CHANGED");
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (message === "LOAN_CHANGED" || message === "SALARY_CHANGED")
+          return NextResponse.json(
+            { error: "Salary or loan changed concurrently. Refresh and try again." },
+            { status: 409 },
+          );
+        throw error;
+      } finally {
+        await session.endSession();
+      }
+      await writeAudit({
+        actorId: actor.id,
+        actorEmail: actor.email,
+        action: "SALARY_APPROVED",
+        entityType: "salary",
+        entityId: id,
+        outletId: record.outletId,
+        changes: {
+          loanDeduction: {
+            before: Number(record.calculation.loanDeduction ?? 0),
+            after: updatedLoanDeduction,
+          },
+          netPayable: {
+            before: Number(record.calculation.netPayable ?? 0),
+            after: updatedNetPayable,
+          },
+        },
+      });
       return NextResponse.json({ ok: true });
     }
     if (!actor.permissions.includes("salary.pay")) return NextResponse.json({ error: "Forbidden." }, { status: 403 });

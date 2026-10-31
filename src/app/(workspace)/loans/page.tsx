@@ -1,3 +1,4 @@
+import "../../globals.css";
 import { WorkspacePanel } from "@/components/workspace-panel";
 import { requireActor } from "@/lib/permissions";
 

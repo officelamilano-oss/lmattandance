@@ -5,6 +5,8 @@
 .advance-modal-heading p{margin:5px 0 0;color:#777a73;font-size:11px}
 .advance-modal-heading .button{flex:none}
 .advance-edit-form{display:grid;gap:12px}
+.advance-edit-form .loan-edit-actions{justify-content:flex-end;align-items:center;gap:10px}
+.advance-edit-form .loan-edit-actions .button{margin-left:0}
 .advance-controls-row{display:grid;grid-template-columns:minmax(220px,1fr) minmax(210px,270px);align-items:end;gap:18px;margin-bottom:16px}
 .advance-record-trigger{width:100%;min-height:44px;justify-content:center}
 .advance-status-filter{width:100%;margin:0}

@@ -10,6 +10,10 @@ import { attendanceSchema } from "@/lib/validation/business";
 import { dateOnlySchema } from "@/lib/validation/common";
 import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
+import {
+  isAttendanceEntryLocked,
+  isAttendanceOutletSubmitted,
+} from "@/lib/attendance";
 import type {
   AttendanceDayDocument,
   EmployeeDocument,
@@ -47,7 +51,12 @@ export async function GET(request: Request) {
         .find({ outletId: { $in: outletIds }, date })
         .toArray();
       const historicalEmployeeIds = days.flatMap((day) =>
-        day.entries.map((entry) => entry.employeeId),
+        [
+          ...day.entries.map((entry) => entry.employeeId),
+          ...(day.employeeCorrectionCounts ?? []).map(
+            (item) => item.employeeId,
+          ),
+        ],
       );
       const employees = outletIds.length
         ? await db
@@ -68,13 +77,29 @@ export async function GET(request: Request) {
       const dayByOutletId = new Map(
         days.map((day) => [day.outletId.toHexString(), day]),
       );
+      const correctionCountsByEmployee = new Map(
+        days.flatMap((day) =>
+          (day.employeeCorrectionCounts ?? []).map((item) => [
+            item.employeeId.toHexString(),
+            item.correctionCount,
+          ]),
+        ),
+      );
       const counts = { P: 0, A: 0, WO: 0, HD: 0 };
       for (const day of days)
         for (const entry of day.entries) counts[entry.status] += 1;
       return NextResponse.json({
         counts,
         outletCount: outlets.length,
-        submittedCount: days.filter((day) => day.status === "SUBMITTED").length,
+        submittedCount: outlets.filter((outlet) =>
+          isAttendanceOutletSubmitted(
+            dayByOutletId.get(outlet._id.toHexString()),
+            employees.filter(
+              (employee) =>
+                employee.outletId.equals(outlet._id) && employee.active,
+            ),
+          ),
+        ).length,
         employees: employees.map((employee) => {
           const outlet = outletById.get(employee.outletId.toHexString());
           const day = dayByOutletId.get(employee.outletId.toHexString());
@@ -90,12 +115,16 @@ export async function GET(request: Request) {
             outletCode: outlet?.code,
             outletName: outlet?.name,
             attendanceStatus: entry?.status ?? null,
+            savedAttendanceStatus: entry?.status ?? null,
             attendanceEntryExists: !!entry,
             attendanceSubmitted:
               !!entry &&
               day?.status === "SUBMITTED" &&
               entry.submitted !== false,
-            attendanceCorrectionCount: entry?.correctionCount ?? 0,
+            attendanceCorrectionCount:
+              entry?.correctionCount ??
+              correctionCountsByEmployee.get(employee._id.toHexString()) ??
+              0,
           };
         }),
       });
@@ -110,9 +139,12 @@ export async function GET(request: Request) {
     const day = await db
       .collection<AttendanceDayDocument>("attendance")
       .findOne({ outletId: outlet._id, date });
-    const historicalEmployeeIds = (day?.entries ?? []).map(
-      (entry) => entry.employeeId,
-    );
+    const historicalEmployeeIds = [
+      ...(day?.entries ?? []).map((entry) => entry.employeeId),
+      ...(day?.employeeCorrectionCounts ?? []).map(
+        (item) => item.employeeId,
+      ),
+    ];
     const employees = await db
       .collection<EmployeeDocument>("employees")
       .find({
@@ -125,6 +157,12 @@ export async function GET(request: Request) {
       (day?.entries ?? []).map((entry) => [
         entry.employeeId.toHexString(),
         entry,
+      ]),
+    );
+    const correctionCountsByEmployee = new Map(
+      (day?.employeeCorrectionCounts ?? []).map((item) => [
+        item.employeeId.toHexString(),
+        item.correctionCount,
       ]),
     );
     const counts = { P: 0, A: 0, WO: 0, HD: 0 };
@@ -144,13 +182,17 @@ export async function GET(request: Request) {
         ...(actor.role === "OUTLET_USER" ? {} : { mobile: employee.mobile }),
         attendanceStatus:
           entries.get(employee._id.toHexString())?.status ?? null,
+        savedAttendanceStatus:
+          entries.get(employee._id.toHexString())?.status ?? null,
         attendanceEntryExists: entries.has(employee._id.toHexString()),
         attendanceSubmitted:
           !!entries.get(employee._id.toHexString()) &&
           day?.status === "SUBMITTED" &&
           entries.get(employee._id.toHexString())?.submitted !== false,
         attendanceCorrectionCount:
-          entries.get(employee._id.toHexString())?.correctionCount ?? 0,
+          entries.get(employee._id.toHexString())?.correctionCount ??
+            correctionCountsByEmployee.get(employee._id.toHexString()) ??
+            0,
       })),
     });
   } catch (error) {
@@ -213,9 +255,12 @@ export async function PUT(request: Request) {
         { error: "Inactive outlets cannot receive new attendance." },
         { status: 400 },
       );
-    const historicalEmployeeIds = (existingDay?.entries ?? []).map(
-      (entry) => entry.employeeId,
-    );
+    const historicalEmployeeIds = [
+      ...(existingDay?.entries ?? []).map((entry) => entry.employeeId),
+      ...(existingDay?.employeeCorrectionCounts ?? []).map(
+        (item) => item.employeeId,
+      ),
+    ];
     const employees = await db
       .collection<EmployeeDocument>("employees")
       .find(
@@ -230,8 +275,11 @@ export async function PUT(request: Request) {
       employees.map((employee) => employee._id.toHexString()),
     );
     const seen = new Set<string>();
-    for (const entry of input.entries) {
-      if (!allowedEmployees.has(entry.employeeId))
+    for (const employeeId of [
+      ...input.entries.map((entry) => entry.employeeId),
+      ...input.clearEmployeeIds,
+    ]) {
+      if (!allowedEmployees.has(employeeId))
         return NextResponse.json(
           {
             error:
@@ -239,12 +287,12 @@ export async function PUT(request: Request) {
           },
           { status: 400 },
         );
-      if (seen.has(entry.employeeId))
+      if (seen.has(employeeId))
         return NextResponse.json(
           { error: "An employee may appear only once per date." },
           { status: 400 },
         );
-      seen.add(entry.employeeId);
+      seen.add(employeeId);
     }
     const now = new Date();
     const wasUnlocked = existingDay?.corrections.at(-1)?.action === "UNLOCK";
@@ -259,25 +307,40 @@ export async function PUT(request: Request) {
         entry,
       ]),
     );
-    for (const entry of input.entries) {
-      const previous = previousEntries.get(entry.employeeId);
-      const isAlreadySubmitted =
+    const correctionCounts = new Map(
+      (existingDay?.employeeCorrectionCounts ?? []).map((item) => [
+        item.employeeId.toHexString(),
+        item.correctionCount,
+      ]),
+    );
+    const isSubmittedEntry = (employeeId: string) => {
+      const previous = previousEntries.get(employeeId);
+      return (
         !!previous &&
         existingDay?.status === "SUBMITTED" &&
-        previous.submitted !== false;
-      if (
-        isAlreadySubmitted &&
-        previous &&
-        previous.status !== entry.status
-      )
+        previous.submitted !== false
+      );
+    };
+    let hasAdminSubmittedCorrection = false;
+    for (const entry of input.entries) {
+      const previous = previousEntries.get(entry.employeeId);
+      const isAlreadySubmitted = isSubmittedEntry(entry.employeeId);
+      if (isAttendanceEntryLocked(isAlreadySubmitted, actor.role))
         return NextResponse.json(
           {
             error:
-              "Submitted employee attendance is locked. Ask MAIN_ADMIN to unlock it for correction.",
+              "Submitted employee attendance cannot be changed or submitted again.",
           },
-          { status: 409 },
+          { status: 403 },
         );
-      const correctionCount = previous?.correctionCount ?? 0;
+      if (
+        isAlreadySubmitted &&
+        previous?.status !== entry.status &&
+        actor.role === "MAIN_ADMIN"
+      )
+        hasAdminSubmittedCorrection = true;
+      const correctionCount =
+        previous?.correctionCount ?? correctionCounts.get(entry.employeeId) ?? 0;
       if (
         wasUnlocked &&
         actor.role !== "MAIN_ADMIN" &&
@@ -291,6 +354,39 @@ export async function PUT(request: Request) {
           { status: 409 },
         );
     }
+    for (const employeeId of input.clearEmployeeIds) {
+      const previous = previousEntries.get(employeeId);
+      if (!previous) continue;
+      const isAlreadySubmitted = isSubmittedEntry(employeeId);
+      if (isAttendanceEntryLocked(isAlreadySubmitted, actor.role))
+        return NextResponse.json(
+          {
+            error:
+              "Submitted employee attendance cannot be changed or deleted.",
+          },
+          { status: 403 },
+        );
+      if (isAlreadySubmitted && actor.role === "MAIN_ADMIN")
+        hasAdminSubmittedCorrection = true;
+      const correctionCount =
+        previous.correctionCount ?? correctionCounts.get(employeeId) ?? 0;
+      if (
+        wasUnlocked &&
+        actor.role !== "MAIN_ADMIN" &&
+        correctionCount >= 2
+      )
+        return NextResponse.json(
+          {
+            error: `An employee's attendance is locked after 2 changes for this date. Contact MAIN_ADMIN for further corrections.`,
+          },
+          { status: 409 },
+        );
+    }
+    if (hasAdminSubmittedCorrection && !input.reason)
+      return NextResponse.json(
+        { error: "A correction reason is required to change submitted attendance." },
+        { status: 400 },
+      );
     const entries = new Map(
       (existingDay?.entries ?? []).map((entry) => [
         entry.employeeId.toHexString(),
@@ -302,23 +398,33 @@ export async function PUT(request: Request) {
     );
     for (const entry of input.entries) {
       const previous = previousEntries.get(entry.employeeId);
+      const correctionCount =
+        previous?.correctionCount ?? correctionCounts.get(entry.employeeId) ?? 0;
       const changed = previous?.status !== entry.status;
-      const isAlreadySubmitted =
-        !!previous &&
-        existingDay?.status === "SUBMITTED" &&
-        previous.submitted !== false;
-      if (isAlreadySubmitted) continue;
+      const isAlreadySubmitted = isSubmittedEntry(entry.employeeId);
       entries.set(entry.employeeId, {
         employeeId: new ObjectId(entry.employeeId),
         status: entry.status,
         updatedAt: now,
         updatedBy: actor.id,
         correctionCount:
-          wasUnlocked && previous && changed
-            ? (previous?.correctionCount ?? 0) + 1
-            : (previous?.correctionCount ?? 0),
-        submitted: body.action === "SUBMIT",
+          (wasUnlocked || isAlreadySubmitted) && changed
+            ? correctionCount + 1
+            : correctionCount,
+        submitted: isAlreadySubmitted || body.action === "SUBMIT",
       });
+      correctionCounts.delete(entry.employeeId);
+    }
+    for (const employeeId of input.clearEmployeeIds) {
+      const previous = previousEntries.get(employeeId);
+      if (!previous) continue;
+      const correctionCount =
+        previous.correctionCount ?? correctionCounts.get(employeeId) ?? 0;
+      entries.delete(employeeId);
+      if (wasUnlocked || isSubmittedEntry(employeeId))
+        correctionCounts.set(employeeId, correctionCount + 1);
+      else if (correctionCount) correctionCounts.set(employeeId, correctionCount);
+      else correctionCounts.delete(employeeId);
     }
     const hasSubmittedEntries = [...entries.values()].some(
       (entry) =>
@@ -327,9 +433,43 @@ export async function PUT(request: Request) {
     );
     const shouldBeSubmitted =
       body.action === "SUBMIT" || hasSubmittedEntries;
+    const correctionEvents = [
+      ...(hasAdminSubmittedCorrection
+        ? [
+            {
+              at: now,
+              actorId: actor.id,
+              reason: input.reason!,
+              action: "UNLOCK" as const,
+            },
+            {
+              at: now,
+              actorId: actor.id,
+              reason: input.reason!,
+              action: "RELOCK" as const,
+            },
+          ]
+        : []),
+      ...(body.action === "SUBMIT" && wasUnlocked
+        ? [
+            {
+              at: now,
+              actorId: actor.id,
+              reason: input.reason || "Attendance re-submitted after correction",
+              action: "RELOCK" as const,
+            },
+          ]
+        : []),
+    ];
     const update = {
       $set: {
         entries: [...entries.values()],
+        employeeCorrectionCounts: [...correctionCounts].map(
+          ([employeeId, correctionCount]) => ({
+            employeeId: new ObjectId(employeeId),
+            correctionCount,
+          }),
+        ),
         updatedAt: now,
         updatedBy: actor.id,
         ...(shouldBeSubmitted
@@ -348,15 +488,10 @@ export async function PUT(request: Request) {
         corrections: [],
         ...(!shouldBeSubmitted ? { status: "DRAFT" as const } : {}),
       },
-      ...(body.action === "SUBMIT" && wasUnlocked
+      ...(correctionEvents.length
         ? {
             $push: {
-              corrections: {
-                at: now,
-                actorId: actor.id,
-                reason: "Attendance re-submitted after correction",
-                action: "RELOCK" as const,
-              },
+              corrections: { $each: correctionEvents },
             },
           }
         : {}),
@@ -401,6 +536,16 @@ export async function PUT(request: Request) {
         entityType: "attendance",
         entityId: record._id.toHexString(),
         outletId,
+      });
+    if (hasAdminSubmittedCorrection && record)
+      await writeAudit({
+        actorId: actor.id,
+        actorEmail: actor.email,
+        action: "ATTENDANCE_CORRECTED",
+        entityType: "attendance",
+        entityId: record._id.toHexString(),
+        outletId,
+        reason: input.reason,
       });
     return NextResponse.json({ day: record });
   } catch (error) {

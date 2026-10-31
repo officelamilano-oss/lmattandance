@@ -68,6 +68,7 @@ export async function POST(request: Request) {
     const designation: DesignationDocument = {
       _id: new ObjectId(),
       ...input,
+      color: "#635bdb",
       nameNormalized,
       createdAt: now,
       updatedAt: now,

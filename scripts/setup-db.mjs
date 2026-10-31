@@ -183,6 +183,21 @@ try {
       { sparse: true, name: "advances_payroll_record" },
     ],
     [
+      "loanInstallments",
+      { loanId: 1, payrollMonth: 1 },
+      { unique: true, name: "loan_installment_month_unique" },
+    ],
+    [
+      "loanInstallments",
+      { employeeId: 1, payrollMonth: 1 },
+      { name: "loan_installments_employee_month" },
+    ],
+    [
+      "loanTransactions",
+      { loanId: 1, createdAt: -1 },
+      { name: "loan_transactions_loan_created" },
+    ],
+    [
       "salaryRecords",
       { employeeId: 1, month: 1, periodStart: 1 },
       {

@@ -3,7 +3,10 @@
   import { getActor, assertOutletAccess } from "@/lib/permissions";
   import { getDb } from "@/lib/mongodb";
   import { apiError } from "@/lib/http";
-  import { calculatePayroll } from "@/lib/payroll/calculate";
+  import {
+    calculateLoanInstallment,
+    calculatePayroll,
+  } from "@/lib/payroll/calculate";
   import { dateAfter, getMonthDates } from "@/lib/payroll/dates";
   import { dateOnlySchema, objectIdSchema } from "@/lib/validation/common";
   import type {
@@ -11,6 +14,9 @@
     AttendanceDayDocument,
     AttendanceStatus,
     EmployeeDocument,
+    LoanDocument,
+    LoanInstallmentDocument,
+    LoanTransactionDocument,
     OutletDocument,
     SalaryRecordDocument,
     SalarySettings,
@@ -147,7 +153,7 @@
         ]),
       );
       const employeeIds = employees.map((employee) => employee._id);
-      const [advances, salaryRecords] = await Promise.all([
+      const [advances, salaryRecords, loans, loanInstallments, loanTransactions] = await Promise.all([
         actor.permissions.includes("salary.read") && employeeIds.length
           ? db
               .collection<AdvanceDocument>("advances")
@@ -171,6 +177,33 @@
               })
               .toArray()
           : Promise.resolve([]),
+        actor.permissions.includes("salary.read") && employeeIds.length
+          ? db
+              .collection<LoanDocument>("loans")
+              .find({
+                employeeId: { $in: employeeIds },
+                outletId: { $in: outletIds },
+              })
+              .toArray()
+          : Promise.resolve([]),
+        actor.permissions.includes("salary.read") && employeeIds.length
+          ? db
+              .collection<LoanInstallmentDocument>("loanInstallments")
+              .find({
+                employeeId: { $in: employeeIds },
+                payrollMonth: { $lte: query.to.slice(0, 7) },
+              })
+              .toArray()
+          : Promise.resolve([]),
+        actor.permissions.includes("salary.read") && employeeIds.length
+          ? db
+              .collection<LoanTransactionDocument>("loanTransactions")
+              .find({
+                employeeId: { $in: employeeIds },
+                transactionDate: { $lte: query.to },
+              })
+              .toArray()
+          : Promise.resolve([]),
       ]);
       const advancesByEmployee = groupBy(advances, (advance) =>
         advance.employeeId.toHexString(),
@@ -181,6 +214,24 @@
           record,
         ]),
       );
+      const loansByEmployee = groupBy(loans, (loan) =>
+        loan.employeeId.toHexString(),
+      );
+      const installmentsByLoan = groupBy(loanInstallments, (entry) =>
+        entry.loanId.toHexString(),
+      );
+      const transactionsByLoan = groupBy(loanTransactions, (entry) =>
+        entry.loanId.toHexString(),
+      );
+      const skippedLoanIdsByEmployeeAndMonth = new Map<string, Set<string>>();
+      for (const installment of loanInstallments) {
+        const key = `${installment.employeeId.toHexString()}:${installment.payrollMonth}`;
+        const skipped = skippedLoanIdsByEmployeeAndMonth.get(key) ?? new Set();
+        if (installment.status === "SKIPPED") {
+          skipped.add(installment.loanId.toHexString());
+          skippedLoanIdsByEmployeeAndMonth.set(key, skipped);
+        }
+      }
       const rows = employees
         .filter(
           (employee) =>
@@ -245,6 +296,41 @@
             employerPf: 0,
             loanDeduction: 0,
           };
+          const reportCutoff = new Date(`${query.to}T23:59:59.999Z`);
+          const employeeLoans = (
+            loansByEmployee.get(employee._id.toHexString()) ?? []
+          ).filter((loan) => loan.createdAt <= reportCutoff);
+          const originalLoanAmount = employeeLoans.reduce(
+            (sum, loan) => sum + loan.totalAmount,
+            0,
+          );
+          const remainingLoanBalance = employeeLoans.reduce(
+            (sum, loan) =>
+              sum +
+              getHistoricalLoanBalance(
+                loan,
+                installmentsByLoan.get(loan._id.toHexString()) ?? [],
+                transactionsByLoan.get(loan._id.toHexString()) ?? [],
+                query.to.slice(0, 7),
+              ),
+            0,
+          );
+          const monthlyLoanDeduction = calculateLoanInstallment(
+            employeeLoans.map((loan) =>
+              loanForMonth(
+                loan,
+                query.to.slice(0, 7),
+                getHistoricalLoanBalance(
+                  loan,
+                  installmentsByLoan.get(loan._id.toHexString()) ?? [],
+                  transactionsByLoan.get(loan._id.toHexString()) ?? [],
+                  query.to.slice(0, 7),
+                  false,
+                ),
+              ),
+            ),
+            query.to.slice(0, 7),
+          );
           if (actor.permissions.includes("salary.read")) {
             payableAmount = 0;
             let hasLiveCalculation = false;
@@ -264,7 +350,20 @@
                 salaryDeductions.esi += Number(saved.calculation.esi ?? 0);
                 salaryDeductions.employeePf += Number(saved.calculation.employeePf ?? 0);
                 salaryDeductions.employerPf += Number(saved.calculation.employerPf ?? 0);
-                salaryDeductions.loanDeduction += Number(saved.calculation.loanDeduction ?? 0);
+                const postedForMonth = loanInstallments.filter(
+                  (entry) =>
+                    entry.employeeId.equals(employee._id) &&
+                    entry.payrollMonth === month &&
+                    entry.status === "POSTED",
+                );
+                salaryDeductions.loanDeduction += postedForMonth.length
+                  ? postedForMonth.reduce(
+                      (sum, entry) => sum + entry.actualDeduction,
+                      0,
+                    )
+                  : saved.status === "DRAFT"
+                    ? 0
+                    : Number(saved.calculation.loanDeduction ?? 0);
                 hasSavedPayroll = true;
                 continue;
               }
@@ -274,6 +373,29 @@
               ) ?? [])
                 .filter((advance) => advance.date.startsWith(`${month}-`))
                 .reduce((sum, advance) => sum + advance.amount, 0);
+              const skippedLoanIds =
+                skippedLoanIdsByEmployeeAndMonth.get(
+                  `${employee._id.toHexString()}:${month}`,
+                ) ?? new Set<string>();
+              const monthLoans = employeeLoans
+                .filter(
+                  (loan) =>
+                    !skippedLoanIds.has(loan._id.toHexString()),
+                )
+                .map((loan) =>
+                  loanForMonth(
+                    loan,
+                    month,
+                    getHistoricalLoanBalance(
+                      loan,
+                      installmentsByLoan.get(loan._id.toHexString()) ?? [],
+                      transactionsByLoan.get(loan._id.toHexString()) ?? [],
+                      month,
+                      false,
+                    ),
+                  ),
+                );
+              const loanDeduction = calculateLoanInstallment(monthLoans, month);
               const calculation = calculatePayroll({
                 monthlyBaseSalary: employee.monthlyBaseSalary,
                 salaryMethod: "FIXED_30_DAYS",
@@ -292,7 +414,7 @@
                     ? 30
                     : monthData.eligibleDays,
                 advances: monthAdvances,
-                loanDeduction: 0,
+                loanDeduction,
                 overtime: 0,
                 allowances: 0,
                 otherDeductions: 0,
@@ -328,6 +450,9 @@
                   monthlyBaseSalary: employee.monthlyBaseSalary,
                   payableAmount,
                   payableLabel,
+                  originalLoanAmount,
+                  remainingLoanBalance,
+                  monthlyLoanDeduction,
                   ...salaryDeductions,
                 }
               : {}),
@@ -369,6 +494,96 @@
       groups.set(key, [...(groups.get(key) ?? []), item]);
     }
     return groups;
+  }
+
+  function getHistoricalLoanBalance(
+    loan: LoanDocument,
+    installments: LoanInstallmentDocument[],
+    transactions: LoanTransactionDocument[],
+    cutoffMonth: string,
+    includeCutoffMonth = true,
+  ): number {
+    type Event = {
+      month: string;
+      createdAt: Date;
+      openingBalance: number;
+      delta: number;
+    };
+    const events: Event[] = [
+      ...installments
+        .filter((entry) => entry.status === "POSTED" || entry.status === "REVERSED")
+        .map((entry) => ({
+          month: entry.payrollMonth,
+          createdAt: entry.createdAt,
+          openingBalance: entry.openingBalance,
+          delta: -entry.actualDeduction,
+        })),
+      ...transactions.map((entry) => ({
+        month: entry.transactionDate.slice(0, 7),
+        createdAt: entry.createdAt,
+        openingBalance: entry.balanceBefore,
+        delta: entry.balanceAfter - entry.balanceBefore,
+      })),
+    ].sort(
+      (left, right) =>
+        left.month.localeCompare(right.month) ||
+        left.createdAt.getTime() - right.createdAt.getTime(),
+    );
+    if (!events.length) return loan.outstandingAmount;
+    const eligible = events.filter(
+      (event) =>
+        includeCutoffMonth
+          ? event.month <= cutoffMonth
+          : event.month < cutoffMonth,
+    );
+    if (!eligible.length) return events[0].openingBalance;
+    let balance = events[0].openingBalance;
+    for (const event of eligible)
+      balance = Math.max(0, Number((balance + event.delta).toFixed(2)));
+    return balance;
+  }
+
+  function loanForMonth(
+    loan: LoanDocument,
+    month: string,
+    outstandingAmount: number,
+  ) {
+    const term = [...(loan.repaymentTermsHistory ?? [])]
+      .filter(
+        (entry) => entry.effectiveAt.toISOString().slice(0, 7) <= month,
+      )
+      .sort(
+        (left, right) =>
+          right.effectiveAt.getTime() - left.effectiveAt.getTime(),
+      )[0];
+    const statusHistory = [...(loan.statusHistory ?? [])]
+      .filter(
+        (entry) => entry.effectiveAt.toISOString().slice(0, 7) <= month,
+      )
+      .sort(
+        (left, right) =>
+          right.effectiveAt.getTime() - left.effectiveAt.getTime(),
+      );
+    const fallbackStatus =
+      loan.statusUpdatedAt &&
+      loan.statusUpdatedAt.toISOString().slice(0, 7) > month
+        ? "ACTIVE"
+        : loan.completedAt &&
+            loan.completedAt.toISOString().slice(0, 7) > month
+          ? "ACTIVE"
+          : loan.status;
+    return {
+      outstandingAmount,
+      monthlyDeductionAmount:
+        term?.monthlyDeductionAmount ?? loan.monthlyDeductionAmount,
+      deductionStartMonth:
+        term?.deductionStartMonth ?? loan.deductionStartMonth,
+      repaymentMethod: term?.method ?? loan.repaymentMethod,
+      installmentCount: term?.installmentCount ?? loan.installmentCount,
+      deductionEndMonth: term?.deductionEndMonth ?? loan.deductionEndMonth,
+      createdAt: loan.createdAt,
+      status: statusHistory[0]?.status ?? fallbackStatus,
+    };
   }
 
   function getMonthCount(

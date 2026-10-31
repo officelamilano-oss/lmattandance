@@ -5,15 +5,28 @@
     useEffectEvent,
     useRef,
     useState,
+    useSyncExternalStore,
+    Fragment,
     type FormEvent,
+    type ReactNode,
   } from "react";
   import Link from "next/link";
+  import Image from "next/image";
+  import { createPortal } from "react-dom";
   import {
     ArrowDownToLine,
+    ArrowUpRight,
     Bell,
+    Banknote,
+    Building2,
+    BriefcaseBusiness,
+    CalendarDays,
+    CalendarClock,
     Check,
+    CircleCheck,
     ChevronLeft,
     ChevronRight,
+    Clock3,
     Eye,
     EyeOff,
     FileSpreadsheet,
@@ -26,6 +39,7 @@
     Search,
     Send,
     SlidersHorizontal,
+    Users,
     X,
   } from "lucide-react";
   import type {
@@ -39,7 +53,6 @@
     DashboardOutlet,
     DesignationView,
     EmployeeView,
-    EmployeeAttendanceReport,
     EmployeeAttendanceReportRow,
     LoanView,
     PayrollEmployeeView,
@@ -53,9 +66,17 @@
     designationPermissionGroups,
     legacyOutletDefaultPermissions,
   } from "@/lib/access-control";
+  import { useEmployeeAttendanceReport } from "@/lib/use-employee-attendance-report";
   import { EmployeeImportPanel } from "@/components/employee-import-panel";
+  import { EmployeeCreatePanel } from "@/components/employee-create-panel";
   import { AutoDismissNotice } from "@/components/auto-dismiss-notice";
   import { getIndiaDate, getIndiaMonth } from "@/lib/payroll/dates";
+  import { isAttendanceEntryLocked } from "@/lib/attendance";
+  import { calculateLoanInstallment } from "@/lib/payroll/calculate";
+  import {
+    expectedCompletionMonth,
+    loanScheduleSummary,
+  } from "@/lib/payroll/loans";
   import { formatDate, formatDateTime } from "@/lib/date-format";
   import {
     Bar,
@@ -84,6 +105,42 @@
     | "settings";
   type Outlet = DashboardOutlet;
   type Employee = EmployeeView;
+  type LoanActionName =
+    | "SKIP"
+    | "PAUSE"
+    | "RESUME"
+    | "CLOSE"
+    | "ADJUST"
+    | "REVERSE";
+
+  const attendanceStatusOptions: Array<{
+    status: AttendanceStatus;
+    label: string;
+    shortLabel: string;
+  }> = [
+    { status: "P", label: "Present", shortLabel: "P" },
+    { status: "A", label: "Absent", shortLabel: "A" },
+    { status: "WO", label: "Week off", shortLabel: "WO" },
+    { status: "HD", label: "Half day", shortLabel: "HD" },
+  ];
+
+  const subscribeToNothing = () => () => {};
+  const getClientSnapshot = () => true;
+  const getServerSnapshot = () => false;
+
+  function ModalPortal({ children }: { children: ReactNode }) {
+    const isClient = useSyncExternalStore(
+      subscribeToNothing,
+      getClientSnapshot,
+      getServerSnapshot,
+    );
+    return isClient ? createPortal(children, document.body) : null;
+  }
+
+  function dashboardPercentClass(value: number, prefix: "dashboard-width" | "dashboard-rate") {
+    const percent = Math.max(0, Math.min(100, Math.round(value)));
+    return `${prefix}-${percent}`;
+  }
 
   async function request<T>(url: string, init?: RequestInit): Promise<T> {
     const response = await fetch(url, {
@@ -149,13 +206,15 @@
     title,
     description,
     action,
+    className,
   }: {
     title: string;
     description: string;
     action?: React.ReactNode;
+    className?: string;
   }) {
     return (
-      <div className="page-head">
+      <div className={`page-head${className ? ` ${className}` : ""}`}>
         <div>
           <div className="eyebrow">LA MILANO / OPERATIONS</div>
           <h1>{title}</h1>
@@ -166,7 +225,15 @@
     );
   }
 
-  function Notice({ error, success }: { error: string; success: string }) {
+  function Notice({
+    error,
+    success,
+    refreshing = false,
+  }: {
+    error: string;
+    success: string;
+    refreshing?: boolean;
+  }) {
     if (error)
       return (
         <AutoDismissNotice
@@ -183,13 +250,34 @@
           variant="success"
         />
       );
+    if (refreshing)
+      return (
+        <div className="refreshing-notice" role="status">
+          <RefreshSpinner size={22} />
+          Updating results…
+        </div>
+      );
     return null;
+  }
+
+  function RefreshSpinner({ size = 28 }: { size?: number }) {
+    return (
+      <Image
+        className="refresh-spinner"
+        src="/Spinner/spinner.gif"
+        width={size}
+        height={size}
+        unoptimized
+        alt=""
+        aria-hidden="true"
+      />
+    );
   }
 
   function Loading() {
     return (
       <div className="loading-state">
-        <LoaderCircle className="spin" size={20} />
+        <RefreshSpinner />
         Loading records
       </div>
     );
@@ -208,10 +296,10 @@
     };
   }) {
     const [outlets, setOutlets] = useState<Outlet[]>([]);
-    const employeeOutlets = outlets.filter((outlet) => outlet.active);
+    const activeOutlets = outlets.filter((outlet) => outlet.active);
+    const employeeOutlets = activeOutlets;
     const [selectedOutlet, setSelectedOutlet] = useState("");
-    const [newEmployeeOutletId, setNewEmployeeOutletId] = useState("");
-    const attendanceOutlets = outlets.filter((outlet) => outlet.active);
+    const attendanceOutlets = activeOutlets;
     const attendanceOutletId =
       attendanceOutlets.length === 1 ? attendanceOutlets[0]._id : selectedOutlet;
     const attendanceAllOutlets =
@@ -219,6 +307,8 @@
     const today = getIndiaDate();
     const [busy, setBusy] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [dashboardFetching, setDashboardFetching] = useState(false);
     const attendanceReloadId = useRef(0);
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
@@ -231,38 +321,88 @@
     );
     const [dashboardTo, setDashboardTo] = useState(() => getIndiaDate());
     const [dashboardPreset, setDashboardPreset] = useState("This Month");
-    const [dashboardEmployeeId, setDashboardEmployeeId] = useState("");
+    const [dashboardAttendanceFilter, setDashboardAttendanceFilter] = useState<
+      "ALL" | "P" | "A" | "HD" | "WO" | "UNMARKED"
+    >("ALL");
     const [dashboardExportBusy, setDashboardExportBusy] =
       useState<ExportFormat | null>(null);
     const [awayPeriod, setAwayPeriod] = useState("TODAY");
     const [awayFrom, setAwayFrom] = useState(() => `${getIndiaMonth()}-01`);
     const [awayTo, setAwayTo] = useState(() => getIndiaDate());
     const [search, setSearch] = useState("");
+    const [debouncedSearch, setDebouncedSearch] = useState("");
     const [page, setPage] = useState(1);
     const [advanceStatus, setAdvanceStatus] = useState<
       "ALL" | "PENDING" | "APPROVED" | "REJECTED"
     >("ALL");
     const [isAdvanceFormOpen, setIsAdvanceFormOpen] = useState(false);
+    const [advanceOutletId, setAdvanceOutletId] = useState("");
+    const [advanceEmployeeId, setAdvanceEmployeeId] = useState("");
     const [isAttendanceUnlockOpen, setIsAttendanceUnlockOpen] = useState(false);
     const [attendanceUnlockReason, setAttendanceUnlockReason] = useState("");
     const [isAttendanceConfirmOpen, setIsAttendanceConfirmOpen] =
       useState(false);
+    const [isAttendanceCorrectionOpen, setIsAttendanceCorrectionOpen] =
+      useState(false);
+    const [attendanceCorrectionReason, setAttendanceCorrectionReason] =
+      useState("");
+    const [pendingAttendanceAction, setPendingAttendanceAction] = useState<
+      "SAVE" | "SUBMIT" | null
+    >(null);
     const [attendanceSubmitConfirmation, setAttendanceSubmitConfirmation] =
       useState(true);
-    const [newUserRole, setNewUserRole] = useState<UserRole>("OUTLET_USER");
-    const [newDesignationId, setNewDesignationId] = useState("");
+    const [newAccountProfile, setNewAccountProfile] = useState("");
     const [salaryGenerateEmployee, setSalaryGenerateEmployee] =
       useState<PayrollEmployeeView | null>(null);
     const [salaryManageRecord, setSalaryManageRecord] =
       useState<SalaryView | null>(null);
+    const [loanToEdit, setLoanToEdit] = useState<LoanView | null>(null);
+    const [loanAction, setLoanAction] = useState<{
+      loan: LoanView;
+      action: LoanActionName;
+    } | null>(null);
+    const [loanOutletId, setLoanOutletId] = useState("");
+    const [loanEmployeeId, setLoanEmployeeId] = useState("");
+    const [loanStatusFilter, setLoanStatusFilter] = useState("ONGOING");
+    const [loanSearch, setLoanSearch] = useState("");
+    const [loanFormMethod, setLoanFormMethod] = useState<
+      "FIXED_AMOUNT" | "FIXED_INSTALLMENTS" | "DATE_RANGE"
+    >("FIXED_AMOUNT");
+    const [loanFormAmount, setLoanFormAmount] = useState("");
+    const [loanFormMonthlyAmount, setLoanFormMonthlyAmount] = useState("");
+    const [loanFormInstallmentCount, setLoanFormInstallmentCount] = useState("10");
+    const [loanFormStartMonth, setLoanFormStartMonth] = useState(getIndiaMonth);
+    const [loanFormEndMonth, setLoanFormEndMonth] = useState(getIndiaMonth);
+    const [loanHistory, setLoanHistory] = useState<{
+      employeeName: string;
+      installments: Array<Record<string, unknown>>;
+      transactions: Array<Record<string, unknown>>;
+    } | null>(null);
+    const dashboardTeamReport = useEmployeeAttendanceReport({
+      enabled:
+        section === "dashboard" &&
+        user.permissions.includes("employees.read"),
+      from: dashboardFrom,
+      to: dashboardTo,
+      outletId: selectedOutlet,
+      employeeId: "",
+    });
 
     async function reload() {
       const reloadId = ++attendanceReloadId.current;
-      setLoading(true);
+      if (section !== "dashboard") setRefreshing(true);
+      else setDashboardFetching(true);
       setError("");
+      const commitData = (nextData: WorkspaceData) => {
+        if (reloadId === attendanceReloadId.current) setData(nextData);
+      };
       try {
         if (section === "dashboard") {
-          const dashboardParams = new URLSearchParams({ date: dashboardDate });
+          const dashboardParams = new URLSearchParams({
+            date: dashboardDate,
+            from: dashboardFrom,
+            to: dashboardTo,
+          });
           const awayDates = getAwayDateRange(
             awayPeriod,
             awayFrom,
@@ -274,43 +414,27 @@
           if (selectedOutlet) dashboardParams.set("outletId", selectedOutlet);
           const dashboardUrl = `/api/dashboard?${dashboardParams.toString()}`;
           const dashboard = await request<WorkspaceData>(dashboardUrl);
-          if (user.permissions.includes("employees.read")) {
-            const reportParams = new URLSearchParams({
-              from: dashboardFrom,
-              to: dashboardTo,
-            });
-            if (selectedOutlet) reportParams.set("outletId", selectedOutlet);
-            if (dashboardEmployeeId)
-              reportParams.set("employeeId", dashboardEmployeeId);
-            const reportUrl = `/api/reports/employee-attendance?${reportParams.toString()}`;
-            const employeeAttendance =
-              await request<EmployeeAttendanceReport>(reportUrl);
-            setData({ ...dashboard, employeeAttendance });
-          } else {
-            setData(dashboard);
-          }
+          commitData(dashboard);
         }
         if (section === "attendance") {
           if (attendanceOutletId) {
             const attendanceData = await request<WorkspaceData>(
                 `/api/attendance?outletId=${attendanceOutletId}&date=${date}`,
               );
-            if (reloadId === attendanceReloadId.current)
-              setData(attendanceData);
+            commitData(attendanceData);
           } else if (attendanceOutlets.length > 1) {
             const attendanceData = await request<WorkspaceData>(
               `/api/attendance?date=${date}`,
             );
-            if (reloadId === attendanceReloadId.current)
-              setData(attendanceData);
+            commitData(attendanceData);
           } else if (reloadId === attendanceReloadId.current) {
-            setData({});
+            commitData({});
           }
         }
         if (section === "employees")
-          setData(
+          commitData(
             await request<WorkspaceData>(
-              `/api/employees?page=${page}&pageSize=20&q=${encodeURIComponent(search)}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
+              `/api/employees?page=${page}&pageSize=20&q=${encodeURIComponent(debouncedSearch)}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
             ),
           );
         if (section === "advances") {
@@ -323,55 +447,80 @@
               `/api/advances?${advanceParams.toString()}`,
             ),
             request<WorkspaceData>(
-              `/api/employees?pageSize=100${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
+              "/api/employees?pageSize=100",
             ),
             request<WorkspaceData>("/api/outlets"),
           ]);
-          setData({
+          commitData({
             ...advances,
             employees: employees.employees,
             outlets: outlets.outlets,
           });
         }
         if (section === "loans")
-          setData(
+          commitData(
             await request<WorkspaceData>(
-              `/api/loans${selectedOutlet ? `?outletId=${selectedOutlet}` : ""}`,
+              `/api/loans?month=${month}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
             ),
           );
         if (section === "salary" && month)
-          setData(
+          commitData(
             await request<WorkspaceData>(
               `/api/payroll?month=${month}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
             ),
           );
-        if (section === "outlets")
-          setData(await request<WorkspaceData>("/api/outlets"));
+        if (section === "outlets") {
+          const outletData = await request<WorkspaceData>("/api/outlets");
+          const refreshedOutlets = outletData.outlets ?? [];
+          if (reloadId === attendanceReloadId.current) {
+            setData(outletData);
+            setOutlets(refreshedOutlets);
+          }
+          const refreshedActiveOutlets = refreshedOutlets.filter(
+            (outlet) => outlet.active,
+          );
+          if (reloadId === attendanceReloadId.current) {
+            if (refreshedActiveOutlets.length === 1)
+              setSelectedOutlet(refreshedActiveOutlets[0]._id);
+            else
+              setSelectedOutlet((current) =>
+                refreshedActiveOutlets.some(
+                  (outlet) => outlet._id === current,
+                )
+                  ? current
+                  : "",
+              );
+          }
+        }
         if (section === "access") {
           const [users, designations] = await Promise.all([
             request<WorkspaceData>("/api/users"),
             request<{ designations: DesignationView[] }>("/api/designations"),
           ]);
-          setData({ ...users, designations: designations.designations });
+          commitData({ ...users, designations: designations.designations });
         }
         if (section === "activeLogs") {
           const params = new URLSearchParams({ page: "0" });
           if (selectedOutlet) params.set("outletId", selectedOutlet);
-          setData(
+          commitData(
             await request<WorkspaceData>(
               `/api/audit?${params.toString()}`,
             ),
           );
         }
         if (section === "settings")
-          setData(await request<WorkspaceData>("/api/settings"));
+          commitData(await request<WorkspaceData>("/api/settings"));
       } catch (caught) {
         if (reloadId === attendanceReloadId.current)
           setError(
             caught instanceof Error ? caught.message : "Unable to load records.",
           );
       } finally {
-        if (reloadId === attendanceReloadId.current) setLoading(false);
+        if (reloadId === attendanceReloadId.current) {
+          setLoading(false);
+          setRefreshing(false);
+          setDashboardFetching(false);
+        }
       }
     }
 
@@ -384,8 +533,19 @@
         .then((result) => {
           if (cancelled) return;
           setOutlets(result.outlets);
-          if (result.outlets.length === 1)
-            setSelectedOutlet(result.outlets[0]._id);
+          const accessibleActiveOutlets = result.outlets.filter(
+            (outlet) => outlet.active,
+          );
+          if (accessibleActiveOutlets.length === 1)
+            setSelectedOutlet(accessibleActiveOutlets[0]._id);
+          else
+            setSelectedOutlet((current) =>
+              accessibleActiveOutlets.some(
+                (outlet) => outlet._id === current,
+              )
+                ? current
+                : "",
+            );
         })
         .catch((caught) => {
           if (!cancelled)
@@ -410,6 +570,13 @@
         );
     }, [user.email, user.role]);
     useEffect(() => {
+      const timeout = window.setTimeout(
+        () => setDebouncedSearch(search),
+        300,
+      );
+      return () => window.clearTimeout(timeout);
+    }, [search]);
+    useEffect(() => {
       void Promise.resolve().then(() => reloadCurrentView());
     }, [
       section,
@@ -421,11 +588,10 @@
       dashboardDate,
       dashboardFrom,
       dashboardTo,
-      dashboardEmployeeId,
       awayPeriod,
       awayFrom,
       awayTo,
-      search,
+      debouncedSearch,
       page,
       advanceStatus,
     ]);
@@ -435,30 +601,43 @@
       if (value === "Custom") return;
       const end = new Date(`${today}T00:00:00.000Z`);
       const start = new Date(end);
+      if (value === "Today") {
+        setDashboardFrom(today);
+        setDashboardTo(today);
+        setDashboardDate(today);
+        return;
+      }
       if (value === "This Month") start.setUTCDate(1);
       if (value === "Last Month") {
         start.setUTCDate(1);
         start.setUTCMonth(start.getUTCMonth() - 1);
         end.setUTCDate(0);
       }
+      setDashboardDate(end.toISOString().slice(0, 10));
       setDashboardFrom(start.toISOString().slice(0, 10));
       setDashboardTo(end.toISOString().slice(0, 10));
-      setDashboardEmployeeId("");
     }
 
-    async function exportDashboardAttendance(format: ExportFormat) {
+    async function exportDashboardAttendance(
+      format: ExportFormat,
+      filters: {
+        from: string;
+        to: string;
+        outletId: string;
+        employeeId: string;
+      },
+    ) {
       setDashboardExportBusy(format);
       setError("");
       try {
         const params = new URLSearchParams({
           type: "attendance",
-          from: dashboardFrom,
-          to: dashboardTo,
+          from: filters.from,
+          to: filters.to,
           format,
         });
-        if (selectedOutlet) params.set("outletId", selectedOutlet);
-        if (dashboardEmployeeId)
-          params.set("employeeId", dashboardEmployeeId);
+        if (filters.outletId) params.set("outletId", filters.outletId);
+        if (filters.employeeId) params.set("employeeId", filters.employeeId);
         await downloadReport(
           `/api/reports/export?${params.toString()}`,
           format,
@@ -525,16 +704,31 @@
         if (body.designationId === "") delete body.designationId;
         for (const key of ["outletIds", "permissions"])
           if (formData.has(key)) body[key] = formData.getAll(key).map(String);
+        if (url === "/api/users") {
+          const selectedProfile = String(body.accessProfile ?? "");
+          delete body.accessProfile;
+          if (selectedProfile === "MAIN_ADMIN") {
+            body.role = "MAIN_ADMIN";
+            delete body.outletIds;
+            delete body.designationId;
+          } else if (selectedProfile.startsWith("designation:")) {
+            body.role = "OUTLET_USER";
+            body.designationId = selectedProfile.slice("designation:".length);
+          } else {
+            throw new Error("Select Main Admin or a designation.");
+          }
+        }
         if (
           url === "/api/users" &&
           !window.confirm(
-            "Provision this account with the selected role and outlet access?",
+            "Provision this account with the selected access profile?",
           )
         )
           return;
         await request(url, { method, body: JSON.stringify(body) });
         setSuccess("Changes saved.");
         form.reset();
+        if (url === "/api/users") setNewAccountProfile("");
         await after();
       } catch (caught) {
         setError(
@@ -574,14 +768,13 @@
         value={selectedOutlet}
         onChange={(event) => {
           setSelectedOutlet(event.target.value);
-          setDashboardEmployeeId("");
         }}
         aria-label="Select outlet"
       >
-        {outlets.length !== 1 && (
+        {activeOutlets.length !== 1 && (
           <option value="">All accessible outlets</option>
         )}
-        {outlets.map((outlet) => (
+        {activeOutlets.map((outlet) => (
           <option key={outlet._id} value={outlet._id}>
             {outlet.code} · {outlet.name}
           </option>
@@ -592,13 +785,44 @@
       <div className="toolbar">
         {outletSelect}
         {section === "dashboard" && (
-          <input
-            type="date"
-            aria-label="Dashboard date"
-            value={dashboardDate}
-            max={today}
-            onChange={(event) => setDashboardDate(event.target.value)}
-          />
+          <>
+            <select
+              aria-label="Dashboard reporting period"
+              value={dashboardPreset}
+              onChange={(event) => applyDashboardPreset(event.target.value)}
+            >
+              <option>This Month</option>
+              <option>Last Month</option>
+              <option>Today</option>
+              <option>Custom</option>
+            </select>
+            {dashboardPreset === "Custom" && (
+              <>
+                <input
+                  type="date"
+                  aria-label="Dashboard range start date"
+                  value={dashboardFrom}
+                  max={dashboardTo}
+                  onChange={(event) => {
+                    setDashboardFrom(event.target.value);
+                    setDashboardPreset("Custom");
+                  }}
+                />
+                <input
+                  type="date"
+                  aria-label="Dashboard range end date"
+                  value={dashboardTo}
+                  min={dashboardFrom}
+                  max={today}
+                  onChange={(event) => {
+                    setDashboardTo(event.target.value);
+                    setDashboardDate(event.target.value);
+                    setDashboardPreset("Custom");
+                  }}
+                />
+              </>
+            )}
+          </>
         )}
         <button
           className="icon-button"
@@ -611,73 +835,457 @@
       </div>
     );
 
+    const dashboardAttendance =
+      data.metrics?.attendance ?? { P: 0, A: 0, HD: 0, WO: 0 };
+    const attendanceTrend = data.attendanceTrend ?? [];
+    const dashboardPeriodAttendance = attendanceTrend.reduce(
+      (total, day) => ({
+        P: total.P + day.attendance.P,
+        A: total.A + day.attendance.A,
+        WO: total.WO + day.attendance.WO,
+        HD: total.HD + day.attendance.HD,
+      }),
+      { P: 0, A: 0, WO: 0, HD: 0 },
+    );
+    const dashboardRangeAttendance =
+      attendanceTrend.length > 0
+        ? dashboardPeriodAttendance
+        : dashboardAttendance;
+    const dashboardMarkedCount =
+      dashboardRangeAttendance.P +
+      dashboardRangeAttendance.A +
+      dashboardRangeAttendance.HD;
+    const dashboardAttendanceRate =
+      dashboardMarkedCount > 0
+        ? Number(
+            (
+              ((dashboardRangeAttendance.P +
+                dashboardRangeAttendance.HD / 2) /
+                dashboardMarkedCount) *
+              100
+            ).toFixed(1),
+          )
+        : null;
+    const dashboardActiveOutlets = data.metrics?.activeOutlets ?? 0;
+    const dashboardSubmittedOutlets =
+      data.metrics?.submittedOutlets ?? 0;
+    const dashboardSubmissionRate =
+      dashboardActiveOutlets > 0
+        ? Math.round(
+            (dashboardSubmittedOutlets / dashboardActiveOutlets) * 100,
+          )
+        : 0;
+    const filteredAttendanceEmployees = (
+      data.attendanceEmployees ?? []
+    ).filter((employee) => {
+      if (dashboardAttendanceFilter === "ALL") return true;
+      if (dashboardAttendanceFilter === "UNMARKED")
+        return employee.status === null;
+      return employee.status === dashboardAttendanceFilter;
+    });
+    const unmarkedAttendanceEmployees = (
+      data.attendanceEmployees ?? []
+    ).filter((employee) => employee.status === null).length;
+    const dashboardDayRate = (day: (typeof attendanceTrend)[number]) => {
+      const { P, A, HD } = day.attendance;
+      const marked = P + A + HD;
+      return marked > 0 ? ((P + HD / 2) / marked) * 100 : null;
+    };
+    const validDashboardDayRates = attendanceTrend
+      .map((day) => dashboardDayRate(day))
+      .filter((rate): rate is number => rate !== null);
+    const lastWeekRates = attendanceTrend
+      .slice(-7)
+      .map((day) => dashboardDayRate(day))
+      .filter((rate): rate is number => rate !== null);
+    const previousWeekRates = attendanceTrend
+      .slice(-14, -7)
+      .map((day) => dashboardDayRate(day))
+      .filter((rate): rate is number => rate !== null);
+    const averageRate = (rates: number[]) =>
+      rates.length
+        ? rates.reduce((sum, rate) => sum + rate, 0) / rates.length
+        : null;
+    const rateChange =
+      lastWeekRates.length && previousWeekRates.length
+        ? averageRate(lastWeekRates)! - averageRate(previousWeekRates)!
+        : null;
+    const outletPeriodTotals = new Map<
+      string,
+      { code: string; P: number; A: number; HD: number; WO: number }
+    >();
+    for (const day of attendanceTrend) {
+      for (const outlet of day.outlets) {
+        const total = outletPeriodTotals.get(outlet.id) ?? {
+          code: outlet.code,
+          P: 0,
+          A: 0,
+          HD: 0,
+          WO: 0,
+        };
+        total.P += outlet.attendance.P;
+        total.A += outlet.attendance.A;
+        total.HD += outlet.attendance.HD;
+        total.WO += outlet.attendance.WO;
+        outletPeriodTotals.set(outlet.id, total);
+      }
+    }
+    const outletPerformance = [...outletPeriodTotals.entries()]
+      .map(([id, totals]) => {
+        const marked = totals.P + totals.A + totals.HD;
+        return {
+          id,
+          ...totals,
+          rate: marked
+            ? ((totals.P + totals.HD / 2) / marked) * 100
+            : null,
+        };
+      })
+      .sort((left, right) => (right.rate ?? -1) - (left.rate ?? -1));
+    const dashboardSuggestions: Array<{
+      title: string;
+      detail: string;
+      href: string;
+      icon: "attendance" | "advance" | "payroll" | "outlet";
+    }> = [];
+    const missingOutlets = data.metrics?.missingSubmissions ?? 0;
+    if (missingOutlets > 0)
+      dashboardSuggestions.push({
+        title: `${missingOutlets} outlet${missingOutlets === 1 ? "" : "s"} missing attendance submission`,
+        detail: `Review attendance for ${formatDate(dashboardDate)}`,
+        href: "/attendance",
+        icon: "attendance",
+      });
+    if (unmarkedAttendanceEmployees > 0)
+      dashboardSuggestions.push({
+        title: `${unmarkedAttendanceEmployees} team member${unmarkedAttendanceEmployees === 1 ? "" : "s"} not marked`,
+        detail: "Complete the attendance list for this date",
+        href: "/attendance",
+        icon: "attendance",
+      });
+    if (
+      user.permissions.includes("advances.approve") &&
+      (data.metrics?.pendingAdvanceApprovals ?? 0) > 0
+    )
+      dashboardSuggestions.push({
+        title: `${data.metrics?.pendingAdvanceApprovals} advance request${data.metrics?.pendingAdvanceApprovals === 1 ? "" : "s"} awaiting review`,
+        detail: "Review pending advance requests",
+        href: "/advances",
+        icon: "advance",
+      });
+    if (
+      user.permissions.includes("salary.read") &&
+      (data.metrics?.pendingPayroll ?? 0) > 0
+    )
+      dashboardSuggestions.push({
+        title: `${data.metrics?.pendingPayroll} payroll draft${data.metrics?.pendingPayroll === 1 ? "" : "s"} to review`,
+        detail: "Open the selected month’s payroll records",
+        href: "/salary",
+        icon: "payroll",
+      });
+    const lowestOutletWithData = [...outletPerformance]
+      .filter((outlet) => outlet.rate !== null)
+      .sort((left, right) => left.rate! - right.rate!)[0];
+    if (lowestOutletWithData)
+      dashboardSuggestions.push({
+        title: `${lowestOutletWithData.code} has the lowest recorded attendance rate`,
+        detail: `${lowestOutletWithData.rate!.toFixed(1)}% · review the selected period`,
+        href: "/attendance",
+        icon: "outlet",
+      });
+    if (!dashboardSuggestions.length)
+      dashboardSuggestions.push({
+        title: validDashboardDayRates.length
+          ? "No outstanding attendance actions found"
+          : "No attendance has been recorded for this period",
+        detail: validDashboardDayRates.length
+          ? "Attendance and outlet submissions are up to date"
+          : `Review the attendance range ending ${formatDate(dashboardTo)}`,
+        href: "/attendance",
+        icon: "attendance",
+      });
+
     if (section === "dashboard")
       return (
-        <div className="content-area">
-          <PageHead
-            title="Good service starts with a good team."
-            description={`Live operations snapshot for ${data.today ?? "today"}.`}
-            action={toolbar}
+        <div
+          className={`content-area${dashboardFetching || dashboardTeamReport.isFetching ? " dashboard-refreshing" : ""}`}
+          aria-busy={dashboardFetching || dashboardTeamReport.isFetching}
+        >
+          <Notice
+            error={error || dashboardTeamReport.error}
+            success={success}
+            refreshing={dashboardFetching || dashboardTeamReport.isFetching}
           />
-          <Notice error={error} success={success} />
           {loading ? (
             <Loading />
           ) : (
             <>
-              <div className="metric-grid">
-                <Metric
-                  title="Active employees"
-                  value={data.metrics?.activeEmployees ?? 0}
-                  accent="red"
-                />
-                <Metric
-                  title="Full-time"
-                  value={data.metrics?.fullTimeEmployees ?? "—"}
-                  detail="Active team members"
-                  accent="green"
-                />
-                <Metric
-                  title="Part-time"
-                  value={data.metrics?.partTimeEmployees ?? "—"}
-                  detail="Active team members"
-                  accent="gold"
-                />
-                <Metric
-                  title="Active outlets"
-                  value={data.metrics?.activeOutlets ?? 0}
-                  accent="green"
-                />
-                <Metric
-                  title="Attendance today"
-                  value={Object.values(data.metrics?.attendance ?? {}).reduce(
-                    (sum, count) => sum + count,
-                    0,
+              <section className="dashboard-hero">
+                <div className="dashboard-hero-copy">
+                  <span className="dashboard-hero-kicker">
+                    <span /> YOUR TEAM, AT A GLANCE
+                  </span>
+                  <h2>Good service starts with a good team.</h2>
+                  <p>
+                    Live analytics snapshot · {formatDate(data.today ?? dashboardDate)}
+                  </p>
+                  <div className="dashboard-insights">
+                    <span><CircleCheck size={14} /> {dashboardAttendance.P} present</span>
+                    <span><Building2 size={14} /> {data.metrics?.missingSubmissions ?? 0} outlets to submit</span>
+                    {user.permissions.includes("advances.approve") &&
+                      (data.metrics?.pendingAdvanceApprovals ?? 0) > 0 && (
+                        <span className="dashboard-insight-pending">
+                          <Bell size={14} /> {data.metrics?.pendingAdvanceApprovals} pending approval
+                        </span>
+                      )}
+                    {lowestOutletWithData && (
+                      <span>
+                        <Building2 size={14} /> Best outlet: {outletPerformance.find((outlet) => outlet.rate !== null)?.code} ({outletPerformance.find((outlet) => outlet.rate !== null)?.rate?.toFixed(1)}%)
+                      </span>
+                    )}
+                  </div>
+                  <div className="dashboard-hero-actions">
+                    {user.permissions.includes("attendance.write") && (
+                      <Link className="button button-primary" href="/attendance">
+                        <CalendarClock size={16} /> Mark attendance
+                      </Link>
+                    )}
+                    {user.permissions.includes("salary.generate") && (
+                      <Link className="button button-secondary" href="/salary">
+                        <Banknote size={16} /> Run payroll
+                      </Link>
+                    )}
+                    {user.permissions.includes("employees.read") && (
+                      <Link className="button button-secondary" href="/employees">
+                        <Users size={16} /> Manage team
+                      </Link>
+                    )}
+                  </div>
+                </div>
+                <div className="dashboard-hero-side">
+                  <div className="dashboard-hero-date">
+                    <span>REPORTING DATE</span>
+                    <strong>{formatDate(data.today ?? dashboardDate)}</strong>
+                  </div>
+                  <div className="dashboard-hero-ornament" aria-hidden="true">
+                    <span>LM</span>
+                  </div>
+                  <span className="dashboard-hero-brand">ATTENDANCE BY ROSHAN</span>
+                </div>
+              </section>
+              <div className="dashboard-filter-row">
+                {toolbar}
+                {user.permissions.includes("advances.approve") &&
+                  (data.metrics?.pendingAdvanceApprovals ?? 0) > 0 && (
+                    <Link className="dashboard-pending-chip" href="/advances">
+                      <Bell size={13} /> {data.metrics?.pendingAdvanceApprovals} pending approval
+                    </Link>
                   )}
-                  detail={`${data.metrics?.missingSubmissions ?? 0} outlets not submitted`}
-                  accent="gold"
-                />
-                <Metric
-                  title="Net payroll"
-                  value={
-                    data.metrics?.netPayable == null
-                      ? "—"
-                      : currency(data.metrics.netPayable)
-                  }
-                  detail={
-                    data.metrics?.netPayable == null
-                      ? "Salary permission required"
-                      : `Accrued through ${dashboardDate} · ${data.metrics.pendingApprovals ?? 0} pending approvals`
-                  }
-                  accent="ink"
-                />
               </div>
-              <div className="dashboard-charts">
-                <AttendanceStatusChart
-                  attendance={
-                    data.metrics?.attendance ?? { P: 0, A: 0, HD: 0, WO: 0 }
-                  }
-                />
-                <OutletChart outlets={data.outlets ?? []} />
+              <div className="dashboard-kpi-grid">
+                <article className="dashboard-kpi-card">
+                  <div className="dashboard-kpi-top">
+                    <span>Attendance rate</span>
+                    <span className="dashboard-kpi-icon dashboard-kpi-green"><CalendarDays size={17} /></span>
+                  </div>
+                  <strong>{dashboardAttendanceRate === null ? "—" : `${dashboardAttendanceRate}%`}</strong>
+                  <div className="dashboard-kpi-foot">
+                    <span>{dashboardMarkedCount ? `${formatDate(dashboardFrom)} – ${formatDate(dashboardTo)}` : "No attendance marked yet"}</span>
+                    <span className="dashboard-kpi-neutral">
+                      {rateChange === null ? "—" : `${rateChange >= 0 ? "+" : ""}${rateChange.toFixed(1)} pp vs prior 7 days`}
+                    </span>
+                  </div>
+                  <div className="dashboard-kpi-status-bars" aria-hidden="true">
+                    {(["P", "HD", "A", "WO"] as const).map((status) => {
+                      const count = dashboardRangeAttendance[status];
+                      const total = Object.values(dashboardRangeAttendance).reduce((sum, value) => sum + value, 0);
+                      const percentage = total
+                        ? Math.max((count / total) * 100, count ? 4 : 0)
+                        : 0;
+                      return (
+                        <i
+                          key={status}
+                          className={`status-${status.toLowerCase()} ${dashboardPercentClass(percentage, "dashboard-width")}`}
+                        />
+                      );
+                    })}
+                  </div>
+                  <small>Half-days count as half; week-offs excluded · live records</small>
+                </article>
+                <article className="dashboard-kpi-card">
+                  <div className="dashboard-kpi-top">
+                    <span>Net payroll</span>
+                    <span className="dashboard-kpi-icon dashboard-kpi-rose"><Banknote size={17} /></span>
+                  </div>
+                  <strong>{data.metrics?.netPayable == null ? "—" : currency(data.metrics.netPayable)}</strong>
+                  <div className="dashboard-kpi-foot">
+                    <span>{data.metrics?.netPayable == null ? "Salary permission required" : `Accrued through ${formatDate(dashboardDate)}`}</span>
+                    {user.permissions.includes("salary.read") && <Link href="/salary" className="dashboard-kpi-link">View payroll <ArrowUpRight size={13} /></Link>}
+                  </div>
+                  {data.metrics?.grossSalary != null && (
+                    <div className="dashboard-kpi-extra">Gross earnings <strong>{currency(data.metrics.grossSalary)}</strong></div>
+                  )}
+                  {data.metrics?.projectedMonthEndBase != null && (
+                    <div className="dashboard-kpi-extra">Projected month-end base <strong>{currency(data.metrics.projectedMonthEndBase)}</strong></div>
+                  )}
+                  <small>Projection uses monthly base salaries before attendance and deductions</small>
+                </article>
+                <article className="dashboard-kpi-card">
+                  <div className="dashboard-kpi-top">
+                    <span>Active team</span>
+                    <span className="dashboard-kpi-icon dashboard-kpi-sage"><Users size={17} /></span>
+                  </div>
+                  <strong>{data.metrics?.activeEmployees ?? 0}</strong>
+                  <div className="dashboard-kpi-foot">
+                    <span>{data.metrics?.fullTimeEmployees ?? 0} full-time · {data.metrics?.partTimeEmployees ?? 0} part-time</span>
+                    {user.permissions.includes("employees.read") && <Link href="/employees" className="dashboard-kpi-link">View team <ArrowUpRight size={13} /></Link>}
+                  </div>
+                  <div className="dashboard-avatar-stack" aria-label="Team member initials">
+                    {(data.attendanceEmployees ?? []).slice(0, 5).map((employee) => (
+                      <span key={employee.employeeId} title={employee.employeeName}>{employee.employeeName.slice(0, 1).toUpperCase()}</span>
+                    ))}
+                    {(!data.attendanceEmployees || data.attendanceEmployees.length === 0) && (
+                      <span className="dashboard-avatar-empty"><BriefcaseBusiness size={13} /></span>
+                    )}
+                  </div>
+                  <small>{dashboardActiveOutlets} active {dashboardActiveOutlets === 1 ? "outlet" : "outlets"}</small>
+                </article>
+                <article className="dashboard-kpi-card dashboard-submission-card">
+                  <div className="dashboard-kpi-top">
+                    <span>Outlet submissions</span>
+                    <span className="dashboard-kpi-icon dashboard-kpi-gold"><CircleCheck size={17} /></span>
+                  </div>
+                  <div className="dashboard-submission-content">
+                    <div>
+                      <strong>{dashboardSubmittedOutlets}<span>/{dashboardActiveOutlets}</span></strong>
+                      <small>outlets submitted</small>
+                    </div>
+                    <div className={`dashboard-submission-ring ${dashboardPercentClass(dashboardSubmissionRate, "dashboard-rate")}`} aria-label={`${dashboardSubmissionRate}% outlets submitted`}>
+                      <span>{dashboardSubmissionRate}%</span>
+                    </div>
+                  </div>
+                  <div className="dashboard-kpi-foot">
+                    <span>{data.metrics?.missingSubmissions ?? 0} awaiting submission</span>
+                    <span className="dashboard-kpi-neutral">{dashboardSubmissionRate}% complete</span>
+                  </div>
+                </article>
+              </div>
+              {user.permissions.includes("attendance.read") && (
+                <section className="panel dashboard-checkins-panel">
+                  <div className="panel-heading dashboard-checkins-heading">
+                    <div>
+                      <span className="dashboard-panel-kicker">TEAM ATTENDANCE</span>
+                      <h2>Attendance overview</h2>
+                      <p>
+                        {formatDate(dashboardDate)} · {(data.attendanceEmployees ?? []).length} team members in your accessible outlets
+                      </p>
+                    </div>
+                    <div className="dashboard-checkin-filters" role="group" aria-label="Filter attendance employees">
+                      {([
+                        ["ALL", "All"],
+                        ["P", "Present"],
+                        ["A", "Absent"],
+                        ["HD", "Half day"],
+                        ["WO", "Week off"],
+                        ["UNMARKED", "Unmarked"],
+                      ] as const).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={dashboardAttendanceFilter === value ? "dashboard-filter-active" : ""}
+                          aria-pressed={dashboardAttendanceFilter === value}
+                          onClick={() => setDashboardAttendanceFilter(value)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                      <span className="dashboard-late-unavailable" title="Check-in times are not stored in attendance records">Late · not tracked</span>
+                    </div>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="dashboard-checkin-table">
+                      <thead>
+                        <tr>
+                          <th>Employee</th>
+                          <th>Department</th>
+                          <th>Check-in</th>
+                          <th>Hours</th>
+                          <th>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredAttendanceEmployees.map((employee) => (
+                          <tr key={employee.employeeId}>
+                            <td>
+                              <span className="dashboard-employee-cell">
+                                <span className="dashboard-employee-avatar">{employee.employeeName.slice(0, 1).toUpperCase()}</span>
+                                <span><strong>{employee.employeeName}</strong><small>{employee.employeeCode} · {employee.outletCode || "Outlet"}</small></span>
+                              </span>
+                            </td>
+                            <td>{employee.designation || "—"}</td>
+                            <td><span className="dashboard-untracked"><Clock3 size={13} /> Not captured</span></td>
+                            <td><span className="dashboard-hours-placeholder">Not tracked</span></td>
+                            <td>
+                              <span className={`badge ${employee.status ? `attendance-status-${employee.status.toLowerCase()}` : "badge-muted"}`}>
+                                {employee.status === "P" ? "Present" : employee.status === "A" ? "Absent" : employee.status === "HD" ? "Half day" : employee.status === "WO" ? "Week off" : "Unmarked"}
+                              </span>
+                              {employee.status && !employee.submitted && <small className="dashboard-draft-label">Draft</small>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {filteredAttendanceEmployees.length === 0 && (
+                      <Empty>{data.attendanceEmployees?.length ? "No team members match this status filter." : "No employee attendance is available for this date and outlet scope."}</Empty>
+                    )}
+                  </div>
+                </section>
+              )}
+              {user.permissions.includes("attendance.read") && (
+                <>
+                  <div className="dashboard-analytics-trend-row">
+                    <DashboardAttendanceTrend
+                      days={attendanceTrend}
+                      from={dashboardFrom}
+                      to={dashboardTo}
+                    />
+                    <AttendanceStatusChart
+                      attendance={dashboardRangeAttendance}
+                      subtitle={`${formatDate(dashboardFrom)} – ${formatDate(dashboardTo)}`}
+                    />
+                  </div>
+                  <div className="dashboard-analytics-grid">
+                    <DashboardAttendanceHeatmap
+                      days={attendanceTrend}
+                      from={dashboardFrom}
+                      to={dashboardTo}
+                    />
+                    <DashboardOutletRanking
+                      outlets={outletPerformance}
+                      activeOutlets={data.outlets ?? []}
+                      selectedOutlet={selectedOutlet}
+                      onSelect={(outletId) => setSelectedOutlet(outletId)}
+                    />
+                    {user.permissions.includes("employees.read") && (
+                      <DashboardTeamPerformance
+                        rows={dashboardTeamReport.rows}
+                        from={dashboardFrom}
+                        to={dashboardTo}
+                      />
+                    )}
+                  </div>
+                </>
+              )}
+              <div className="dashboard-payroll-suggestions-grid">
+                {user.permissions.includes("salary.read") && (
+                  <DashboardPayrollBreakdown
+                    metrics={data.metrics}
+                    employeeCount={data.metrics?.activeEmployees ?? 0}
+                    from={dashboardFrom}
+                    to={dashboardTo}
+                  />
+                )}
+                <DashboardSuggestions items={dashboardSuggestions} />
               </div>
               {user.permissions.includes("attendance.read") && (
                 <WhoIsAwayPanel
@@ -744,27 +1352,16 @@
               </section>
               {user.permissions.includes("employees.read") && (
                 <EmployeeAttendanceTable
-                  rows={data.employeeAttendance?.rows ?? []}
+                  key={`${selectedOutlet}|${dashboardFrom}|${dashboardTo}`}
                   canReadSalary={user.permissions.includes("salary.read")}
-                  from={dashboardFrom}
-                  to={dashboardTo}
-                  preset={dashboardPreset}
-                  employeeId={dashboardEmployeeId}
-                  employees={data.employeeAttendance?.employees ?? []}
+                  globalFrom={dashboardFrom}
+                  globalTo={dashboardTo}
+                  globalOutletId={selectedOutlet}
+                  outlets={activeOutlets}
                   canExport={user.permissions.includes("reports.export")}
                   exportBusy={dashboardExportBusy}
-                  onPresetChange={applyDashboardPreset}
-                  onFromChange={(value) => {
-                    setDashboardPreset("Custom");
-                    setDashboardFrom(value);
-                  }}
-                  onToChange={(value) => {
-                    setDashboardPreset("Custom");
-                    setDashboardTo(value);
-                  }}
-                  onEmployeeChange={setDashboardEmployeeId}
-                  onExport={(format) =>
-                    void exportDashboardAttendance(format)
+                  onExport={(format, filters) =>
+                    void exportDashboardAttendance(format, filters)
                   }
                   title={
                     dashboardPreset === "This Month"
@@ -773,7 +1370,7 @@
                         ? "Employee attendance last month"
                         : "Employee attendance by date"
                   }
-                  description="Choose a period and employee to review or download the submitted attendance report."
+                  description="Choose an outlet, employee, and date range to review or download the submitted attendance report."
                 />
               )}
             </>
@@ -782,6 +1379,14 @@
       );
 
     const attendanceEmployees = data.employees ?? [];
+    const attendanceCounts = attendanceEmployees.reduce(
+      (counts, employee) => {
+        if (employee.attendanceStatus)
+          counts[employee.attendanceStatus] += 1;
+        return counts;
+      },
+      { P: 0, A: 0, WO: 0, HD: 0 },
+    );
     const markedAttendanceCount = attendanceEmployees.filter(
       (employee) => employee.attendanceStatus,
     ).length;
@@ -791,13 +1396,30 @@
     const allAttendanceSubmitted =
       attendanceEmployees.length > 0 &&
       submittedAttendanceCount === attendanceEmployees.length;
+    const isMainAdmin = user.role === "MAIN_ADMIN";
     const hasMarkedUnsubmittedAttendance = attendanceEmployees.some(
       (employee) =>
-        employee.attendanceStatus && !employee.attendanceSubmitted,
+        employee.attendanceStatus &&
+        (!employee.attendanceSubmitted ||
+          (isMainAdmin &&
+            employee.attendanceStatus !== employee.savedAttendanceStatus)),
     );
-    const hasUnsubmittedEmployees = attendanceEmployees.some(
-      (employee) => !employee.attendanceSubmitted,
+    const hasAttendanceSaveWork = attendanceEmployees.some(
+      (employee) =>
+        (!employee.attendanceSubmitted &&
+          (employee.attendanceStatus || employee.attendanceEntryExists)) ||
+        (isMainAdmin &&
+          employee.attendanceSubmitted &&
+          employee.attendanceStatus !== employee.savedAttendanceStatus),
     );
+    const hasAdminSubmittedCorrection = isMainAdmin && attendanceEmployees.some(
+      (employee) =>
+        employee.attendanceSubmitted &&
+        employee.attendanceStatus !== employee.savedAttendanceStatus,
+    );
+    const canWriteAttendance = user.permissions.includes("attendance.write");
+    const canSubmitAttendance =
+      canWriteAttendance && user.permissions.includes("attendance.submit");
 
     if (section === "attendance")
       return (
@@ -824,16 +1446,20 @@
                     <span>Alert</span>
                   </label>
                 )}
-                <input
-                  type="date"
-                  value={date}
-                  max={today}
-                  onChange={(event) => {
-                    if (event.target.value && event.target.value <= today)
-                      setDate(event.target.value);
-                  }}
-                  aria-label="Attendance date"
-                />
+                <label className="attendance-date-picker">
+                  <span>{formatDate(date)}</span>
+                  <CalendarDays size={16} aria-hidden="true" />
+                  <input
+                    type="date"
+                    value={date}
+                    max={today}
+                    onChange={(event) => {
+                      if (event.target.value && event.target.value <= today)
+                        setDate(event.target.value);
+                    }}
+                    aria-label="Attendance date"
+                  />
+                </label>
                 {attendanceOutlets.length === 1 ? (
                   <span className="attendance-single-outlet">
                     {attendanceOutlets[0].name}
@@ -861,7 +1487,7 @@
               </div>
             }
           />
-          <Notice error={error} success={success} />
+          <Notice error={error} success={success} refreshing={refreshing} />
           {loading ? (
             <Loading />
           ) : (
@@ -898,11 +1524,19 @@
                     </p>
                   )}
                 </div>
-                <div className="toolbar">
-                  <span className="count-chip">P {data.counts?.P ?? 0}</span>
-                  <span className="count-chip">A {data.counts?.A ?? 0}</span>
-                  <span className="count-chip">WO {data.counts?.WO ?? 0}</span>
-                  <span className="count-chip">HD {data.counts?.HD ?? 0}</span>
+                <div className="attendance-status-summary">
+                  <span className="attendance-count-chip">
+                    <i className="status-dot-present" /> Present {attendanceCounts.P}
+                  </span>
+                  <span className="attendance-count-chip">
+                    <i className="status-dot-absent" /> Absent {attendanceCounts.A}
+                  </span>
+                  <span className="attendance-count-chip">
+                    <i className="status-dot-weekoff" /> Week off {attendanceCounts.WO}
+                  </span>
+                  <span className="attendance-count-chip">
+                    <i className="status-dot-half" /> Half day {attendanceCounts.HD}
+                  </span>
                 </div>
               </div>
               <div className="table-wrap">
@@ -933,47 +1567,46 @@
                         </td>
                         <td>{employee.designation}</td>
                         <td>
-                          <select
-                            className={`attendance-status-select${employee.attendanceSubmitted || attendanceAllOutlets ? " attendance-locked" : ""}`}
-                            disabled={
-                              !attendanceOutletId ||
-                              attendanceAllOutlets ||
-                              employee.attendanceSubmitted ||
-                              (user.role !== "MAIN_ADMIN" &&
-                                (employee.attendanceCorrectionCount ?? 0) >= 2)
-                            }
-                            value={employee.attendanceStatus ?? ""}
-                            onChange={(event) =>
-                              setData((old) => ({
-                                ...old,
-                                employees: (old.employees ?? []).map((item) =>
-                                  item._id === employee._id
-                                    ? {
-                                        ...item,
-                                        attendanceStatus: event.target.value
-                                          ? (event.target
-                                              .value as AttendanceStatus)
-                                          : null,
-                                      }
-                                    : item,
-                                ),
-                              }))
-                            }
+                          <div
+                            className={`attendance-status-controls${employee.attendanceSubmitted && !isMainAdmin ? " is-locked" : ""}`}
+                            role="group"
+                            aria-label={`Attendance status for ${employee.fullName}`}
                           >
-                            <option
-                              value=""
-                              disabled={
-                                data.day?.corrections?.at(-1)?.action ===
-                                  "UNLOCK" && !!employee.attendanceStatus
-                              }
-                            >
-                              Choose
-                            </option>
-                            <option value="P">P · Present</option>
-                            <option value="A">A · Absent</option>
-                            <option value="WO">WO · Week off</option>
-                            <option value="HD">HD · Half day</option>
-                          </select>
+                            {attendanceStatusOptions.map(
+                              ({ status, label, shortLabel }) => (
+                              <button
+                                key={status}
+                                type="button"
+                                className={`attendance-status-option attendance-status-${status.toLowerCase()}${employee.attendanceStatus === status ? " is-selected" : ""}`}
+                                aria-label={label}
+                                title={label}
+                                aria-pressed={employee.attendanceStatus === status}
+                                disabled={isAttendanceEntryLocked(
+                                  !!employee.attendanceSubmitted,
+                                  user.role,
+                                )}
+                                onClick={() =>
+                                  setData((old) => ({
+                                    ...old,
+                                    employees: (old.employees ?? []).map((item) =>
+                                      item._id === employee._id
+                                        ? {
+                                            ...item,
+                                            attendanceStatus:
+                                              item.attendanceStatus === status
+                                                ? null
+                                                : status,
+                                          }
+                                        : item,
+                                    ),
+                                  }))
+                                }
+                              >
+                                {shortLabel}
+                              </button>
+                              ),
+                            )}
+                          </div>
                           {user.role !== "MAIN_ADMIN" &&
                             (employee.attendanceCorrectionCount ?? 0) >= 2 && (
                               <span className="sub-cell attendance-correction-lock">
@@ -1011,58 +1644,61 @@
                   {markedAttendanceCount} of {attendanceEmployees.length} marked
                 </span>
                 <div className="toolbar">
-                  {attendanceAllOutlets ? (
+                  {attendanceAllOutlets && (
                     <span className="sub-cell">
-                      Choose an outlet above to edit or submit attendance.
+                      Submit marked employees across accessible outlets.
                     </span>
-                  ) : (
+                  )}
+                  {!attendanceAllOutlets &&
+                    data.day?.status === "SUBMITTED" &&
+                    user.permissions.includes("attendance.unlock") && (
+                      <button
+                        className="button button-secondary"
+                        disabled={busy}
+                        onClick={() => setIsAttendanceUnlockOpen(true)}
+                      >
+                        Unlock for correction
+                      </button>
+                    )}
+                  {(attendanceAllOutlets ||
+                    data.day?.status !== "SUBMITTED" ||
+                    !allAttendanceSubmitted ||
+                    isMainAdmin) && (
                     <>
-                      {data.day?.status === "SUBMITTED" &&
-                        user.permissions.includes("attendance.unlock") && (
-                          <button
-                            className="button button-secondary"
-                            disabled={busy}
-                            onClick={() => setIsAttendanceUnlockOpen(true)}
-                          >
-                            Unlock for correction
-                          </button>
-                        )}
-                      {(data.day?.status !== "SUBMITTED" ||
-                        !allAttendanceSubmitted) && (
-                        <>
-                          <button
-                            disabled={
-                              busy ||
-                              !attendanceOutletId ||
-                              !hasUnsubmittedEmployees
-                            }
-                            className="button button-secondary"
-                            onClick={() => saveAttendance("SAVE")}
-                          >
-                            <Check size={16} /> Save draft
-                          </button>
-                          <button
-                            disabled={
-                              busy ||
-                              !attendanceOutletId ||
-                              !hasMarkedUnsubmittedAttendance
-                            }
-                            className="button button-primary"
-                            onClick={() => saveAttendance("SUBMIT")}
-                          >
-                            <Send size={16} /> Submit & lock
-                          </button>
-                        </>
-                      )}
-                      {allAttendanceSubmitted &&
-                        data.day?.status === "SUBMITTED" &&
-                        !user.permissions.includes("attendance.unlock") && (
-                          <span className="sub-cell">
-                            Attendance submitted and locked.
-                          </span>
-                        )}
+                      <button
+                        disabled={
+                          busy ||
+                          (!attendanceOutletId && !attendanceAllOutlets) ||
+                          !canWriteAttendance ||
+                          !hasAttendanceSaveWork
+                        }
+                        className="button button-secondary"
+                        onClick={() => saveAttendance("SAVE")}
+                      >
+                        <Check size={16} /> Save draft
+                      </button>
+                      <button
+                        disabled={
+                          busy ||
+                          (!attendanceOutletId && !attendanceAllOutlets) ||
+                          !canSubmitAttendance ||
+                          !hasMarkedUnsubmittedAttendance
+                        }
+                        className="button button-primary"
+                        onClick={() => saveAttendance("SUBMIT")}
+                      >
+                        <Send size={16} /> Submit & lock
+                      </button>
                     </>
                   )}
+                  {!attendanceAllOutlets &&
+                    allAttendanceSubmitted &&
+                    data.day?.status === "SUBMITTED" &&
+                    !user.permissions.includes("attendance.unlock") && (
+                      <span className="sub-cell">
+                        Attendance submitted and locked.
+                      </span>
+                    )}
                 </div>
               </div>
             </section>
@@ -1135,6 +1771,171 @@
               </section>
             </div>
           )}
+          {loanHistory && (
+            <div className="advance-modal-backdrop">
+              <section
+                className="advance-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="loan-history-title"
+              >
+                <header className="advance-modal-heading">
+                  <div>
+                    <h2 id="loan-history-title">Repayment history</h2>
+                    <p>{loanHistory.employeeName}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Close repayment history"
+                    onClick={() => setLoanHistory(null)}
+                  >
+                    <X size={16} />
+                  </button>
+                </header>
+                <div className="salary-manage-content">
+                  <h3>Installments</h3>
+                  {loanHistory.installments.length ? (
+                    <DataTable
+                      headers={[
+                        "Payroll month",
+                        "Opening",
+                        "Scheduled",
+                        "Actual",
+                        "Closing",
+                        "Status / reason",
+                        "Action by",
+                        "Payroll reference",
+                        "Recorded",
+                      ]}
+                      rows={loanHistory.installments.map((entry) => [
+                        String(entry.payrollMonth ?? ""),
+                        currency(Number(entry.openingBalance)),
+                        currency(Number(entry.scheduledDeduction)),
+                        currency(Number(entry.actualDeduction)),
+                        currency(Number(entry.closingBalance)),
+                        `${String(entry.status ?? "")}${entry.skipReason ? ` · ${String(entry.skipReason)}` : ""}${entry.reversalReason ? ` · Reversal: ${String(entry.reversalReason)}` : ""}`,
+                        `${String(entry.actorName ?? "")}${entry.reversedByName ? ` · reversed by ${String(entry.reversedByName)}` : ""}`,
+                        String(entry.payrollRecordId ?? ""),
+                        String(entry.createdAt ?? ""),
+                      ])}
+                      empty="No installments recorded."
+                      page={1}
+                      pageSize={100}
+                      total={loanHistory.installments.length}
+                      onPageChange={() => {}}
+                    />
+                  ) : (
+                    <p className="sub-cell">No installments recorded.</p>
+                  )}
+                  <h3>Adjustments and closures</h3>
+                  {loanHistory.transactions.length ? (
+                    <DataTable
+                      headers={[
+                        "Date",
+                        "Type",
+                        "Amount",
+                        "Balance before",
+                        "Balance after",
+                        "Reason / reference",
+                        "Action by",
+                      ]}
+                      rows={loanHistory.transactions.map((entry) => [
+                        String(entry.transactionDate ?? ""),
+                        String(entry.type ?? ""),
+                        currency(Number(entry.amount)),
+                        currency(Number(entry.balanceBefore)),
+                        currency(Number(entry.balanceAfter)),
+                        `${String(entry.reason ?? "")}${entry.reference ? ` · ${String(entry.reference)}` : ""}`,
+                        String(entry.actorName ?? ""),
+                      ])}
+                      empty="No adjustment or closure transactions recorded."
+                      page={1}
+                      pageSize={100}
+                      total={loanHistory.transactions.length}
+                      onPageChange={() => {}}
+                    />
+                  ) : (
+                    <p className="sub-cell">No adjustment or closure transactions recorded.</p>
+                  )}
+                </div>
+              </section>
+            </div>
+          )}
+          {isAttendanceCorrectionOpen && (
+            <div className="advance-modal-backdrop">
+              <section
+                className="advance-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="attendance-correction-title"
+              >
+                <header className="advance-modal-heading">
+                  <div>
+                    <h2 id="attendance-correction-title">
+                      Reason for attendance correction
+                    </h2>
+                    <p>
+                      A reason is recorded in the attendance history and audit
+                      log when changing submitted attendance.
+                    </p>
+                  </div>
+                </header>
+                <form
+                  className="advance-edit-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const reason = attendanceCorrectionReason.trim();
+                    const action = pendingAttendanceAction;
+                    if (!reason || !action) return;
+                    setIsAttendanceCorrectionOpen(false);
+                    if (action === "SUBMIT" && attendanceSubmitConfirmation) {
+                      setIsAttendanceConfirmOpen(true);
+                      return;
+                    }
+                    setPendingAttendanceAction(null);
+                    setAttendanceCorrectionReason("");
+                    void submitAttendance(action, reason);
+                  }}
+                >
+                  <label className="field">
+                    <span>Reason (required)</span>
+                    <textarea
+                      value={attendanceCorrectionReason}
+                      maxLength={500}
+                      required
+                      rows={3}
+                      onChange={(event) =>
+                        setAttendanceCorrectionReason(event.target.value)
+                      }
+                      placeholder="Explain why submitted attendance is being changed"
+                    />
+                  </label>
+                  <div className="toolbar attendance-confirm-actions">
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      disabled={busy}
+                      onClick={() => {
+                        setIsAttendanceCorrectionOpen(false);
+                        setPendingAttendanceAction(null);
+                        setAttendanceCorrectionReason("");
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="button button-primary"
+                      disabled={busy || !attendanceCorrectionReason.trim()}
+                    >
+                      Continue
+                    </button>
+                  </div>
+                </form>
+              </section>
+            </div>
+          )}
           {isAttendanceConfirmOpen && (
             <div className="advance-modal-backdrop">
               <section
@@ -1150,7 +1951,11 @@
                     </h2>
                     <p>
                       Confirm attendance for{" "}
-                      {data.outlet?.name ?? data.outlet?.code ?? "this outlet"}{" "}
+                      {attendanceAllOutlets
+                        ? "all accessible outlets"
+                        : (data.outlet?.name ??
+                          data.outlet?.code ??
+                          "this outlet")}{" "}
                       on {formatDate(date)}? This will save and lock only the
                       marked employees. Unmarked employees will remain
                       editable. For any changes, contact KULDEEP YADAV.
@@ -1162,7 +1967,11 @@
                     type="button"
                     className="button button-secondary"
                     disabled={busy}
-                    onClick={() => setIsAttendanceConfirmOpen(false)}
+                    onClick={() => {
+                      setIsAttendanceConfirmOpen(false);
+                      setPendingAttendanceAction(null);
+                      setAttendanceCorrectionReason("");
+                    }}
                   >
                     Cancel
                   </button>
@@ -1172,7 +1981,11 @@
                     disabled={busy}
                     onClick={() => {
                       setIsAttendanceConfirmOpen(false);
-                      void submitAttendance();
+                      const action = pendingAttendanceAction ?? "SUBMIT";
+                      const reason = attendanceCorrectionReason.trim();
+                      setPendingAttendanceAction(null);
+                      setAttendanceCorrectionReason("");
+                      void submitAttendance(action, reason || undefined);
                     }}
                   >
                     Confirm
@@ -1185,31 +1998,122 @@
       );
 
     async function saveAttendance(action: "SAVE" | "SUBMIT") {
+      if (hasAdminSubmittedCorrection) {
+        setPendingAttendanceAction(action);
+        setAttendanceCorrectionReason("");
+        setIsAttendanceCorrectionOpen(true);
+        return;
+      }
       if (
         action === "SUBMIT" &&
         (user.role !== "MAIN_ADMIN" || attendanceSubmitConfirmation)
       ) {
+        setPendingAttendanceAction(action);
         setIsAttendanceConfirmOpen(true);
         return;
       }
       await submitAttendance(action);
     }
 
-    async function submitAttendance(action: "SAVE" | "SUBMIT" = "SUBMIT") {
-      const entries = (data.employees ?? [])
-        .filter((employee: Employee) => employee.attendanceStatus)
-        .map((employee: Employee) => ({
-          employeeId: employee._id,
-          status: employee.attendanceStatus,
-        }));
-      await mutate(
-        "/api/attendance",
-        { outletId: attendanceOutletId, date, entries, action },
-        "PUT",
-        action === "SUBMIT"
-          ? "Attendance submitted successfully."
-          : "Attendance draft saved.",
+    async function submitAttendance(
+      action: "SAVE" | "SUBMIT" = "SUBMIT",
+      reason?: string,
+    ) {
+      const entriesByOutlet = new Map<
+        string,
+        {
+          entries: Array<{ employeeId: string; status: AttendanceStatus }>;
+          clearEmployeeIds: string[];
+        }
+      >();
+      for (const employee of attendanceEmployees) {
+        const isAdminCorrection =
+          isMainAdmin &&
+          employee.attendanceSubmitted &&
+          employee.attendanceStatus !== employee.savedAttendanceStatus;
+        if (employee.attendanceSubmitted && !isAdminCorrection) continue;
+        const outletId = attendanceAllOutlets
+          ? employee.outletId
+          : attendanceOutletId;
+        if (!outletId) continue;
+        const group = entriesByOutlet.get(outletId) ?? {
+          entries: [],
+          clearEmployeeIds: [],
+        };
+        if (employee.attendanceStatus) {
+          group.entries.push({
+            employeeId: employee._id,
+            status: employee.attendanceStatus,
+          });
+        } else if (employee.attendanceEntryExists) {
+          group.clearEmployeeIds.push(employee._id);
+        } else {
+          continue;
+        }
+        entriesByOutlet.set(outletId, group);
+      }
+      const outletsWithAttendanceWork = [...entriesByOutlet].filter(
+        ([, group]) =>
+          group.entries.length > 0 || group.clearEmployeeIds.length > 0,
       );
+      if (
+        !outletsWithAttendanceWork.length ||
+        (action === "SUBMIT" &&
+          ![...entriesByOutlet.values()].some((group) => group.entries.length))
+      ) {
+        setError("Mark at least one unlocked employee before saving attendance.");
+        return;
+      }
+
+      setBusy(true);
+      setError("");
+      setSuccess("");
+      const failedOutlets: string[] = [];
+      let submittedOutlets = 0;
+      let draftOutlets = 0;
+      try {
+        for (const [outletId, group] of entriesByOutlet) {
+          const outlet = attendanceOutlets.find(
+            (item) => item._id === outletId,
+          );
+          const outletAction =
+            action === "SUBMIT" && !group.entries.length ? "SAVE" : action;
+          try {
+            await request("/api/attendance", {
+              method: "PUT",
+              body: JSON.stringify({
+                outletId,
+                date,
+                ...group,
+                action: outletAction,
+                reason,
+              }),
+            });
+            if (outletAction === "SUBMIT") submittedOutlets += 1;
+            else draftOutlets += 1;
+          } catch (caught) {
+            failedOutlets.push(
+              `${outlet?.code ?? outletId}: ${
+                caught instanceof Error
+                  ? caught.message
+                  : "Unable to save attendance."
+              }`,
+            );
+          }
+        }
+        await reload();
+        if (failedOutlets.length) {
+          setError(
+            `${submittedOutlets} outlet(s) submitted and ${draftOutlets} draft(s) saved; ${failedOutlets.length} failed. ${failedOutlets.join(" ")}`,
+          );
+        } else {
+          setSuccess(action === "SUBMIT"
+            ? `Attendance submitted for ${submittedOutlets} outlet(s) and drafts saved for ${draftOutlets} outlet(s).`
+            : `Attendance draft saved for ${draftOutlets} outlet(s).`);
+        }
+      } finally {
+        setBusy(false);
+      }
     }
 
     async function unlockAttendance(event: FormEvent<HTMLFormElement>) {
@@ -1249,141 +2153,19 @@
               </div>
             }
           />
-          <Notice error={error} success={success} />
+          <Notice error={error} success={success} refreshing={refreshing} />
           {user.permissions.includes("employees.create") && (
-            <details className="panel form-panel">
-              <summary>
-                <Plus size={17} /> Add employee
-              </summary>
-              <form
-                className="form-grid"
-                onSubmit={(event) => submit(event, "/api/employees")}
-              >
-                <EmployeeCodeField
-                  key={
-                    newEmployeeOutletId ||
-                    selectedOutlet ||
-                    employeeOutlets[0]?._id ||
-                    "no-outlet"
-                  }
-                  outletId={
-                    newEmployeeOutletId ||
-                    selectedOutlet ||
-                    employeeOutlets[0]?._id ||
-                    ""
-                  }
-                  outletPrefix={
-                    outletCodePrefix(
-                      employeeOutlets.find(
-                        (outlet) =>
-                          outlet._id ===
-                          (newEmployeeOutletId ||
-                            selectedOutlet ||
-                            employeeOutlets[0]?._id),
-                      )?.name ?? "",
-                    )
-                  }
-                />
-                <Field label="Full name" name="fullName" required />
-                <Field
-                  label="Date of joining"
-                  name="dateOfJoining"
-                  type="date"
-                  required
-                />
-                <Field label="Designation" name="designation" required />
-                <label className="field">
-                  <span>Employment type</span>
-                  <select name="employmentType" defaultValue="FULL_TIME">
-                    <option value="FULL_TIME">Full-time</option>
-                    <option value="PART_TIME">Part-time</option>
-                  </select>
-                </label>
-                <Field label="Mobile" name="mobile" required />
-                <Field
-                  label="Monthly base salary"
-                  name="monthlyBaseSalary"
-                  type="number"
-                  min="0"
-                  required
-                />
-                <label className="field">
-                  <span>Outlet</span>
-                  <select
-                    name="outletId"
-                    value={
-                      newEmployeeOutletId ||
-                      selectedOutlet ||
-                      employeeOutlets[0]?._id ||
-                      ""
-                    }
-                    onChange={(event) =>
-                      setNewEmployeeOutletId(event.target.value)
-                    }
-                    required
-                  >
-                    {employeeOutlets.map((outlet) => (
-                      <option key={outlet._id} value={outlet._id}>
-                        {outlet.code} · {outlet.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <input
-                  type="hidden"
-                  name="salaryMethod"
-                  value="FIXED_30_DAYS"
-                />
-                <label className="field">
-                  <span>PF enabled</span>
-                  <select name="pfEnabled">
-                    <option value="false">No</option>
-                    <option value="true">Yes</option>
-                  </select>
-                  </label>
-                <Field
-                  label="Employee PF %"
-                  name="employeePfPercent"
-                  type="number"
-                  min="0"
-                  max="100"
-                  defaultValue="0"
-                />
-                <Field
-                  label="Employer PF %"
-                  name="employerPfPercent"
-                  type="number"
-                  min="0"
-                  max="100"
-                  defaultValue="0"
-                />
-                <label className="field">
-                  <span>ESI enabled</span>
-                  <select name="esiEnabled" defaultValue="false">
-                    <option value="false">No</option>
-                    <option value="true">Yes</option>
-                  </select>
-                </label>
-                <Field
-                  label="Employee ESI %"
-                  name="esiPercent"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.01"
-                  defaultValue="0.75"
-                />
-                <div className="form-actions">
-                  <button className="button button-primary" disabled={busy}>
-                    <Plus size={16} /> Create employee
-                  </button>
-                </div>
-              </form>
-            </details>
+            <EmployeeCreatePanel
+              user={{ email: user.email, role: user.role }}
+              outlets={employeeOutlets}
+              initialOutletId={selectedOutlet}
+              canManageDocuments={user.permissions.includes("employees.update")}
+              onCreated={reload}
+            />
           )}
           {user.role === "MAIN_ADMIN" && (
             <EmployeeImportPanel
-              outlets={outlets}
+              outlets={activeOutlets}
               selectedOutlet={selectedOutlet}
               onImported={reload}
             />
@@ -1473,7 +2255,7 @@
             description="Record staff advances. Approved items are deducted once during payroll generation."
             action={toolbar}
           />
-          <Notice error={error} success={success} />
+          <Notice error={error} success={success} refreshing={refreshing} />
           {(data.pendingCount ?? 0) > 0 && (
             <div className="notice notice-warning pending-advance-notice">
               <Bell size={18} />
@@ -1487,7 +2269,15 @@
             <button
               type="button"
               className="button button-primary advance-record-trigger"
-              onClick={() => setIsAdvanceFormOpen(true)}
+              onClick={() => {
+                setAdvanceOutletId(
+                  selectedOutlet ||
+                    data.outlets?.find((outlet) => outlet.active)?._id ||
+                    "",
+                );
+                setAdvanceEmployeeId("");
+                setIsAdvanceFormOpen(true);
+              }}
             >
                 <Plus size={16} /> Record advance
             </button>
@@ -1543,12 +2333,17 @@
                   <span>Outlet</span>
                   <select
                     name="outletId"
-                    defaultValue={
-                      selectedOutlet || data.outlets?.[0]?._id || ""
-                    }
+                    value={advanceOutletId}
+                    onChange={(event) => {
+                      setAdvanceOutletId(event.target.value);
+                      setAdvanceEmployeeId("");
+                    }}
                     required
                   >
-                    {(data.outlets ?? []).map((outlet: Outlet) => (
+                    <option value="" disabled>
+                      Select outlet
+                    </option>
+                    {activeOutlets.map((outlet) => (
                       <option key={outlet._id} value={outlet._id}>
                         {outlet.code} · {outlet.name}
                       </option>
@@ -1557,8 +2352,26 @@
                 </label>
                 <label className="field">
                   <span>Employee</span>
-                  <select name="employeeId" required>
-                    {(data.employees ?? []).map((employee: Employee) => (
+                  <select
+                    name="employeeId"
+                    value={advanceEmployeeId}
+                    onChange={(event) =>
+                      setAdvanceEmployeeId(event.target.value)
+                    }
+                    required
+                    disabled={!advanceOutletId}
+                  >
+                    <option value="" disabled>
+                      {advanceOutletId
+                        ? "Select employee"
+                        : "Select outlet first"}
+                    </option>
+                    {(data.employees ?? [])
+                      .filter(
+                        (employee: Employee) =>
+                          employee.outletId === advanceOutletId,
+                      )
+                      .map((employee: Employee) => (
                       <option key={employee._id} value={employee._id}>
                         {employee.employeeCode} · {employee.fullName} ·{" "}
                         {data.outlets?.find(
@@ -1566,7 +2379,7 @@
                             outlet._id === employee.outletId,
                         )?.code ?? "Outlet"}
                       </option>
-                    ))}
+                      ))}
                   </select>
                 </label>
                 <Field
@@ -1594,7 +2407,7 @@
                 <div className="form-actions">
                   <button
                     className="button button-primary"
-                    disabled={busy || !(data.outlets ?? []).length}
+                    disabled={busy || !activeOutlets.length}
                   >
                     <Plus size={16} /> Save advance
                   </button>
@@ -1748,30 +2561,135 @@
         </div>
       );
 
-    if (section === "loans")
+    if (section === "loans") {
+      let loanSchedule: ReturnType<typeof loanScheduleSummary> | undefined;
+      try {
+        loanSchedule = loanScheduleSummary({
+          amount: Number(loanFormAmount),
+          method: loanFormMethod,
+          startMonth: loanFormStartMonth,
+          monthlyDeductionAmount: Number(loanFormMonthlyAmount),
+          installmentCount: Number(loanFormInstallmentCount),
+          endMonth: loanFormEndMonth,
+        });
+      } catch {
+        loanSchedule = undefined;
+      }
+      const visibleLoans = (data.loans ?? []).filter((loan: LoanView) => {
+        const status =
+          loan.status ??
+          (loan.outstandingAmount > 0 ? "ACTIVE" : "COMPLETED");
+        const statusMatches =
+          loanStatusFilter === "ALL" ||
+          (loanStatusFilter === "ONGOING" && status === "ACTIVE") ||
+          status === loanStatusFilter;
+        const query = loanSearch.trim().toLowerCase();
+        const searchMatches =
+          !query ||
+          [loan.employeeName, loan.employeeCode, loan.outletCode]
+            .filter(Boolean)
+            .some((value) => value!.toLowerCase().includes(query));
+        return statusMatches && searchMatches;
+      });
+      async function showLoanHistory(loan: LoanView) {
+        try {
+          const history = await request<{
+            installments: Array<Record<string, unknown>>;
+            transactions: Array<Record<string, unknown>>;
+          }>(`/api/loans/${loan._id}/actions`);
+          setLoanHistory({ employeeName: loan.employeeName ?? loan.employeeCode ?? "", ...history });
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : "Unable to load repayment history.");
+        }
+      }
+      function openLoanAction(loan: LoanView, action: LoanActionName) {
+        setLoanAction({ loan, action });
+      }
+      async function submitLoanAction(event: FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+        if (!loanAction) return;
+        const values = new FormData(event.currentTarget);
+        const reason = String(values.get("reason") ?? "").trim();
+        const reference = String(values.get("reference") ?? "").trim();
+        const { loan, action } = loanAction;
+        const payload: Record<string, unknown> = { action, reason };
+        let successMessage = "Loan action recorded.";
+        if (action === "SKIP") {
+          payload.payrollMonth = month;
+          successMessage = "Installment skipped.";
+        } else if (action === "PAUSE" || action === "RESUME") {
+          if (action === "RESUME")
+            payload.effectiveMonth = String(values.get("effectiveMonth") ?? "");
+          successMessage = action === "PAUSE" ? "Loan paused." : "Loan resumed.";
+        } else if (action === "ADJUST") {
+          payload.direction = String(values.get("direction") ?? "");
+          payload.amount = Number(values.get("amount"));
+          payload.transactionDate = String(values.get("transactionDate") ?? "");
+          payload.reference = reference;
+          successMessage = "Loan balance adjustment recorded.";
+        } else if (action === "CLOSE") {
+          payload.closureType = String(values.get("closureType") ?? "");
+          payload.transactionDate = String(values.get("transactionDate") ?? "");
+          payload.reference = reference;
+          if (payload.closureType === "EXTERNAL_SETTLEMENT")
+            payload.amount = Number(values.get("amount"));
+          successMessage =
+            payload.closureType === "EXTERNAL_SETTLEMENT" &&
+            Number(payload.amount) < loan.outstandingAmount
+              ? "Partial settlement recorded; the loan remains ongoing."
+              : "Loan completion recorded.";
+        } else {
+          payload.payrollMonth = month;
+          payload.transactionDate = String(values.get("transactionDate") ?? "");
+          successMessage = "Loan installment reversed.";
+        }
+        if (
+          await mutate(
+            `/api/loans/${loan._id}/actions`,
+            payload,
+            "POST",
+            successMessage,
+          )
+        )
+          setLoanAction(null);
+      }
       return (
         <div className="content-area">
           <PageHead
+            className="loan-page-head"
             title="Employee loans"
-            description="Record original loan amounts and current outstanding balances by employee and outlet. Repayments are entered manually in payroll."
-            action={toolbar}
+            description="Track loan balances and monthly payroll deductions."
+            action={<div className="loan-page-head-actions">{toolbar}</div>}
           />
-          <Notice error={error} success={success} />
+          <Notice error={error} success={success} refreshing={refreshing} />
           <section className="panel form-panel">
             <form
               className="form-grid"
-              onSubmit={(event) => submit(event, "/api/loans")}
+              onSubmit={(event) =>
+                void submit(event, "/api/loans", "POST", async () => {
+                  setLoanFormAmount("");
+                  setLoanFormMonthlyAmount("");
+                  setLoanFormMethod("FIXED_AMOUNT");
+                  setLoanFormInstallmentCount("10");
+                  setLoanFormStartMonth(month);
+                  setLoanFormEndMonth(month);
+                  await reload();
+                })
+              }
             >
               <label className="field">
                 <span>Outlet</span>
                 <select
                   name="outletId"
-                  defaultValue={
-                    selectedOutlet || data.outlets?.[0]?._id || ""
-                  }
+                  value={loanOutletId}
+                  onChange={(event) => {
+                    setLoanOutletId(event.target.value);
+                    setLoanEmployeeId("");
+                  }}
                   required
                 >
-                  {(data.outlets ?? []).map((outlet: Outlet) => (
+                  <option value="">All outlets</option>
+                  {activeOutlets.map((outlet) => (
                     <option key={outlet._id} value={outlet._id}>
                       {outlet.code} · {outlet.name}
                     </option>
@@ -1780,8 +2698,25 @@
               </label>
               <label className="field">
                 <span>Employee</span>
-                <select name="employeeId" required>
+                <select
+                  name="employeeId"
+                  value={loanEmployeeId}
+                  onChange={(event) => {
+                    const employeeId = event.target.value;
+                    setLoanEmployeeId(employeeId);
+                    const employee = data.employees?.find(
+                      (item) => item._id === employeeId,
+                    );
+                    if (employee) setLoanOutletId(employee.outletId);
+                  }}
+                  required
+                >
+                  <option value="">Select employee</option>
                   {(data.employees ?? [])
+                    .filter(
+                      (employee) =>
+                        !loanOutletId || employee.outletId === loanOutletId,
+                    )
                     .map((employee) => (
                       <option key={employee._id} value={employee._id}>
                         {employee.employeeCode} · {employee.fullName} ·{" "}
@@ -1792,22 +2727,127 @@
                     ))}
                 </select>
               </label>
-              <Field
-                label="Total loan (INR)"
-                name="totalAmount"
-                type="number"
-                min="0.01"
-                step="0.01"
-                required
-              />
-              <Field
-                label="Current outstanding (INR)"
-                name="outstandingAmount"
-                type="number"
-                min="0"
-                step="0.01"
-                required
-              />
+              <label className="field">
+                <span>Original loan amount (INR)</span>
+                <input
+                  name="totalAmount"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={loanFormAmount}
+                  onChange={(event) => setLoanFormAmount(event.target.value)}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>Repayment method</span>
+                <select
+                  name="repaymentMethod"
+                  value={loanFormMethod}
+                  onChange={(event) =>
+                    setLoanFormMethod(
+                      event.target.value as
+                        | "FIXED_AMOUNT"
+                        | "FIXED_INSTALLMENTS"
+                        | "DATE_RANGE",
+                    )
+                  }
+                >
+                  <option value="FIXED_AMOUNT">Fixed monthly deduction</option>
+                  <option value="FIXED_INSTALLMENTS">Fixed number of installments</option>
+                  <option value="DATE_RANGE">Start and end month</option>
+                </select>
+              </label>
+              {loanFormMethod === "FIXED_AMOUNT" ? (
+                <label className="field">
+                  <span>Monthly deduction (INR)</span>
+                  <input
+                    name="monthlyDeductionAmount"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={loanFormMonthlyAmount}
+                    onChange={(event) =>
+                      setLoanFormMonthlyAmount(event.target.value)
+                    }
+                    required
+                  />
+                </label>
+              ) : (
+                <>
+                  <label className="field">
+                    <span>
+                      {loanFormMethod === "FIXED_INSTALLMENTS"
+                        ? "Number of installments"
+                        : "Monthly deduction (INR, calculated)"}
+                    </span>
+                    {loanFormMethod === "FIXED_INSTALLMENTS" ? (
+                      <input
+                        name="installmentCount"
+                        type="number"
+                        min="1"
+                        max="600"
+                        step="1"
+                        value={loanFormInstallmentCount}
+                        onChange={(event) =>
+                          setLoanFormInstallmentCount(event.target.value)
+                        }
+                        required
+                      />
+                    ) : (
+                      <input
+                        type="number"
+                        value={loanSchedule?.monthlyDeductionAmount ?? ""}
+                        readOnly
+                      />
+                    )}
+                  </label>
+                  <input
+                    type="hidden"
+                    name="monthlyDeductionAmount"
+                    value={
+                      loanFormMethod === "FIXED_INSTALLMENTS"
+                        ? loanSchedule?.monthlyDeductionAmount ?? ""
+                        : loanSchedule?.monthlyDeductionAmount ?? ""
+                    }
+                  />
+                  {loanFormMethod === "DATE_RANGE" && (
+                    <label className="field">
+                      <span>Final deduction month</span>
+                      <input
+                        name="deductionEndMonth"
+                        type="month"
+                        min={loanFormStartMonth}
+                        value={loanFormEndMonth}
+                        onChange={(event) =>
+                          setLoanFormEndMonth(event.target.value)
+                        }
+                        required
+                      />
+                    </label>
+                  )}
+                </>
+              )}
+              <label className="field">
+                <span>Deduction start month</span>
+                <input
+                  name="deductionStartMonth"
+                  type="month"
+                  value={loanFormStartMonth}
+                  onChange={(event) => setLoanFormStartMonth(event.target.value)}
+                  required
+                />
+              </label>
+              {loanSchedule && (
+                <p className="sub-cell">
+                  {loanSchedule.installmentCount} installments ·{" "}
+                  {currency(loanSchedule.monthlyDeductionAmount)} per month ·
+                  expected completion {loanSchedule.endMonth}
+                  {loanSchedule.installmentCount > 1
+                    ? " (final installment is adjusted to the exact balance)"
+                    : ""}
+                </p>
+              )}
               <Field label="Notes" name="notes" />
               <div className="form-actions">
                 <button
@@ -1819,6 +2859,84 @@
               </div>
             </form>
           </section>
+          <div className="toolbar loan-filter-toolbar">
+            <label className="field">
+              <span>Payroll month</span>
+              <input
+                type="month"
+                aria-label="Selected payroll month for loan actions"
+                value={month}
+                onChange={(event) => {
+                  setMonth(event.target.value);
+                  setPage(1);
+                }}
+              />
+            </label>
+            <label className="field loan-status-filter">
+              <span>Loan status</span>
+              <select
+                aria-label="Filter loans by status"
+                value={loanStatusFilter}
+                onChange={(event) => {
+                  setLoanStatusFilter(event.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="ALL">All loans</option>
+                <option value="ONGOING">Ongoing</option>
+                <option value="COMPLETED">Completed</option>
+                <option value="PAUSED">Paused</option>
+              </select>
+            </label>
+            <label className="field loan-search-filter">
+              <span>Search</span>
+              <input
+                type="search"
+                aria-label="Search loans"
+                placeholder="Employee or outlet"
+                value={loanSearch}
+                onChange={(event) => {
+                  setLoanSearch(event.target.value);
+                  setPage(1);
+                }}
+              />
+            </label>
+            {user.permissions.includes("reports.export") &&
+              user.permissions.includes("salary.read") && (
+                <div className="loan-export-actions" aria-label="Export loans">
+                  {(["xlsx", "csv"] as const).map((format) => (
+                <button
+                  key={format}
+                  type="button"
+                  className="button button-secondary"
+                  disabled={loading}
+                  onClick={() => {
+                    const params = new URLSearchParams({
+                      type: "loans",
+                      format,
+                      from: `${month}-01`,
+                      to: `${month}-${String(getMonthDatesLocal(month)).padStart(2, "0")}`,
+                    });
+                    if (selectedOutlet) params.set("outletId", selectedOutlet);
+                    void downloadReport(
+                      `/api/reports/export?${params.toString()}`,
+                      format,
+                    ).catch((caught) =>
+                      setError(
+                        caught instanceof Error
+                          ? caught.message
+                          : "Unable to export loan records.",
+                      ),
+                    );
+                  }}
+                >
+                  {format === "xlsx" ? <FileSpreadsheet size={16} /> : <FileText size={16} />}
+                  {format === "xlsx" ? "Excel" : "CSV"}
+                </button>
+              ))}
+                </div>
+              )}
+          </div>
           {loading ? (
             <Loading />
           ) : (
@@ -1827,65 +2945,281 @@
                 "Employee",
                 "Outlet",
                 "Original loan",
-                "Outstanding",
+                "Remaining balance",
+                "Monthly deduction",
                 "Notes",
                 "Actions",
               ]}
-              rows={(data.loans ?? []).map((loan: LoanView) => [
+              rows={visibleLoans
+                .slice((page - 1) * 25, page * 25)
+                .map((loan: LoanView) => [
                 <span key="employee">
                   <strong>{loan.employeeName}</strong>
                   <span className="sub-cell">{loan.employeeCode}</span>
+                  <span className="sub-cell">
+                    Repaid: {currency(loan.repaidAmount ?? 0)}
+                  </span>
+                  {loan.outstandingAmount > 0 &&
+                    loan.monthlyDeductionAmount &&
+                    loan.deductionStartMonth && (
+                      <span className="sub-cell">
+                        Expected completion:{" "}
+                        {expectedCompletionMonth({
+                          balance: loan.outstandingAmount,
+                          monthlyDeductionAmount: loan.monthlyDeductionAmount,
+                          startMonth:
+                            loan.deductionStartMonth > month
+                              ? loan.deductionStartMonth
+                              : month,
+                        }) ?? "—"}
+                      </span>
+                    )}
+                  <span
+                    className={`badge ${
+                      loan.status === "PAUSED"
+                        ? "badge-gold"
+                        : loan.status === "COMPLETED" ||
+                            (loan.status === undefined &&
+                              loan.outstandingAmount <= 0)
+                          ? "badge-muted"
+                          : "badge-green"
+                    }`}
+                  >
+                    {loan.status === "ACTIVE" ||
+                    (!loan.status && loan.outstandingAmount > 0)
+                      ? "ONGOING"
+                      : loan.status ?? "COMPLETED"}
+                  </span>
+                  <span className="sub-cell">
+                      {loan.currentPayrollMonth}:{" "}
+                      {loan.currentInstallmentStatus ?? "NOT_DUE"}
+                      {loan.currentInstallmentStatus === "POSTED"
+                        ? ` · ${currency(loan.currentActualDeduction)}`
+                        : loan.currentInstallmentStatus === "SCHEDULED"
+                          ? ` · ${currency(loan.currentScheduledDeduction)}`
+                          : ""}
+                  </span>
                 </span>,
                 loan.outletCode ?? "",
                 currency(loan.totalAmount),
                 currency(loan.outstandingAmount),
+                currency(loan.monthlyDeductionAmount ?? 0),
                 loan.notes || "—",
-                <details key="edit" className="salary-adjust">
-                  <summary className="button button-small">Edit balance</summary>
-                  <form
-                    className="salary-adjust-form"
-                    onSubmit={(event) =>
-                      submit(
-                        event,
-                        `/api/loans/${loan._id}`,
-                        "PATCH",
-                      )
-                    }
+                <div key="actions" className="loan-row-actions">
+                  <select
+                    className="loan-action-select"
+                    aria-label={`Actions for ${loan.employeeName ?? loan.employeeCode}`}
+                    value=""
+                    disabled={busy}
+                    onChange={(event) => {
+                      const action = event.target.value;
+                      event.currentTarget.value = "";
+                      if (action === "EDIT") setLoanToEdit(loan);
+                      else if (action === "HISTORY")
+                        void showLoanHistory(loan);
+                      else if (action === "SKIP")
+                        openLoanAction(loan, "SKIP");
+                      else if (action === "PAUSE")
+                        openLoanAction(loan, "PAUSE");
+                      else if (action === "RESUME")
+                        openLoanAction(loan, "RESUME");
+                      else if (action === "ADJUST")
+                        openLoanAction(loan, "ADJUST");
+                      else if (action === "CLOSE")
+                        openLoanAction(loan, "CLOSE");
+                      else if (action === "REVERSE")
+                        openLoanAction(loan, "REVERSE");
+                    }}
                   >
-                    <Field
-                      label="Total loan (INR)"
-                      name="totalAmount"
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      defaultValue={String(loan.totalAmount)}
-                      required
-                    />
-                    <Field
-                      label="Outstanding (INR)"
-                      name="outstandingAmount"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      defaultValue={String(loan.outstandingAmount)}
-                      required
-                    />
-                    <Field
-                      label="Notes"
-                      name="notes"
-                      defaultValue={loan.notes}
-                    />
-                    <button className="button button-small" disabled={busy}>
-                      Save balance
-                    </button>
-                  </form>
-                </details>,
-              ])}
+                    <option value="" disabled>
+                      Choose action…
+                    </option>
+                    <option
+                      value="EDIT"
+                      disabled={
+                        loan.status === "COMPLETED" ||
+                        loan.outstandingAmount <= 0
+                      }
+                    >
+                      Edit repayment terms
+                    </option>
+                    {loan.status !== "COMPLETED" &&
+                      loan.outstandingAmount > 0 && (
+                        <>
+                          {loan.status !== "PAUSED" && (
+                            <option value="SKIP">Skip this month</option>
+                          )}
+                          <option
+                            value={
+                              loan.status === "PAUSED" ? "RESUME" : "PAUSE"
+                            }
+                          >
+                            {loan.status === "PAUSED"
+                              ? "Resume loan"
+                              : "Pause loan"}
+                          </option>
+                          <option value="ADJUST">Adjust balance</option>
+                          <option value="CLOSE">Mark as completed</option>
+                        </>
+                      )}
+                    {loan.currentInstallmentStatus === "POSTED" && (
+                      <option value="REVERSE">Reverse posted installment</option>
+                    )}
+                    <option value="HISTORY">View repayment history</option>
+                  </select>
+                </div>,
+                ])}
               empty="No loans recorded."
+              page={page}
+              pageSize={25}
+              total={visibleLoans.length}
+              onPageChange={setPage}
             />
+          )}
+          {loanAction && (
+            <LoanActionDialog
+              loan={loanAction.loan}
+              action={loanAction.action}
+              payrollMonth={month}
+              busy={busy}
+              onClose={() => setLoanAction(null)}
+              onSubmit={submitLoanAction}
+            />
+          )}
+          {loanToEdit && (
+            <div className="advance-modal-backdrop">
+              <section
+                className="advance-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="loan-edit-title"
+              >
+                <header className="advance-modal-heading">
+                  <div>
+                    <h2 id="loan-edit-title">Edit repayment terms</h2>
+                    <p>
+                      {loanToEdit.employeeName} · {loanToEdit.employeeCode} ·{" "}
+                      {loanToEdit.outletCode}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label="Close loan editor"
+                    onClick={() => setLoanToEdit(null)}
+                  >
+                    <X size={16} />
+                  </button>
+                </header>
+                <form
+                  className="advance-edit-form"
+                  onSubmit={(event) =>
+                    void submit(
+                      event,
+                      `/api/loans/${loanToEdit._id}`,
+                      "PATCH",
+                      async () => {
+                        await reload();
+                        setLoanToEdit(null);
+                      },
+                    )
+                  }
+                >
+                  <label className="field">
+                    <span>Remaining loan balance (INR)</span>
+                    <input
+                      type="number"
+                      value={loanToEdit.outstandingAmount}
+                      readOnly
+                    />
+                  </label>
+                  <Field
+                    id="loan-edit-monthlyDeductionAmount"
+                    label="Monthly deduction (INR)"
+                    name="monthlyDeductionAmount"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    defaultValue={String(
+                      loanToEdit.monthlyDeductionAmount ?? 0,
+                    )}
+                    required
+                    infoText="This amount is deducted from net salary each month. The final installment is capped at the remaining loan balance."
+                  />
+                  <label className="field">
+                    <span>Repayment method</span>
+                    <select
+                      name="repaymentMethod"
+                      defaultValue={loanToEdit.repaymentMethod ?? "FIXED_AMOUNT"}
+                    >
+                      <option value="FIXED_AMOUNT">Fixed monthly deduction</option>
+                      <option value="FIXED_INSTALLMENTS">Fixed number of installments</option>
+                      <option value="DATE_RANGE">Start and end month</option>
+                    </select>
+                  </label>
+                  <Field
+                    id="loan-edit-installmentCount"
+                    label="Number of installments (used for fixed installment method)"
+                    name="installmentCount"
+                    type="number"
+                    min="1"
+                    max="600"
+                    step="1"
+                    defaultValue={String(loanToEdit.installmentCount ?? 10)}
+                  />
+                  <Field
+                    id="loan-edit-deductionEndMonth"
+                    label="Final deduction month (used for date-range method)"
+                    name="deductionEndMonth"
+                    type="month"
+                    defaultValue={
+                      loanToEdit.deductionEndMonth ??
+                      loanToEdit.deductionStartMonth ??
+                      month
+                    }
+                  />
+                  <Field
+                    id="loan-edit-deductionStartMonth"
+                    label="Deduction start month"
+                    name="deductionStartMonth"
+                    type="month"
+                    defaultValue={
+                      loanToEdit.deductionStartMonth &&
+                      loanToEdit.deductionStartMonth > month
+                        ? loanToEdit.deductionStartMonth
+                        : month
+                    }
+                    required
+                  />
+                  <Field
+                    id="loan-edit-notes"
+                    label="Notes"
+                    name="notes"
+                    defaultValue={loanToEdit.notes}
+                  />
+                  <div className="form-actions loan-edit-actions">
+                    <button
+                      type="button"
+                      className="button"
+                      disabled={busy}
+                      onClick={() => setLoanToEdit(null)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="button button-primary"
+                      disabled={busy}
+                    >
+                      Save loan
+                    </button>
+                  </div>
+                </form>
+              </section>
+            </div>
           )}
         </div>
       );
+    }
 
     if (section === "salary") {
       const payrollEmployees = data.payrollEmployees ?? [];
@@ -1951,7 +3285,7 @@
               </div>
             }
           />
-          <Notice error={error} success={success} />
+          <Notice error={error} success={success} refreshing={refreshing} />
           {loading ? (
             <Loading />
           ) : (
@@ -1967,13 +3301,20 @@
                 "Employee ESI",
                 "Employee PF (deduction)",
                 "Employer PF (tracked)",
-                "Loan deduction",
+                "Original loan",
+                "Remaining loan",
+                "Scheduled deduction",
+                "Actual deduction",
                 "Net payable",
                 "Status",
                 "Actions",
               ]}
               rows={[
-                ...(data.records ?? []).map((record: SalaryView) => [
+                ...(data.records ?? []).map((record: SalaryView) => {
+                const loanSnapshot = record.inputSnapshot.loans ?? [];
+                const loanTotal = (key: "originalAmount" | "closingBalance" | "scheduledDeduction" | "actualDeduction") =>
+                  loanSnapshot.reduce((sum, loan) => sum + loan[key], 0);
+                return [
                 <div key="employee">
                   <strong>{record.inputSnapshot.employee.fullName}</strong>
                   <span className="sub-cell">
@@ -2022,6 +3363,20 @@
                           ? ` · paid ${formatDate(record.paidAt)}`
                           : ""}
                       </dd>
+                      {loanSnapshot.map((loan) => (
+                        <Fragment key={loan.loanId}>
+                          <dt>
+                            Loan {loan.payrollMonth ?? record.month} · {loan.status}
+                          </dt>
+                          <dd>
+                            Original {currency(loan.originalAmount)} · opening{" "}
+                            {currency(loan.openingBalance)} · scheduled{" "}
+                            {currency(loan.scheduledDeduction)} · actual{" "}
+                            {currency(loan.actualDeduction)} · closing{" "}
+                            {currency(loan.closingBalance)}
+                          </dd>
+                        </Fragment>
+                      ))}
                     </dl>
                   </details>
                 </div>,
@@ -2038,7 +3393,10 @@
                 currency(record.calculation.esi ?? 0),
                 currency(record.calculation.employeePf),
                 currency(record.calculation.employerPf ?? 0),
-                currency(record.calculation.loanDeduction ?? 0),
+                loanSnapshot.length ? currency(loanTotal("originalAmount")) : "—",
+                loanSnapshot.length ? currency(loanTotal("closingBalance")) : "—",
+                loanSnapshot.length ? currency(loanTotal("scheduledDeduction")) : "—",
+                loanSnapshot.length ? currency(loanTotal("actualDeduction")) : "—",
                 <strong key="net">
                   {currency(record.calculation.netPayable)}
                 </strong>,
@@ -2067,7 +3425,8 @@
                   }
                   onManage={() => setSalaryManageRecord(record)}
                 />,
-                ]),
+                ];
+                }),
                 ...payrollEmployees
                   .filter((employee) => !employee.payrollRecordId)
                   .map((employee) => [
@@ -2177,7 +3536,7 @@
             description="Manage your outlet details and control active attendance operations."
             action={toolbar}
           />
-          <Notice error={error} success={success} />
+          <Notice error={error} success={success} refreshing={refreshing} />
           {user.role === "MAIN_ADMIN" && (
             <details className="panel form-panel outlet-create-panel">
               <summary>
@@ -2258,7 +3617,7 @@
             title="Access management"
             description="Create reusable designations with page permissions, then assign them to accounts and outlets."
           />
-          <Notice error={error} success={success} />
+          <Notice error={error} success={success} refreshing={refreshing} />
           <DesignationManager
             designations={data.designations ?? []}
             onChanged={reload}
@@ -2289,79 +3648,45 @@
                 />
               </label>
               <label className="field">
-                <span>Role · outlet users see only assigned outlet workers</span>
+                <span>Access profile</span>
                 <select
-                  name="role"
-                  value={newUserRole}
-                  onChange={(event) =>
-                    setNewUserRole(event.target.value as UserRole)
-                  }
-                >
-                  <option value="OUTLET_USER">OUTLET_USER</option>
-                  <option value="CO_ADMIN">CO_ADMIN</option>
-                  <option value="MAIN_ADMIN">MAIN_ADMIN</option>
-                </select>
-              </label>
-              <label className="field">
-                <span>
-                  {newUserRole === "OUTLET_USER"
-                    ? "Assigned outlet · choose one"
-                    : "Assigned outlets"}
-                </span>
-                <select
-                  name="outletIds"
-                  multiple={newUserRole !== "OUTLET_USER"}
-                  size={newUserRole === "OUTLET_USER" ? 1 : 4}
+                  name="accessProfile"
+                  value={newAccountProfile}
+                  onChange={(event) => setNewAccountProfile(event.target.value)}
                   required
                 >
-                  {outlets.map((outlet) => (
-                    <option key={outlet._id} value={outlet._id}>
-                      {outlet.code} · {outlet.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Designation · reusable permission profile</span>
-                <select
-                  name="designationId"
-                  value={newDesignationId}
-                  onChange={(event) =>
-                    setNewDesignationId(event.target.value)
-                  }
-                  disabled={newUserRole === "MAIN_ADMIN"}
-                >
-                  <option value="">No designation · use manual permissions</option>
+                  <option value="">Select Main Admin or a designation</option>
+                  <option value="MAIN_ADMIN">Main Admin</option>
                   {(data.designations ?? []).map((designation) => (
-                    <option key={designation._id} value={designation._id}>
-                      {designation.name}
+                    <option
+                      key={designation._id}
+                      value={`designation:${designation._id}`}
+                    >
+                      Designation · {designation.name}
                     </option>
                   ))}
                 </select>
-                {newDesignationId && (
-                  <small>
-                    This account receives the designation permissions. Editing the
-                    designation will update all assigned accounts.
-                  </small>
-                )}
               </label>
-              <label className="field">
-                <span>Manual permissions (used when no designation is selected)</span>
-                <select
-                  name="permissions"
-                  multiple
-                  size={5}
-                  disabled={newUserRole === "MAIN_ADMIN" || !!newDesignationId}
-                >
-                  {designationPermissionGroups.flatMap((group) =>
-                    group.permissions.map((permission) => (
-                      <option key={permission.value} value={permission.value}>
-                        {group.title} · {permission.label}
+              {newAccountProfile !== "MAIN_ADMIN" && (
+                <label className="field">
+                  <span>Assigned outlet · choose one</span>
+                  <select name="outletIds" required>
+                    <option value="">Select outlet</option>
+                    {activeOutlets.map((outlet) => (
+                      <option key={outlet._id} value={outlet._id}>
+                        {outlet.code} · {outlet.name}
                       </option>
-                    )),
-                  )}
-                </select>
-              </label>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {newAccountProfile.startsWith("designation:") && (
+                <input
+                  type="hidden"
+                  name="designationId"
+                  value={newAccountProfile.slice("designation:".length)}
+                />
+              )}
               <input type="hidden" name="active" value="true" />
               <div className="form-actions">
                 <button className="button button-primary" disabled={busy}>
@@ -2387,13 +3712,13 @@
                 <span key="account">
                   <strong>{item.name}</strong>
                   <span className="sub-cell">{item.email}</span>
-                  {item.designationName && (
-                    <span className="sub-cell">
-                      Designation: {item.designationName}
-                    </span>
-                  )}
                 </span>,
-                item.role,
+                item.designationName ??
+                  (item.role === "MAIN_ADMIN"
+                    ? "Main Admin"
+                    : item.role === "CO_ADMIN"
+                      ? "Co-admin"
+                      : "Outlet User"),
                 (item.outletIds ?? []).length,
                 item.permissions?.join(", ") || "Role defaults",
                 <span
@@ -2408,7 +3733,7 @@
                 >
                   <UserAccessControl
                     item={item}
-                    outlets={outlets}
+                    outlets={activeOutlets}
                     designations={data.designations ?? []}
                     onSave={(input) =>
                       mutate(`/api/users/${item._id}`, input, "PATCH")
@@ -2424,7 +3749,7 @@
       );
 
     if (section === "reports")
-      return <ReportsPanel outlets={outlets} />;
+      return <ReportsPanel outlets={activeOutlets} />;
     if (section === "activeLogs")
       return (
         <div className="content-area">
@@ -2433,7 +3758,7 @@
             description="Review the latest account and operations activity."
             action={toolbar}
           />
-          <Notice error={error} success={success} />
+          <Notice error={error} success={success} refreshing={refreshing} />
           {loading ? (
             <Loading />
           ) : (
@@ -2762,7 +4087,8 @@
                   <AmountField
                     label="Loan deduction (INR)"
                     value={Number(amounts.loanDeduction)}
-                    disabled={!isMainAdmin}
+                    disabled
+                    help="Use the loan installment reversal workflow to correct a posted repayment."
                     onChange={(loanDeduction) =>
                       setAmounts((current) => ({ ...current, loanDeduction }))
                     }
@@ -2854,7 +4180,6 @@
                       <option value="OVERTIME">Overtime</option>
                       <option value="ALLOWANCE">Allowance</option>
                       <option value="DEDUCTION">Deduction</option>
-                      {isMainAdmin && <option value="LOAN">Loan repayment</option>}
                     </select>
                   </label>
                   <label className="field">
@@ -3159,10 +4484,11 @@
                     }
                   />
                   <AmountField
-                    label="Loan deduction (INR)"
+                    label="Monthly loan deduction (INR)"
                     value={amounts?.loanDeduction ?? 0}
                     max={preview.outstandingLoanTotal}
                     disabled={!canDeductLoan || preview.outstandingLoanTotal <= 0}
+                    readOnly
                     onChange={(value) =>
                       setAmounts((current) =>
                         current ? { ...current, loanDeduction: value } : current,
@@ -3170,7 +4496,7 @@
                     }
                     help={
                       canDeductLoan
-                        ? `Outstanding balance: ${currency(preview.outstandingLoanTotal)}`
+                        ? `Configured monthly deduction: ${currency(preview.amounts.loanDeduction)} · Remaining balance: ${currency(preview.outstandingLoanTotal)}`
                         : "Only the main administrator can enter loan repayments."
                     }
                   />
@@ -3214,6 +4540,7 @@
     max,
     disabled = false,
     help,
+    readOnly = false,
   }: {
     label: string;
     value: number;
@@ -3221,6 +4548,7 @@
     max?: number;
     disabled?: boolean;
     help?: string;
+    readOnly?: boolean;
   }) {
     return (
       <label className="field">
@@ -3232,6 +4560,7 @@
           step="0.01"
           value={value}
           disabled={disabled}
+          readOnly={readOnly}
           onChange={(event) => onChange(Number(event.target.value))}
           required
         />
@@ -3376,7 +4705,7 @@
                   <td>{formatDate(employee.date)}</td>
                   <td>
                     <span
-                      className="badge badge-muted"
+                      className={`badge ${employee.status === "A" ? "attendance-status-a" : "attendance-status-hd"}`}
                     >
                       {employee.status === "A" ? "Absent" : "Half-day"}
                     </span>
@@ -3393,75 +4722,18 @@
     );
   }
 
-  function OutletChart({ outlets }: { outlets: DashboardOutlet[] }) {
-    return (
-      <section className="panel chart-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Attendance by outlet</h2>
-            <p>Present, absent and half-day counts for today</p>
-          </div>
-        </div>
-        <div className="chart-area">
-          {outlets.length ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={outlets}
-                margin={{ top: 8, right: 16, left: -18, bottom: 0 }}
-              >
-                <CartesianGrid stroke="#eceee9" vertical={false} />
-                <XAxis
-                  dataKey="code"
-                  tick={{ fill: "#777b74", fontSize: 10 }}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <Tooltip
-                  cursor={{ fill: "#f8f8f5" }}
-                  contentStyle={{
-                    border: "1px solid #e6e7e2",
-                    borderRadius: 5,
-                    fontSize: 11,
-                  }}
-                />
-                <Bar
-                  dataKey="attendance.P"
-                  name="Present"
-                  fill="#4b8a6e"
-                  radius={[3, 3, 0, 0]}
-                />
-                <Bar
-                  dataKey="attendance.A"
-                  name="Absent"
-                  fill="#cc6556"
-                  radius={[3, 3, 0, 0]}
-                />
-                <Bar
-                  dataKey="attendance.HD"
-                  name="Half day"
-                  fill="#d2a34d"
-                  radius={[3, 3, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          ) : (
-            <Empty>No accessible outlets.</Empty>
-          )}
-        </div>
-      </section>
-    );
-  }
-
   function AttendanceStatusChart({
     attendance,
+    subtitle = "Today’s marked staff by attendance status",
   }: {
     attendance: AttendanceCounts;
+    subtitle?: string;
   }) {
     const data = [
-      { name: "Present", value: attendance.P, color: "#4b8a6e" },
-      { name: "Absent", value: attendance.A, color: "#cc6556" },
-      { name: "Half day", value: attendance.HD, color: "#d2a34d" },
-      { name: "Week off", value: attendance.WO, color: "#7485b8" },
+      { name: "Present", value: attendance.P, color: "var(--status-present)", status: "p" },
+      { name: "Absent", value: attendance.A, color: "var(--status-absent)", status: "a" },
+      { name: "Half day", value: attendance.HD, color: "var(--status-half)", status: "hd" },
+      { name: "Week off", value: attendance.WO, color: "var(--status-weekoff)", status: "wo" },
     ].filter((item) => item.value > 0);
 
     return (
@@ -3469,7 +4741,7 @@
         <div className="panel-heading">
           <div>
             <h2>Attendance Summary</h2>
-            <p>Today’s marked staff by attendance status</p>
+            <p>{subtitle}</p>
           </div>
         </div>
         <div className="chart-area">
@@ -3485,7 +4757,11 @@
                   paddingAngle={3}
                 >
                   {data.map((item) => (
-                    <Cell key={item.name} fill={item.color} />
+                    <Cell
+                      key={item.name}
+                      className={`attendance-status-segment attendance-status-${item.status}`}
+                      fill={item.color}
+                    />
                   ))}
                 </Pie>
                 <Tooltip />
@@ -3493,12 +4769,349 @@
                   verticalAlign="bottom"
                   height={30}
                   wrapperStyle={{ fontSize: 10 }}
+                  formatter={(value) => (
+                    <span className="attendance-chart-legend-label">{value}</span>
+                  )}
                 />
               </PieChart>
             </ResponsiveContainer>
           ) : (
             <Empty>No attendance has been marked for this date.</Empty>
           )}
+        </div>
+      </section>
+    );
+  }
+
+  function DashboardAttendanceTrend({
+    days,
+    from,
+    to,
+  }: {
+    days: NonNullable<WorkspaceData["attendanceTrend"]>;
+    from: string;
+    to: string;
+  }) {
+    const data = days.flatMap((day, index) => {
+      const { P, A, HD } = day.attendance;
+      const marked = P + A + HD;
+      return marked
+        ? [{ ...day, index, rate: ((P + HD / 2) / marked) * 100 }]
+        : [];
+    });
+    const chartWidth = 600;
+    const chartHeight = 190;
+    const left = 42;
+    const right = 12;
+    const top = 14;
+    const bottom = 25;
+    const plotWidth = chartWidth - left - right;
+    const plotHeight = chartHeight - top - bottom;
+    const x = (index: number) =>
+      left +
+      (days.length > 1 ? (index / (days.length - 1)) * plotWidth : plotWidth / 2);
+    const y = (rate: number) => top + ((100 - rate) / 100) * plotHeight;
+    const line = data
+      .map((point, index) => `${index ? "L" : "M"}${x(point.index)},${y(point.rate)}`)
+      .join(" ");
+    const area = data.length
+      ? `${line} L${x(data[data.length - 1].index)},${top + plotHeight} L${x(data[0].index)},${top + plotHeight} Z`
+      : "";
+    const labelIndexes = new Set([
+      0,
+      Math.floor((days.length - 1) / 4),
+      Math.floor((days.length - 1) / 2),
+      Math.floor(((days.length - 1) * 3) / 4),
+      days.length - 1,
+    ]);
+
+    return (
+      <section className="panel dashboard-trend-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Attendance trend</h2>
+            <p>Daily attendance rate · {formatDate(from)} – {formatDate(to)}</p>
+          </div>
+          <span className="dashboard-live-label"><i /> LIVE DATA</span>
+        </div>
+        <div className="dashboard-trend-chart">
+          {data.length ? (
+            <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Daily attendance rate trend">
+              <defs>
+                <linearGradient id="dashboard-attendance-area" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stopColor="#39a564" stopOpacity=".22" />
+                  <stop offset="100%" stopColor="#39a564" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+              {[100, 50, 0].map((rate) => (
+                <g key={rate}>
+                  <line x1={left} x2={chartWidth - right} y1={y(rate)} y2={y(rate)} className="dashboard-chart-gridline" />
+                  <text x={left - 8} y={y(rate) + 3} textAnchor="end" className="dashboard-chart-axis-label">{rate}%</text>
+                </g>
+              ))}
+              <path d={area} fill="url(#dashboard-attendance-area)" />
+              <path d={line} className="dashboard-trend-line" />
+              {data.map((point) => (
+                <circle key={point.date} cx={x(point.index)} cy={y(point.rate)} r="3.1" className="dashboard-trend-point">
+                  <title>{formatDate(point.date)} · {point.rate.toFixed(1)}% · {point.attendance.P} present, {point.attendance.A} absent, {point.attendance.HD} half-day</title>
+                </circle>
+              ))}
+              {days.map((day, index) =>
+                labelIndexes.has(index) ? (
+                  <text key={day.date} x={x(index)} y={chartHeight - 5} textAnchor="middle" className="dashboard-chart-axis-label">
+                    {new Date(`${day.date}T00:00:00Z`).getUTCDate()}
+                  </text>
+                ) : null,
+              )}
+            </svg>
+          ) : (
+            <Empty>No attendance records are available for this period.</Empty>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function DashboardAttendanceHeatmap({
+    days,
+    from,
+    to,
+  }: {
+    days: NonNullable<WorkspaceData["attendanceTrend"]>;
+    from: string;
+    to: string;
+  }) {
+    const firstDay = days[0]?.date;
+    const mondayOffset = firstDay
+      ? (new Date(`${firstDay}T00:00:00Z`).getUTCDay() + 6) % 7
+      : 0;
+    return (
+      <section className="panel dashboard-heatmap-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Attendance heatmap</h2>
+            <p>{formatDate(from)} – {formatDate(to)} · <span className="heatmap-legend-high">●</span> high <span className="heatmap-legend-mid">●</span> mid <span className="heatmap-legend-low">●</span> low</p>
+          </div>
+        </div>
+        <div className="dashboard-heatmap">
+          {["M", "T", "W", "T", "F", "S", "S"].map((day, index) => (
+            <span className="dashboard-heatmap-weekday" key={`${day}-${index}`}>{day}</span>
+          ))}
+          {Array.from({ length: mondayOffset }, (_, index) => (
+            <span className="dashboard-heatmap-empty" key={`offset-${index}`} />
+          ))}
+          {days.map((day) => {
+            const { P, A, HD, WO } = day.attendance;
+            const marked = P + A + HD;
+            const rate = marked ? ((P + HD / 2) / marked) * 100 : null;
+            const tone =
+              rate === null
+                ? marked + WO > 0
+                  ? "weekoff"
+                  : "no-data"
+                : rate >= 90
+                  ? "high"
+                  : rate >= 75
+                    ? "mid"
+                    : "low";
+            return (
+              <span
+                key={day.date}
+                className={`dashboard-heatmap-day heatmap-${tone}`}
+                title={`${formatDate(day.date)} · ${rate === null ? (WO ? "Week off / no attendance marks" : "No attendance data") : `${rate.toFixed(1)}% attendance · P ${P}, A ${A}, HD ${HD}, WO ${WO}`}`}
+              >
+                {new Date(`${day.date}T00:00:00Z`).getUTCDate()}
+              </span>
+            );
+          })}
+        </div>
+      </section>
+    );
+  }
+
+  function DashboardOutletRanking({
+    outlets,
+    activeOutlets,
+    selectedOutlet,
+    onSelect,
+  }: {
+    outlets: Array<{
+      id: string;
+      code: string;
+      rate: number | null;
+      P: number;
+      A: number;
+      HD: number;
+      WO: number;
+    }>;
+    activeOutlets: DashboardOutlet[];
+    selectedOutlet: string;
+    onSelect: (outletId: string) => void;
+  }) {
+    const codeById = new Map(activeOutlets.map((outlet) => [outlet._id, outlet.code]));
+    return (
+      <section className="panel dashboard-ranking-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Outlet ranking</h2>
+            <p>Attendance rate · selected period</p>
+          </div>
+        </div>
+        <div className="dashboard-ranking-list">
+          {outlets.map((outlet) => (
+            <button
+              type="button"
+              key={outlet.id}
+              className={`dashboard-ranking-row ${selectedOutlet === outlet.id ? "dashboard-ranking-selected" : ""}`}
+              onClick={() => onSelect(selectedOutlet === outlet.id ? "" : outlet.id)}
+              title={`${outlet.code} · ${outlet.rate === null ? "No attendance data" : `${outlet.rate.toFixed(1)}% attendance`}`}
+            >
+              <span>{codeById.get(outlet.id) ?? outlet.code}</span>
+              <span className="dashboard-ranking-bar"><i className={dashboardPercentClass(outlet.rate ?? 0, "dashboard-width")} /></span>
+              <strong>{outlet.rate === null ? "No data" : `${outlet.rate.toFixed(1)}%`}</strong>
+            </button>
+          ))}
+          {!outlets.length && <Empty>No accessible outlets.</Empty>}
+        </div>
+      </section>
+    );
+  }
+
+  function DashboardTeamPerformance({
+    rows,
+    from,
+    to,
+  }: {
+    rows: EmployeeAttendanceReportRow[];
+    from: string;
+    to: string;
+  }) {
+    const team = rows
+      .map((row) => {
+        const marked = row.presentDays + row.absentDays + row.halfDays;
+        return {
+          ...row,
+          rate: marked
+            ? ((row.presentDays + row.halfDays / 2) / marked) * 100
+            : null,
+        };
+      })
+      .filter((row) => row.rate !== null)
+      .sort((left, right) => (right.rate ?? 0) - (left.rate ?? 0))
+      .slice(0, 5);
+    return (
+      <section className="panel dashboard-ranking-panel dashboard-team-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Team performance</h2>
+            <p>Attendance rate · {formatDate(from)} – {formatDate(to)}</p>
+          </div>
+        </div>
+        <div className="dashboard-team-list">
+          {team.map((employee) => (
+            <Link
+              href={`/employees/${employee.employeeId}`}
+              key={employee.employeeId}
+              className="dashboard-team-row"
+            >
+              <span className="dashboard-team-avatar">{employee.employeeName.slice(0, 1).toUpperCase()}</span>
+              <span className="dashboard-team-detail">
+                <span><strong>{employee.employeeName}</strong><small>{employee.outletCode}</small></span>
+                <span className="dashboard-ranking-bar"><i className={dashboardPercentClass(employee.rate ?? 0, "dashboard-width")} /></span>
+              </span>
+              <strong className="dashboard-team-rate">{employee.rate?.toFixed(1)}%<small>A {employee.absentDays} · HD {employee.halfDays}</small></strong>
+            </Link>
+          ))}
+          {!team.length && <Empty>No employee attendance data is available for this period.</Empty>}
+        </div>
+      </section>
+    );
+  }
+
+  function DashboardPayrollBreakdown({
+    metrics,
+    employeeCount,
+    from,
+    to,
+  }: {
+    metrics?: WorkspaceData["metrics"];
+    employeeCount: number;
+    from: string;
+    to: string;
+  }) {
+    const gross = metrics?.grossSalary ?? 0;
+    const net = metrics?.netPayable ?? 0;
+    const progress = gross > 0 ? Math.max(0, Math.min(100, (net / gross) * 100)) : 0;
+    return (
+      <section className="panel dashboard-payroll-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Payroll breakdown</h2>
+            <p>Live accrual · {formatDate(from)} – {formatDate(to)}</p>
+          </div>
+          <Link className="dashboard-panel-link" href="/salary">Review payroll <ArrowUpRight size={14} /></Link>
+        </div>
+        <div className="dashboard-payroll-content">
+          {metrics?.grossSalary == null ? (
+            <Empty>Salary permission is required to view payroll totals.</Empty>
+          ) : (
+            <>
+              <div className="dashboard-payroll-progress" aria-label={`${progress.toFixed(0)} percent of gross earnings remains net payable`}>
+                <i className={dashboardPercentClass(progress, "dashboard-width")} />
+              </div>
+              <div className="dashboard-payroll-values">
+                <div><span>Gross accrued</span><strong>{currency(gross)}</strong></div>
+                <div><span>Advances awaiting payroll</span><strong>{metrics.approvedAdvancesPendingPayroll == null ? "—" : currency(metrics.approvedAdvancesPendingPayroll)}</strong></div>
+                <div><span>Loan deductions in generated payroll</span><strong>{metrics.payrollCount ? currency(metrics.recordedLoanDeductions ?? 0) : "No payroll records"}</strong></div>
+                <div><span>Net accrued</span><strong className="payroll-value-net">{currency(net)}</strong></div>
+                <div><span>Projected month-end base</span><strong>{metrics.projectedMonthEndBase == null ? "—" : currency(metrics.projectedMonthEndBase)}</strong><small>Before attendance and deductions</small></div>
+                <div><span>Average net / active employee</span><strong>{employeeCount ? currency(net / employeeCount) : currency(0)}</strong><small>Current accrued amount</small></div>
+              </div>
+              <p className="dashboard-payroll-note">
+                Accrual uses submitted attendance and current payroll rules. Live accrual does not include loan deductions; those are shown from generated payroll records.
+              </p>
+            </>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function DashboardSuggestions({
+    items,
+  }: {
+    items: Array<{
+      title: string;
+      detail: string;
+      href: string;
+      icon: "attendance" | "advance" | "payroll" | "outlet";
+    }>;
+  }) {
+    const Icon = {
+      attendance: CalendarDays,
+      advance: HandCoins,
+      payroll: Banknote,
+      outlet: Building2,
+    };
+    return (
+      <section className="panel dashboard-suggestions-panel" id="dashboard-suggestions">
+        <div className="panel-heading">
+          <div>
+            <h2>Smart suggestions</h2>
+            <p>Operational prompts based on your records</p>
+          </div>
+        </div>
+        <div className="dashboard-suggestions-list">
+          {items.slice(0, 5).map((item) => {
+            const SuggestionIcon = Icon[item.icon];
+            return (
+              <Link className="dashboard-suggestion" href={item.href} key={item.title}>
+                <span><SuggestionIcon size={15} /></span>
+                <span><strong>{item.title}</strong><small>{item.detail}</small></span>
+                <ArrowUpRight size={13} />
+              </Link>
+            );
+          })}
         </div>
       </section>
     );
@@ -3595,11 +5208,16 @@
                       : `Date ${formatDate(String(period))}`
                   }
                 />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
-                <Bar dataKey="present" name="Present" stackId="attendance" fill="#4b8a6e" />
-                <Bar dataKey="absent" name="Absent" stackId="attendance" fill="#cc6556" />
-                <Bar dataKey="halfDay" name="Half day" stackId="attendance" fill="#d2a34d" />
-                <Bar dataKey="weekOff" name="Week off" stackId="attendance" fill="#7485b8" />
+                <Legend
+                  wrapperStyle={{ fontSize: 10 }}
+                  formatter={(value) => (
+                    <span className="attendance-chart-legend-label">{value}</span>
+                  )}
+                />
+                <Bar className="attendance-chart-present" dataKey="present" name="Present" stackId="attendance" fill="var(--status-present)" />
+                <Bar className="attendance-chart-absent" dataKey="absent" name="Absent" stackId="attendance" fill="var(--status-absent)" />
+                <Bar className="attendance-chart-half" dataKey="halfDay" name="Half day" stackId="attendance" fill="var(--status-half)" />
+                <Bar className="attendance-chart-weekoff" dataKey="weekOff" name="Week off" stackId="attendance" fill="var(--status-weekoff)" />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -3607,29 +5225,6 @@
           )}
         </div>
       </section>
-    );
-  }
-
-  function Metric({
-    title,
-    value,
-    detail,
-    accent,
-  }: {
-    title: string;
-    value: string | number;
-    detail?: string;
-    accent: string;
-  }) {
-    return (
-      <article className={`metric-card metric-${accent}`}>
-        <div className="metric-top">
-          <span>{title}</span>
-          <i />
-        </div>
-        <strong>{value}</strong>
-        <small>{detail ?? "Current period"}</small>
-      </article>
     );
   }
 
@@ -3691,7 +5286,7 @@
             >
               <ChevronLeft size={17} />
             </button>
-            <span>1</span>
+            <span>{page}</span>
             <button
               className="icon-button"
               aria-label="Next page"
@@ -3708,6 +5303,7 @@
   }
 
   function Field({
+    id,
     label,
     name,
     type = "text",
@@ -3719,6 +5315,7 @@
     infoText,
     disabled,
   }: {
+    id?: string;
     label: string;
     name: string;
     type?: string;
@@ -3733,11 +5330,11 @@
     return (
       <div className="field">
         <div className="field-label-row">
-          <label htmlFor={`field-${name}`}>{label}</label>
+          <label htmlFor={id ?? `field-${name}`}>{label}</label>
           {infoText && <InfoTip text={infoText} />}
         </div>
         <input
-          id={`field-${name}`}
+          id={id ?? `field-${name}`}
           name={name}
           type={type}
           required={required}
@@ -3793,102 +5390,231 @@
     );
   }
 
-  function EmployeeCodeField({
-    outletId,
-    outletPrefix,
-  }: {
-    outletId: string;
-    outletPrefix: string;
-  }) {
-    const [code, setCode] = useState("");
-    const [autoGenerated, setAutoGenerated] = useState(false);
-    const [generating, setGenerating] = useState(false);
-    const [error, setError] = useState("");
-
-    async function generateCode() {
-      setGenerating(true);
-      setError("");
-      try {
-        const result = await request<{ employeeCode: string }>(
-          `/api/employees?nextCode=true&outletId=${encodeURIComponent(outletId)}`,
-        );
-        setCode(result.employeeCode);
-        setAutoGenerated(true);
-      } catch (caught) {
-        setError(
-          caught instanceof Error
-            ? caught.message
-            : "Unable to generate an employee code.",
-        );
-      } finally {
-        setGenerating(false);
-      }
-    }
-
-    return (
-      <div
-        className="field"
-        onReset={() => {
-          setCode("");
-          setAutoGenerated(false);
-        }}
-      >
-        <div className="field-label-row">
-          <label htmlFor="new-employee-code">
-            Employee code ({outletPrefix || "outlet"} + 4 digits)
-          </label>
-        </div>
-        <div className="employee-code-input">
-          <input
-            id="new-employee-code"
-            name="employeeCode"
-            type="text"
-            value={code}
-            inputMode="text"
-            pattern={`${outletPrefix}[0-9]{4}`}
-            maxLength={outletPrefix.length + 4}
-            title={`Enter ${outletPrefix} followed by exactly 4 digits.`}
-            required
-            onChange={(event) => {
-              setCode(event.target.value.toUpperCase());
-              setAutoGenerated(false);
-            }}
-          />
-          <input type="hidden" name="autoGenerate" value={String(autoGenerated)} readOnly />
-          <button
-            className="button button-secondary"
-            type="button"
-            onClick={() => void generateCode()}
-            disabled={generating || !outletId || outletPrefix.length !== 3}
-          >
-            {generating ? "Generating..." : "Auto-generate"}
-          </button>
-        </div>
-        <small>
-          {outletPrefix
-            ? `Code uses ${outletPrefix} from the selected outlet name, followed by a 4-digit number.`
-            : "Select an outlet with a name of at least 3 letters."}
-        </small>
-        {error && <small className="employee-code-error">{error}</small>}
-      </div>
-    );
-  }
-
-  function outletCodePrefix(name: string) {
-    return name
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z]/gi, "")
-      .slice(0, 3)
-      .toUpperCase();
-  }
-
   function currency(value: number | undefined) {
     return new Intl.NumberFormat("en-IN", {
       style: "currency",
       currency: "INR",
       maximumFractionDigits: 2,
     }).format(Number(value) || 0);
+  }
+
+  function LoanActionDialog({
+    loan,
+    action,
+    payrollMonth,
+    busy,
+    onClose,
+    onSubmit,
+  }: {
+    loan: LoanView;
+    action: LoanActionName;
+    payrollMonth: string;
+    busy: boolean;
+    onClose: () => void;
+    onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  }) {
+    const [closureType, setClosureType] = useState(
+      loan.outstandingAmount > 0 ? "EXTERNAL_SETTLEMENT" : "OTHER",
+    );
+    const title: Record<LoanActionName, string> = {
+      SKIP: "Skip this month's installment",
+      PAUSE: "Pause loan",
+      RESUME: "Resume loan",
+      CLOSE: "Mark loan as completed",
+      ADJUST: "Adjust loan balance",
+      REVERSE: "Reverse posted installment",
+    };
+    return (
+      <div className="advance-modal-backdrop">
+        <section
+          className="advance-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="loan-action-title"
+        >
+          <header className="advance-modal-heading">
+            <div>
+              <h2 id="loan-action-title">{title[action]}</h2>
+              <p>
+                {loan.employeeName} · {loan.employeeCode} · {loan.outletCode}
+              </p>
+            </div>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Close loan action"
+              disabled={busy}
+              onClick={onClose}
+            >
+              <X size={16} />
+            </button>
+          </header>
+          <form className="advance-edit-form" onSubmit={onSubmit}>
+            <p className="sub-cell">
+              Original amount: {currency(loan.totalAmount)} · Repaid:{" "}
+              {currency(loan.repaidAmount ?? 0)} · Remaining balance:{" "}
+              {currency(loan.outstandingAmount)}
+            </p>
+            {action === "SKIP" && (
+              <p className="sub-cell">
+                Payroll month: {payrollMonth} · Scheduled deduction:{" "}
+                {currency(calculateLoanInstallment([loan], payrollMonth))}. The
+                balance will not change and no arrears will be carried forward.
+              </p>
+            )}
+            {action === "REVERSE" && (
+              <p className="sub-cell">
+                Payroll month: {payrollMonth} · Posted deduction:{" "}
+                {currency(loan.currentActualDeduction ?? 0)}. This restores the
+                loan balance and updates payroll.
+              </p>
+            )}
+            {(action === "PAUSE" || action === "RESUME") && (
+              <p className="sub-cell">
+                Missed installments are not carried forward.{" "}
+                {action === "RESUME" &&
+                  "Deductions resume from the effective payroll month."}
+              </p>
+            )}
+            {action === "CLOSE" && (
+              <>
+                <label className="field">
+                  <span>Closure type</span>
+                  <select
+                    name="closureType"
+                    value={closureType}
+                    onChange={(event) => setClosureType(event.target.value)}
+                  >
+                    <option value="EXTERNAL_SETTLEMENT">
+                      Fully or partially settled outside payroll
+                    </option>
+                    <option value="WRITE_OFF">Waived / written off</option>
+                    <option value="OTHER">Other approved closure</option>
+                  </select>
+                </label>
+                {loan.outstandingAmount > 0 &&
+                  closureType === "EXTERNAL_SETTLEMENT" && (
+                    <label className="field">
+                      <span>Settlement amount (INR)</span>
+                      <input
+                        name="amount"
+                        type="number"
+                        min="0.01"
+                        max={loan.outstandingAmount}
+                        step="0.01"
+                        defaultValue={loan.outstandingAmount}
+                        required
+                      />
+                      <small>
+                        A partial settlement reduces the balance and leaves the
+                        loan ongoing.
+                      </small>
+                    </label>
+                  )}
+                <label className="field">
+                  <span>Settlement / closure date</span>
+                  <input
+                    name="transactionDate"
+                    type="date"
+                    defaultValue={getIndiaDate()}
+                    required
+                  />
+                </label>
+              </>
+            )}
+            {action === "ADJUST" && (
+              <>
+                <label className="field">
+                  <span>Balance change</span>
+                  <select name="direction" defaultValue="REDUCE">
+                    <option value="REDUCE">Reduce balance</option>
+                    <option value="INCREASE">
+                      Increase (additional disbursement)
+                    </option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Adjustment amount (INR)</span>
+                  <input
+                    name="amount"
+                    type="number"
+                    min="0.01"
+                    max="10000000"
+                    step="0.01"
+                    required
+                  />
+                </label>
+                <label className="field">
+                  <span>Adjustment date</span>
+                  <input
+                    name="transactionDate"
+                    type="date"
+                    defaultValue={getIndiaDate()}
+                    required
+                  />
+                </label>
+              </>
+            )}
+            {action === "REVERSE" && (
+              <label className="field">
+                <span>Reversal date</span>
+                <input
+                  name="transactionDate"
+                  type="date"
+                  defaultValue={getIndiaDate()}
+                  required
+                />
+              </label>
+            )}
+            {action === "RESUME" && (
+              <label className="field">
+                <span>Effective payroll month</span>
+                <input
+                  name="effectiveMonth"
+                  type="month"
+                  defaultValue={payrollMonth}
+                  min={payrollMonth}
+                  required
+                />
+              </label>
+            )}
+            <label className="field">
+              <span>Reason (required)</span>
+              <textarea
+                name="reason"
+                minLength={5}
+                maxLength={500}
+                rows={3}
+                required
+              />
+            </label>
+            {(action === "ADJUST" || action === "CLOSE") && (
+              <label className="field">
+                <span>Reference or notes (optional)</span>
+                <input name="reference" maxLength={200} />
+              </label>
+            )}
+            <div className="toolbar">
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={busy}
+                onClick={onClose}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="button button-primary"
+                disabled={busy}
+              >
+                {busy ? "Saving…" : "Confirm action"}
+              </button>
+            </div>
+          </form>
+        </section>
+      </div>
+    );
   }
 
   function normalizeForm(values: Record<string, FormDataEntryValue>) {
@@ -3901,6 +5627,8 @@
       "amount",
       "totalAmount",
       "outstandingAmount",
+      "monthlyDeductionAmount",
+      "installmentCount",
       "outletNumber",
     ]) {
       if (key in body) body[key] = Number(body[key]);
@@ -4052,18 +5780,9 @@
     const selected = designations.find((item) => item._id === editingId);
     const [name, setName] = useState("");
     const [description, setDescription] = useState("");
-    const [color, setColor] = useState("#635bdb");
     const [permissions, setPermissions] = useState<Permission[]>([]);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
-    const colors = [
-      "#635bdb",
-      "#201f58",
-      "#ef43b4",
-      "#e91e63",
-      "#a46526",
-      "#3b82f6",
-    ];
 
     function beginEdit(id: string) {
       const designation = designations.find((item) => item._id === id);
@@ -4071,7 +5790,6 @@
       setEditingId(id);
       setName(designation?.name ?? "");
       setDescription(designation?.description ?? "");
-      setColor(designation?.color ?? "#635bdb");
       setPermissions(designation?.permissions ?? []);
       setError("");
     }
@@ -4081,7 +5799,6 @@
       setEditingId("");
       setName("");
       setDescription("");
-      setColor("#635bdb");
       setPermissions([]);
       setError("");
     }
@@ -4091,7 +5808,7 @@
       setBusy(true);
       setError("");
       try {
-        const body = { name, description, color, permissions };
+        const body = { name, description, permissions };
         await request(
           "/api/designations",
           {
@@ -4173,7 +5890,7 @@
             </small>
           </div>
         )}
-        {isOpen && <div className="access-modal-backdrop">
+        {isOpen && <ModalPortal><div className="access-modal-backdrop">
           <section
             className="access-modal designation-modal"
             role="dialog"
@@ -4220,21 +5937,6 @@
                 maxLength={240}
               />
             </label>
-            <fieldset className="designation-colors">
-              <legend>Color accent</legend>
-              <div>
-                {colors.map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    aria-label={`Choose color ${value}`}
-                    aria-pressed={color === value}
-                    style={{ backgroundColor: value }}
-                    onClick={() => setColor(value)}
-                  />
-                ))}
-              </div>
-            </fieldset>
           </div>
           <div className="designation-permissions">
             <div className="designation-permissions-heading">
@@ -4301,7 +6003,7 @@
           </div>
             </form>
           </section>
-        </div>}
+        </div></ModalPortal>}
       </section>
     );
   }
@@ -4334,7 +6036,9 @@
     const [active, setActive] = useState(Boolean(item.active));
     const selectedRoleValue = designationId
       ? `designation:${designationId}`
-      : role;
+      : role === "MAIN_ADMIN"
+        ? role
+        : "";
 
     function openEditor() {
       setRole(item.role);
@@ -4361,7 +6065,7 @@
           Manage
         </button>
         {isOpen && (
-        <div className="access-modal-backdrop">
+        <ModalPortal><div className="access-modal-backdrop">
           <section
             className="access-modal"
             role="dialog"
@@ -4406,9 +6110,12 @@
                   setOutletIds((current) => current.slice(0, 1));
               }}
             >
-              <option value="OUTLET_USER">OUTLET_USER</option>
-              <option value="CO_ADMIN">CO_ADMIN</option>
-              <option value="MAIN_ADMIN">MAIN_ADMIN</option>
+              {selectedRoleValue === "" && (
+                <option value="" disabled>
+                  Select Main Admin or a designation
+                </option>
+              )}
+              <option value="MAIN_ADMIN">Main Admin</option>
               {designations.map((designation) => (
                 <option
                   key={designation._id}
@@ -4520,7 +6227,7 @@
           </button>
         </div>
           </section>
-        </div>
+        </div></ModalPortal>
         )}
       </div>
     );
@@ -4585,7 +6292,7 @@
           Password
         </button>
         {isOpen && (
-          <div className="access-modal-backdrop">
+          <ModalPortal><div className="access-modal-backdrop">
             <section
               className="access-modal user-password-modal"
               role="dialog"
@@ -4668,47 +6375,65 @@
                 </div>
               </form>
             </section>
-          </div>
+          </div></ModalPortal>
         )}
       </>
     );
   }
 
   function EmployeeAttendanceTable({
-    rows,
+    rows: providedRows,
     canReadSalary,
-    from = "",
-    to = "",
-    preset = "Custom",
-    employeeId = "",
-    employees = [],
+    globalFrom,
+    globalTo,
+    globalOutletId,
+    outlets = [],
     canExport = false,
     exportBusy = null,
-    onPresetChange,
-    onFromChange,
-    onToChange,
-    onEmployeeChange,
     onExport,
     title,
     description,
   }: {
-    rows: EmployeeAttendanceReportRow[];
+    rows?: EmployeeAttendanceReportRow[];
     canReadSalary: boolean;
-    from?: string;
-    to?: string;
-    preset?: string;
-    employeeId?: string;
-    employees?: EmployeeAttendanceReport["employees"];
+    globalFrom?: string;
+    globalTo?: string;
+    globalOutletId?: string;
+    outlets?: Outlet[];
     canExport?: boolean;
     exportBusy?: ExportFormat | null;
-    onPresetChange?: (value: string) => void;
-    onFromChange?: (value: string) => void;
-    onToChange?: (value: string) => void;
-    onEmployeeChange?: (value: string) => void;
-    onExport?: (format: ExportFormat) => void;
+    onExport?: (
+      format: ExportFormat,
+      filters: {
+        from: string;
+        to: string;
+        outletId: string;
+        employeeId: string;
+      },
+    ) => void;
     title: string;
     description: string;
   }) {
+    const hasLocalFilters =
+      globalFrom !== undefined && globalTo !== undefined;
+    const [localFrom, setLocalFrom] = useState(globalFrom ?? "");
+    const [localTo, setLocalTo] = useState(globalTo ?? "");
+    const [localOutletId, setLocalOutletId] = useState(
+      globalOutletId ?? "",
+    );
+    const [localEmployeeId, setLocalEmployeeId] = useState("");
+    const report = useEmployeeAttendanceReport({
+        enabled: hasLocalFilters,
+        from: localFrom,
+        to: localTo,
+        outletId: localOutletId,
+        employeeId: localEmployeeId,
+      });
+    const rows = providedRows ?? report.rows;
+    const employees = report.employees;
+    const isFetching = hasLocalFilters && report.isFetching;
+    const error = hasLocalFilters ? report.error : "";
+
     return (
       <section className="panel">
         <div className="panel-heading">
@@ -4716,56 +6441,73 @@
             <h2>{title}</h2>
             <p>{description}</p>
           </div>
+          {hasLocalFilters && (
           <div className="toolbar dashboard-report-toolbar">
-            {onPresetChange && (
-              <select
-                aria-label="Attendance report period"
-                value={preset}
-                onChange={(event) => onPresetChange(event.target.value)}
-              >
-                <option>This Month</option>
-                <option>Last Month</option>
-                <option>Custom</option>
-              </select>
-            )}
-            {onEmployeeChange && (
-              <select
-                aria-label="Attendance report employee"
-                value={employeeId}
-                onChange={(event) => onEmployeeChange(event.target.value)}
-              >
-                <option value="">All employees</option>
-                {employees.map((employee) => (
+            <select
+              aria-label="Attendance report outlet"
+              value={localOutletId}
+              onChange={(event) => {
+                setLocalOutletId(event.target.value);
+                setLocalEmployeeId("");
+              }}
+            >
+              <option value="">All outlets</option>
+              {outlets.map((outlet) => (
+                <option key={outlet._id} value={outlet._id}>
+                  {outlet.code} · {outlet.name}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Attendance report employee"
+              value={localEmployeeId}
+              onChange={(event) => setLocalEmployeeId(event.target.value)}
+            >
+              <option value="">All employees</option>
+              {employees
+                .filter(
+                  (employee) =>
+                    !localOutletId || employee.outletId === localOutletId,
+                )
+                .map((employee) => (
                   <option key={employee.id} value={employee.id}>
                     {employee.code} · {employee.name}
                   </option>
                 ))}
-              </select>
-            )}
-            {onFromChange && (
-              <input
-                type="date"
-                aria-label="Attendance report from date"
-                value={from}
-                onChange={(event) => onFromChange(event.target.value)}
-              />
-            )}
-            {onToChange && (
-              <input
-                type="date"
-                aria-label="Attendance report to date"
-                value={to}
-                onChange={(event) => onToChange(event.target.value)}
-              />
-            )}
+            </select>
+            <input
+              type="date"
+              aria-label="Attendance report from date"
+              value={localFrom}
+              max={localTo}
+              onChange={(event) => setLocalFrom(event.target.value)}
+            />
+            <input
+              type="date"
+              aria-label="Attendance report to date"
+              value={localTo}
+              min={localFrom}
+              onChange={(event) => setLocalTo(event.target.value)}
+            />
             {canExport && onExport && (
               <>
                 <button
                   className="button button-secondary"
                   type="button"
                   aria-label="Download Excel"
-                  disabled={exportBusy !== null || from > to}
-                  onClick={() => onExport("xlsx")}
+                  disabled={
+                    exportBusy !== null ||
+                    localFrom > localTo ||
+                    isFetching
+                  }
+                  onClick={() =>
+                    onExport("xlsx", {
+                      from: localFrom,
+                      to: localTo,
+                      outletId: localOutletId,
+                      employeeId: localEmployeeId,
+                    })
+                  }
                 >
                   {exportBusy === "xlsx" ? (
                     <LoaderCircle className="spin" size={15} />
@@ -4778,8 +6520,19 @@
                   className="button button-secondary"
                   type="button"
                   aria-label="Download CSV"
-                  disabled={exportBusy !== null || from > to}
-                  onClick={() => onExport("csv")}
+                  disabled={
+                    exportBusy !== null ||
+                    localFrom > localTo ||
+                    isFetching
+                  }
+                  onClick={() =>
+                    onExport("csv", {
+                      from: localFrom,
+                      to: localTo,
+                      outletId: localOutletId,
+                      employeeId: localEmployeeId,
+                    })
+                  }
                 >
                   {exportBusy === "csv" ? (
                     <LoaderCircle className="spin" size={15} />
@@ -4791,9 +6544,11 @@
               </>
             )}
           </div>
+          )}
         </div>
-        <div className="table-wrap">
-          <table>
+        <div className="dashboard-report-table-region" aria-busy={isFetching}>
+          <div className="table-wrap">
+            <table className="dashboard-employee-attendance">
             <thead>
               <tr>
                 <th>Employee</th>
@@ -4808,7 +6563,9 @@
                 {canReadSalary && <th>Employee ESI</th>}
                 {canReadSalary && <th>Employee PF</th>}
                 {canReadSalary && <th>Employer PF</th>}
-                {canReadSalary && <th>Loan</th>}
+                {canReadSalary && <th>Original loan</th>}
+                {canReadSalary && <th>Remaining balance</th>}
+                {canReadSalary && <th>Monthly deduction</th>}
                 {canReadSalary && <th>Payable</th>}
               </tr>
             </thead>
@@ -4820,25 +6577,66 @@
                     <span className="sub-cell">
                       {row.employeeCode} · {row.outletCode}
                     </span>
-                    {row.presentDays > 0 && (
-                      <span className="sub-cell">
-                        Present: {row.statusDates.P.join(", ")}
-                      </span>
-                    )}
-                    {row.absentDays > 0 && (
-                      <span className="sub-cell">
-                        Absent: {row.statusDates.A.join(", ")}
-                      </span>
-                    )}
-                    {row.weekOffs > 0 && (
-                      <span className="sub-cell">
-                        Week off: {row.statusDates.WO.join(", ")}
-                      </span>
-                    )}
-                    {row.halfDays > 0 && (
-                      <span className="sub-cell">
-                        Half day: {row.statusDates.HD.join(", ")}
-                      </span>
+                    {Object.values(row.statusDates).some(
+                      (dates) => dates.length > 0,
+                    ) && (
+                      <details className="attendance-date-details">
+                        <summary>
+                          <CalendarDays size={13} aria-hidden="true" />
+                          Attendance dates
+                          <span className="attendance-date-count">
+                            {Object.values(row.statusDates).reduce(
+                              (total, dates) => total + dates.length,
+                              0,
+                            )}
+                          </span>
+                          <ChevronRight
+                            className="attendance-date-chevron"
+                            size={13}
+                            aria-hidden="true"
+                          />
+                        </summary>
+                        <div className="attendance-date-groups">
+                          {[
+                            {
+                              label: "Present",
+                              tone: "present",
+                              dates: row.statusDates.P,
+                            },
+                            {
+                              label: "Absent",
+                              tone: "absent",
+                              dates: row.statusDates.A,
+                            },
+                            {
+                              label: "Half day",
+                              tone: "half-day",
+                              dates: row.statusDates.HD,
+                            },
+                            {
+                              label: "Week off",
+                              tone: "week-off",
+                              dates: row.statusDates.WO,
+                            },
+                          ]
+                            .filter((group) => group.dates.length > 0)
+                            .map((group) => (
+                              <div
+                                className={`attendance-date-group attendance-date-group-${group.tone}`}
+                                key={group.label}
+                              >
+                                <strong>{group.label}</strong>
+                                <div className="attendance-date-list">
+                                  {group.dates.map((date) => (
+                                    <time dateTime={date} key={date}>
+                                      {date}
+                                    </time>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      </details>
                     )}
                     {row.unsubmittedDays > 0 && (
                       <span className="sub-cell">
@@ -4870,7 +6668,13 @@
                     <td>{currency(row.employerPf ?? 0)}</td>
                   )}
                   {canReadSalary && (
-                    <td>{currency(row.loanDeduction ?? 0)}</td>
+                    <td>{currency(row.originalLoanAmount ?? 0)}</td>
+                  )}
+                  {canReadSalary && (
+                    <td>{currency(row.remainingLoanBalance ?? 0)}</td>
+                  )}
+                  {canReadSalary && (
+                    <td>{currency(row.monthlyLoanDeduction ?? 0)}</td>
                   )}
                   {canReadSalary && (
                     <td>
@@ -4881,8 +6685,20 @@
                 </tr>
               ))}
             </tbody>
-          </table>
-          {!rows.length && (
+            </table>
+          </div>
+          {isFetching && (
+            <div className="dashboard-report-loading" role="status">
+              <RefreshSpinner />
+              Updating attendance report
+            </div>
+          )}
+          {error && (
+            <div className="dashboard-report-error" role="alert">
+              {error}
+            </div>
+          )}
+          {!isFetching && !error && !rows.length && (
             <Empty>No employee attendance records match this period.</Empty>
           )}
         </div>
@@ -4904,42 +6720,14 @@
     const [preset, setPreset] = useState("This Month");
     const [busy, setBusy] = useState<ExportFormat | null>(null);
     const [error, setError] = useState("");
-    const [employeeReport, setEmployeeReport] =
-      useState<EmployeeAttendanceReport | null>(null);
     const [employeeId, setEmployeeId] = useState("");
-    const [loadedReportKey, setLoadedReportKey] = useState("");
-    const reportKey = `${from}|${to}|${selectedOutletId}|${employeeId}`;
-    useEffect(() => {
-      if (kind !== "attendance") return;
-      let active = true;
-      const params = new URLSearchParams({ from, to });
-      if (selectedOutletId) params.set("outletId", selectedOutletId);
-      if (employeeId) params.set("employeeId", employeeId);
-      void request<EmployeeAttendanceReport>(
-        `/api/reports/employee-attendance?${params.toString()}`,
-      )
-        .then((result) => {
-          if (active) {
-            setEmployeeReport(result);
-            setLoadedReportKey(reportKey);
-            setError("");
-          }
-        })
-        .catch((caught) => {
-          if (active) {
-            setEmployeeReport(null);
-            setLoadedReportKey(reportKey);
-            setError(
-              caught instanceof Error
-                ? caught.message
-                : "Unable to load employee attendance.",
-            );
-          }
-        });
-      return () => {
-        active = false;
-      };
-    }, [kind, from, to, selectedOutletId, employeeId, reportKey]);
+    const employeeReport = useEmployeeAttendanceReport({
+      enabled: kind === "attendance",
+      from,
+      to,
+      outletId: selectedOutletId,
+      employeeId,
+    });
     function applyPreset(value: string) {
       setPreset(value);
       if (value === "Custom") return;
@@ -4986,7 +6774,13 @@
           title="Reports & exports"
           description="Download permission-checked Excel and CSV reports from live records."
         />
-        <Notice error={error} success="" />
+        <Notice
+          error={error || (kind === "attendance" ? employeeReport.error : "")}
+          success=""
+          refreshing={
+            kind === "attendance" && employeeReport.isFetching
+          }
+        />
         <section className="panel report-panel">
           <div className="report-icon">
             <ArrowDownToLine size={22} />
@@ -5051,7 +6845,7 @@
                   onChange={(event) => setEmployeeId(event.target.value)}
                 >
                   <option value="">All employees</option>
-                  {(employeeReport?.employees ?? []).map((employee) => (
+                  {employeeReport.employees.map((employee) => (
                     <option key={employee.id} value={employee.id}>
                       {employee.code} · {employee.name}
                     </option>
@@ -5086,7 +6880,11 @@
             <button
               className="button button-primary"
               aria-label="Export Excel workbook"
-              disabled={busy !== null || from > to}
+              disabled={
+                busy !== null ||
+                from > to ||
+                (kind === "attendance" && employeeReport.isFetching)
+              }
               onClick={() => void exportFile("xlsx")}
             >
               {busy === "xlsx" ? (
@@ -5099,7 +6897,11 @@
             <button
               className="button button-secondary"
               aria-label="Export CSV file"
-              disabled={busy !== null || from > to}
+              disabled={
+                busy !== null ||
+                from > to ||
+                (kind === "attendance" && employeeReport.isFetching)
+              }
               onClick={() => void exportFile("csv")}
             >
               {busy === "csv" ? (
@@ -5111,12 +6913,12 @@
             </button>
           </div>
         </section>
-        {kind === "attendance" &&
-          (loadedReportKey !== reportKey ? (
-            <Loading />
-          ) : (
-            <>
-              {employeeReport?.canReadSalary && (
+        {kind === "attendance" && (
+          <div
+            className="reports-attendance-results"
+            aria-busy={employeeReport.isFetching}
+          >
+              {employeeReport.canReadSalary && (
                 <p className="sub-cell">
                   Payable shows live accrued salary from submitted attendance for
                   the selected dates. Missing or unsubmitted days are not treated
@@ -5124,18 +6926,24 @@
                 </p>
               )}
               <AttendanceTrendChart
-                rows={employeeReport?.rows ?? []}
+                rows={employeeReport.rows}
                 from={from}
                 to={to}
               />
               <EmployeeAttendanceTable
-                rows={employeeReport?.rows ?? []}
-                canReadSalary={employeeReport?.canReadSalary ?? false}
+                rows={employeeReport.rows}
+                canReadSalary={employeeReport.canReadSalary}
                 title="Employee-wise attendance"
                 description={`${formatDate(from)} to ${formatDate(to)} · Counts, status dates, and salary details when permitted.`}
               />
-            </>
-          ))}
+            {employeeReport.isFetching && (
+              <div className="dashboard-report-loading" role="status">
+                <RefreshSpinner />
+                Updating attendance report
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }

@@ -63,7 +63,11 @@ export interface EmployeeDocument {
   employeeCodeNormalized: string;
   fullName: string;
   dateOfJoining: string;
+  dateOfBirth?: string | null;
+  gender?: "MALE" | "FEMALE" | null;
   designation: string;
+  designationKey?: string | null;
+  designationGroup?: "HEAD_OFFICE" | "OUTLET" | null;
   employmentType?: EmploymentType;
   mobile: string;
   outletId: ObjectId;
@@ -74,12 +78,43 @@ export interface EmployeeDocument {
   employerPfPercent: number;
   esiEnabled?: boolean;
   esiPercent?: number;
+  beneficiaryName?: string | null;
+  bankName?: string | null;
+  branchName?: string | null;
+  accountNumber?: string | null;
+  ifscCode?: string | null;
+  panNumber?: string | null;
+  aadhaarNumber?: string | null;
+  drivingLicenceNumber?: string | null;
+  termsAccepted?: boolean;
+  termsVersion?: string;
+  acceptedAt?: Date;
+  acceptedBy?: ObjectId;
   active: boolean;
   deactivatedAt?: string;
   notes?: string;
   createdBy: ObjectId;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export type EmployeeDocumentType =
+  | "AADHAAR"
+  | "PAN"
+  | "BANK_PROOF"
+  | "DRIVING_LICENCE"
+  | "PHOTO"
+  | "OTHER";
+
+export interface EmployeeFileDocument {
+  _id: ObjectId;
+  employeeId: ObjectId;
+  documentType: EmployeeDocumentType;
+  storageKey: string;
+  mimeType: string;
+  size: number;
+  uploadedBy: ObjectId;
+  uploadedAt: Date;
 }
 
 export type AttendanceStatus = "P" | "A" | "WO" | "HD";
@@ -92,6 +127,10 @@ export interface AttendanceDayDocument {
   status: "DRAFT" | "SUBMITTED";
   submittedAt?: Date;
   submittedBy?: ObjectId;
+  employeeCorrectionCounts?: Array<{
+    employeeId: ObjectId;
+    correctionCount: number;
+  }>;
   corrections: Array<{ at: Date; actorId: ObjectId; reason: string; action: "UNLOCK" | "RELOCK" }>;
   updatedAt: Date;
   updatedBy: ObjectId;
@@ -121,11 +160,91 @@ export interface LoanDocument {
   outletId: ObjectId;
   totalAmount: number;
   outstandingAmount: number;
+  monthlyDeductionAmount?: number;
+  deductionStartMonth?: string;
+  resumeEffectiveMonth?: string;
+  repaymentMethod?: "FIXED_AMOUNT" | "FIXED_INSTALLMENTS" | "DATE_RANGE";
+  installmentCount?: number;
+  deductionEndMonth?: string;
+  repaidAmount?: number;
+  status?: "ACTIVE" | "PAUSED" | "COMPLETED";
+  statusReason?: string;
+  statusUpdatedAt?: Date;
+  statusUpdatedBy?: ObjectId;
+  statusHistory?: Array<{
+    status: "ACTIVE" | "PAUSED" | "COMPLETED";
+    effectiveAt: Date;
+    effectivePayrollMonth?: string;
+    actorId: ObjectId;
+    reason?: string;
+  }>;
+  completedAt?: Date;
+  completionReason?: string;
+  completionReference?: string;
+  completionAmount?: number;
+  completedBy?: ObjectId;
+  repaymentTermsHistory?: Array<{
+    method: "FIXED_AMOUNT" | "FIXED_INSTALLMENTS" | "DATE_RANGE";
+    monthlyDeductionAmount: number;
+    deductionStartMonth: string;
+    installmentCount: number;
+    deductionEndMonth: string;
+    effectiveAt: Date;
+    actorId: ObjectId;
+  }>;
   notes: string;
   createdBy: ObjectId;
   updatedBy: ObjectId;
   createdAt: Date;
   updatedAt: Date;
+}
+
+export type LoanInstallmentStatus =
+  | "SCHEDULED"
+  | "POSTED"
+  | "SKIPPED"
+  | "REVERSED";
+
+export interface LoanInstallmentDocument {
+  _id: ObjectId;
+  loanId: ObjectId;
+  employeeId: ObjectId;
+  outletId: ObjectId;
+  payrollMonth: string;
+  openingBalance: number;
+  scheduledDeduction: number;
+  actualDeduction: number;
+  closingBalance: number;
+  status: LoanInstallmentStatus;
+  skipReason?: string;
+  payrollRecordId?: ObjectId;
+  actorId: ObjectId;
+  reversalReason?: string;
+  reversedBy?: ObjectId;
+  reversedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface LoanTransactionDocument {
+  _id: ObjectId;
+  loanId: ObjectId;
+  employeeId: ObjectId;
+  outletId: ObjectId;
+  type:
+    | "BALANCE_ADJUSTMENT"
+    | "EXTERNAL_SETTLEMENT"
+    | "WRITE_OFF"
+    | "OTHER_CLOSURE"
+    | "REVERSAL";
+  amount: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  reason: string;
+  reference?: string;
+  transactionDate: string;
+  actorId: ObjectId;
+  createdAt: Date;
 }
 
 export interface SalarySettings {

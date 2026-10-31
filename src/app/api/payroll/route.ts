@@ -5,7 +5,10 @@ import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb, getMongoClient } from "@/lib/mongodb";
 import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
-import { calculatePayroll } from "@/lib/payroll/calculate";
+import {
+  calculateLoanInstallment,
+  calculatePayroll,
+} from "@/lib/payroll/calculate";
 import { getMonthDates } from "@/lib/payroll/dates";
 import {
   dateOnlySchema,
@@ -17,6 +20,7 @@ import type {
   AttendanceDayDocument,
   EmployeeDocument,
   LoanDocument,
+  LoanInstallmentDocument,
   OutletDocument,
   SalaryRecordDocument,
   SalarySettings,
@@ -182,6 +186,11 @@ export async function GET(request: Request) {
               employeeId: { $in: employeeIds },
               ...(outletIds ? { outletId: { $in: outletIds } } : {}),
               outstandingAmount: { $gt: 0 },
+              status: { $nin: ["PAUSED", "COMPLETED"] },
+              $or: [
+                { deductionStartMonth: { $exists: false } },
+                { deductionStartMonth: { $lte: month } },
+              ],
             })
             .toArray()
         : Promise.resolve([]),
@@ -494,6 +503,48 @@ export async function POST(request: Request) {
           const advanceTotal = advances
             .reduce((sum, advance) => sum.plus(advance.amount), new Decimal(0))
             .toNumber();
+          const skippedInstallments =
+            actor.role === "MAIN_ADMIN"
+              ? await db
+                  .collection<LoanInstallmentDocument>("loanInstallments")
+                  .find(
+                    {
+                      employeeId: employee._id,
+                      outletId,
+                      payrollMonth: input.month,
+                      status: "SKIPPED",
+                    },
+                    { session },
+                  )
+                  .project<{ loanId: ObjectId }>({ loanId: 1 })
+                  .toArray()
+              : [];
+          const skippedLoanIds = skippedInstallments.map(
+            (installment) => installment.loanId,
+          );
+          const loans =
+            actor.role === "MAIN_ADMIN"
+              ? await db
+                  .collection<LoanDocument>("loans")
+                  .find(
+                    {
+                      employeeId: employee._id,
+                      outletId,
+                      _id: { $nin: skippedLoanIds },
+                      outstandingAmount: { $gt: 0 },
+                      status: { $nin: ["PAUSED", "COMPLETED"] },
+                      $or: [
+                        { deductionStartMonth: { $exists: false } },
+                        { deductionStartMonth: { $lte: input.month } },
+                      ],
+                    },
+                    { session },
+                  )
+                  .sort({ createdAt: 1, _id: 1 })
+                  .toArray()
+              : [];
+          const scheduledLoanDeduction =
+            calculateLoanInstallment(loans, input.month);
           const computed = calculatePayroll({
             monthlyBaseSalary: employee.monthlyBaseSalary,
             salaryMethod: "FIXED_30_DAYS",
@@ -515,7 +566,7 @@ export async function POST(request: Request) {
                 ? 30
                 : applicableDates.length,
             advances: advanceTotal,
-            loanDeduction: 0,
+            loanDeduction: scheduledLoanDeduction,
             overtime: 0,
             allowances: 0,
             otherDeductions: 0,
@@ -526,6 +577,8 @@ export async function POST(request: Request) {
             esiPercent: employee.esiPercent ?? 0.75,
           });
           const now = new Date();
+          const postedLoanInstallments: LoanInstallmentDocument[] = [];
+          const scheduledLoanInstallments: LoanInstallmentDocument[] = [];
           const amounts = {
             grossEarnings:
               input.amounts?.grossEarnings ?? computed.grossEarnings,
@@ -533,23 +586,19 @@ export async function POST(request: Request) {
             esi: input.amounts?.esi ?? computed.esi,
             employeePf: input.amounts?.employeePf ?? computed.employeePf,
             employerPf: input.amounts?.employerPf ?? computed.employerPf,
-            loanDeduction: input.amounts?.loanDeduction ?? 0,
+            loanDeduction:
+              input.amounts?.loanDeduction ?? computed.loanDeduction,
           };
           if (new Decimal(amounts.advances).minus(advanceTotal).abs().greaterThan(0.009))
             throw new Error(`ADVANCE_AMOUNT_MISMATCH:${employee.employeeCode}`);
-          if (amounts.loanDeduction > 0) {
-            const loans = await db
-              .collection<LoanDocument>("loans")
-              .find(
-                {
-                  employeeId: employee._id,
-                  outletId,
-                  outstandingAmount: { $gt: 0 },
-                },
-                { session },
-              )
-              .sort({ createdAt: 1, _id: 1 })
-              .toArray();
+          if (
+            new Decimal(amounts.loanDeduction)
+              .minus(scheduledLoanDeduction)
+              .abs()
+              .greaterThan(0.009)
+          )
+            throw new Error(`LOAN_AMOUNT_EXCEEDS:${employee.employeeCode}`);
+          if (amounts.loanDeduction > 0 && input.approve) {
             const outstanding = loans.reduce(
               (sum, loan) => sum.plus(loan.outstandingAmount),
               new Decimal(0),
@@ -573,20 +622,95 @@ export async function POST(request: Request) {
                   {
                     _id: loan._id,
                     outstandingAmount: loan.outstandingAmount,
+                    updatedAt: loan.updatedAt,
                   },
                   {
                     $set: {
                       outstandingAmount,
+                      repaidAmount: new Decimal(
+                        loan.repaidAmount ??
+                          loan.totalAmount - loan.outstandingAmount,
+                      )
+                        .plus(applied)
+                        .toDecimalPlaces(2)
+                        .toNumber(),
+                      ...(outstandingAmount === 0
+                        ? {
+                            status: "COMPLETED",
+                            completedAt: now,
+                            completedBy: actor.id,
+                            completionReason: "Fully repaid through payroll.",
+                            completionAmount: applied.toDecimalPlaces(2).toNumber(),
+                            statusUpdatedAt: now,
+                            statusUpdatedBy: actor.id,
+                          }
+                        : {}),
                       updatedBy: actor.id,
                       updatedAt: now,
                     },
+                    ...(outstandingAmount === 0
+                      ? {
+                          $push: {
+                            statusHistory: {
+                              status: "COMPLETED" as const,
+                              effectiveAt: now,
+                              actorId: actor.id,
+                              reason: "Fully repaid through payroll.",
+                            },
+                          },
+                        }
+                      : {}),
                   },
                   { session },
                 );
               if (!updatedLoan.modifiedCount)
                 throw new Error("LOAN_CHANGED");
+              const actualDeduction = applied.toDecimalPlaces(2).toNumber();
+              postedLoanInstallments.push({
+                _id: new ObjectId(),
+                loanId: loan._id,
+                employeeId: loan.employeeId,
+                outletId: loan.outletId,
+                payrollMonth: input.month,
+                openingBalance: loan.outstandingAmount,
+                scheduledDeduction: calculateLoanInstallment([loan], input.month),
+                actualDeduction,
+                closingBalance: outstandingAmount,
+                status: "POSTED",
+                actorId: actor.id,
+                createdAt: now,
+                updatedAt: now,
+              });
               remaining = remaining.minus(applied);
             }
+          }
+          for (const loan of loans) {
+            if (
+              postedLoanInstallments.some((entry) =>
+                entry.loanId.equals(loan._id),
+              )
+            )
+              continue;
+            const scheduledDeduction = calculateLoanInstallment(
+              [loan],
+              input.month,
+            );
+            if (scheduledDeduction <= 0) continue;
+            scheduledLoanInstallments.push({
+              _id: new ObjectId(),
+              loanId: loan._id,
+              employeeId: loan.employeeId,
+              outletId: loan.outletId,
+              payrollMonth: input.month,
+              openingBalance: loan.outstandingAmount,
+              scheduledDeduction,
+              actualDeduction: 0,
+              closingBalance: loan.outstandingAmount,
+              status: "SCHEDULED",
+              actorId: actor.id,
+              createdAt: now,
+              updatedAt: now,
+            });
           }
           const calculation = {
             ...computed,
@@ -631,6 +755,25 @@ export async function POST(request: Request) {
                 amount: advance.amount,
                 reference: advance.reference,
               })),
+              loans: loans.map((loan) => {
+                const installment = postedLoanInstallments.find((entry) =>
+                  entry.loanId.equals(loan._id),
+                );
+                return {
+                  loanId: loan._id,
+                  payrollMonth: input.month,
+                  originalAmount: loan.totalAmount,
+                  openingBalance: loan.outstandingAmount,
+                  scheduledDeduction: calculateLoanInstallment(
+                    [loan],
+                    input.month,
+                  ),
+                  actualDeduction: installment?.actualDeduction ?? 0,
+                  closingBalance:
+                    installment?.closingBalance ?? loan.outstandingAmount,
+                  status: installment ? "POSTED" : "SCHEDULED",
+                };
+              }),
               payrollPeriod: {
                 start: input.periodStart,
                 end: input.periodEnd,
@@ -647,6 +790,26 @@ export async function POST(request: Request) {
           await db
             .collection<SalaryRecordDocument>("salaryRecords")
             .insertOne(record, { session });
+          if (postedLoanInstallments.length)
+            await db
+              .collection<LoanInstallmentDocument>("loanInstallments")
+              .insertMany(
+                postedLoanInstallments.map((installment) => ({
+                  ...installment,
+                  payrollRecordId: record._id,
+                })),
+                { session },
+              );
+          if (scheduledLoanInstallments.length)
+            await db
+              .collection<LoanInstallmentDocument>("loanInstallments")
+              .insertMany(
+                scheduledLoanInstallments.map((installment) => ({
+                  ...installment,
+                  payrollRecordId: record._id,
+                })),
+                { session },
+              );
           if (advances.length) {
             const claimed = await db
               .collection<AdvanceDocument>("advances")
@@ -694,7 +857,7 @@ export async function POST(request: Request) {
       if (message.startsWith("LOAN_AMOUNT_EXCEEDS:"))
         return NextResponse.json(
           {
-            error: `The loan deduction entered exceeds the outstanding balance for ${message.split(":")[1]}.`,
+            error: `The loan deduction must equal the applicable scheduled installment and remain within the outstanding balance for ${message.split(":")[1]}.`,
           },
           { status: 400 },
         );

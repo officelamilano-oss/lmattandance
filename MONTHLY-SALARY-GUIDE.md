@@ -20,12 +20,13 @@ On the dashboard, **Attendance Summary** shows the day's Present, Absent, Half-d
 
 - **Days P / A / HD / WO** lists Present, Absent, Half-day, and Week-off attendance counts.
 - **Days filled** is the total of those four counts. It indicates how many attendance entries are included for the employee; it is not necessarily the number of calendar days in the month.
+- Full-month salary uses the existing 30-day divisor. Present and Week-off days count as paid units, half-days count as half a paid unit, unpaid absences reduce the payable units, and unmarked or unsubmitted dates are never inferred as absences.
 - **Gross** is earnings for the selected payroll period before deductions. It is calculated from the employee's monthly base salary and attendance, so a part-month payment is normally less than the full monthly base salary.
 - The employee details also show **Monthly base salary**, which is the fixed salary saved in the employee profile. The base is not the same as the period's gross earnings.
 - **Advances** contains only approved advances included in the generated payroll.
 - **Employee ESI** and **Employee PF (deduction)** are employee contributions deducted from net pay when enabled for the employee.
 - **Employer PF (tracked)** is tracked separately and is not deducted from the employee's net pay.
-- **Loan deduction** is any repayment entered as a payroll adjustment.
+- **Loan deduction** is the applicable monthly installment, capped at the opening balance and applied no earlier than the loan's deduction start month. Draft payroll records schedule but do not post repayments. Approval posts the installment once and records its opening balance, actual deduction, closing balance, and payroll reference. A skipped installment contributes zero and is not carried forward. Paused and completed loans are excluded.
 - **Net payable** is the resulting take-home amount.
 - **Not generated** means the employee is eligible to appear for the selected month, but no payroll record has been created for that employee and month yet. Financial payroll columns are blank until generation.
 
@@ -33,13 +34,13 @@ On the dashboard, **Attendance Summary** shows the day's Present, Absent, Half-d
 
 Select the month and outlet, then click **Generate** on an employee's row to open the payroll review modal. For employees who already have a payroll period in that month, use **Next period** on their latest payroll row.
 
-Choose the attendance period in the modal and review the calculated earnings and deductions. The default dates cover the next submitted, uncovered attendance period. You can edit gross earnings, ESI, employee PF, employer PF, and the loan deduction before generating. Approved advances are included automatically and must match their approved, unclaimed balance. Loan deduction is entered per payroll by `MAIN_ADMIN` and cannot exceed the employee's outstanding loan balance.
+Choose the attendance period in the modal and review the calculated earnings and deductions. The default dates cover the next submitted, uncovered attendance period. You can edit gross earnings, ESI, employee PF, employer PF, and the loan deduction before generating. Approved advances are included automatically and must match their approved, unclaimed balance. A loan deduction cannot exceed the applicable scheduled installment or the loan's outstanding balance. Loan creation and repayment-term edits are managed on the **Employee loans** page; remaining balances are not manually edited in the normal term editor.
 
 Payroll can be generated before month-end. Every date the employee was eligible to work in the selected period must have submitted attendance, and the period cannot include future dates. A new employee can therefore be paid for their submitted days without waiting for the month to finish. Each saved payroll period records its start and end dates. Later payroll periods can cover the remaining, non-overlapping dates in the same month. Existing legacy full-month payroll records cannot be split retroactively.
 
-After deploying this change, run `npm run setup:db` once so the database replaces the old one-record-per-month payroll index with the period-aware index. This preserves payroll records; it only updates the index that controls duplicate payroll periods.
+After deploying this change, run `npm run setup:db` once so the database replaces the old one-record-per-month payroll index with the period-aware index, creates the unique loan-installment-per-payroll-month index, and creates the loan transaction history index. This preserves payroll records; it only updates indexes and defaults.
 
-**Generate draft** creates an editable **DRAFT** record. If you have approval permission, **Generate and approve this payroll** creates the record already **APPROVED**. Approval prevents further adjustments. Neither action marks the payroll as paid; use **Mark paid** after the employee has been paid. A partial payment does not prevent generating another period for the remaining dates.
+**Generate draft** creates an editable **DRAFT** record and a scheduled installment. It does not change the loan balance. If you have approval permission, **Generate and approve this payroll** posts the scheduled deduction and creates an **APPROVED** record in one database transaction. Approving a draft recalculates its loan deduction from current terms and balance before posting. Approval prevents further adjustments. Neither action marks the payroll as paid; use **Mark paid** after the employee has been paid. A partial payment does not prevent generating another period for the remaining dates.
 
 ## Reviewing and completing payroll
 
@@ -52,7 +53,7 @@ Depending on the permissions granted to your account, a generated draft may be a
 
 The page requires `salary.read` to view payroll. The **Generate** action requires `salary.generate`; draft adjustments, approval, and payment require their respective `salary.adjust`, `salary.approve`, and `salary.pay` permissions. A **MAIN_ADMIN** can grant these permissions directly or through a designation in **Access management**.
 
-All payroll actions are available from the row's **Manage** overlay. `MAIN_ADMIN` can correct a paid record's gross, advances, employee ESI, employee PF, employer PF, and loan deduction; the net payable is recalculated and the correction reason is written to the audit log. These are payroll corrections and do not rewrite the original advance records. A changed loan deduction also updates the outstanding loan balance; increasing it is limited to the available balance. `MAIN_ADMIN` can use **Mark as unpaid** to return a paid record to **APPROVED**, clearing its payment timestamp so it can be marked paid again. Enter a reason for either operation.
+All payroll actions are available from the row's **Manage** overlay. `MAIN_ADMIN` can correct a paid record's gross, advances, employee ESI, employee PF, and employer PF; the net payable is recalculated and the correction reason is written to the audit log. Paid loan installments cannot be edited in place: use **Reverse posted installment** on the Employee loans page, which restores the balance and records the reversal in the payroll and loan histories. `MAIN_ADMIN` can use **Mark as unpaid** to return a paid record to **APPROVED**, clearing its payment timestamp so it can be marked paid again. Enter a reason for either operation.
 
 ## CSV download
 

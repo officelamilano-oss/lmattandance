@@ -1,0 +1,530 @@
+# MASTER PROMPT: Employee Loan Management, Automatic Repayment, Skip Installment, Loan Closure & Payroll Integration
+You are working on my existing La Milano Operations / Attendance Management System built with Next.js and TypeScript.
+
+Your task is to fully improve the existing Employee Loans module and integrate it with the existing attendance and monthly payroll system.
+
+**Important:** Implement this in the existing application. Do not create a separate loan module, duplicate payroll functionality, replace existing business logic unnecessarily, or redesign unrelated pages.
+
+## PHASE 1 — INSPECT THE EXISTING PROJECT BEFORE CODING
+Before modifying any files, inspect:
+
+1. Existing Employee Loans page and "Edit loan balance" modal.
+2. Employee and outlet data models.
+3. Existing database schema, ORM, migrations, and relationships.
+4. Loan APIs, server actions, validation schemas, and frontend form state.
+5. Attendance calculations and monthly attendance reports.
+6. Payroll calculations, salary components, advances, ESI, PF, and payable amount.
+7. Existing permissions, roles, authentication, and audit logging.
+8. Existing table filters, pagination, dialogs, toast notifications, and export functionality.
+9. Existing testing, lint, TypeScript, and build commands.
+Identify the exact files and components that need to change. Briefly explain the implementation plan before editing files, then implement it.
+
+Reuse the current project's architecture, design system, and established conventions.
+
+## PHASE 2 — IMPROVE THE EMPLOYEE LOAN FORM
+Update the existing Employee Loans page and the current "Edit loan balance" modal.
+
+The loan form should support:
+
+- Employee
+- Employee ID
+- Outlet
+- Original loan amount (INR)
+- Remaining loan balance (INR)
+- Total amount repaid
+- Repayment method
+- Monthly deduction amount (INR)
+- Deduction start month
+- Repayment duration in months
+- Expected completion month
+- Notes
+- Loan status
+
+### Repayment methods
+Provide three repayment methods.
+
+**Method A: Fixed monthly deduction**
+
+Example:
+
+- Original loan: ₹10,000
+- Monthly deduction: ₹600
+- Start month: October 2026
+Calculate the expected repayment duration and completion month automatically.
+
+Expected schedule:
+
+- October 2026 through January 2028: 16 installments of ₹600? No. Calculate correctly from the actual dates and remaining amount.
+- The correct mathematical result is 16 installments of ₹600 and a final installment of ₹400, requiring 17 monthly installments in total.
+- If the first installment is October 2026, the final installment is February 2028.
+Do not hardcode this example. Calculate all values dynamically.
+
+**Method B: Fixed number of installments**
+
+Example:
+
+- Loan amount: ₹10,000
+- Number of installments: 10
+Calculate approximately ₹1,000 per month, adjusting the final installment for any rounding difference.
+
+**Method C: Start month and end month**
+
+Allow the authorized user to select the first and final deduction months. Calculate the number of installments and distribute the outstanding amount across those months, adjusting the last installment when necessary.
+
+### Form behaviour
+
+- Remaining balance must be calculated from the loan ledger and shown as read-only during normal editing.
+- Do not require users to manually update the remaining balance each month.
+- Monthly deduction amount and repayment terms may be changed by authorized users.
+- New repayment terms apply prospectively only.
+- Previously posted deductions must never be rewritten.
+- Require a valid deduction start month and positive loan amount.
+- Do not allow installments greater than the outstanding balance.
+- Clearly display the next deduction month and expected completion month.
+Provide a separate authorized balance-adjustment action for exceptional corrections. Require a reason and record the user, date, amount, and audit history.
+
+## PHASE 3 — AUTOMATIC REPAYMENT SCHEDULE AND LEDGER
+Generate and maintain a repayment schedule for each loan.
+
+Each installment must contain:
+
+- Loan ID
+- Employee ID
+- Outlet ID
+- Payroll month
+- Opening balance
+- Scheduled deduction
+- Actual deduction
+- Closing balance
+- Status
+- Payroll reference
+- Created timestamp
+- Updated timestamp
+Supported installment statuses:
+
+- Scheduled
+- Posted
+- Skipped
+- Reversed
+
+### Calculation rules
+Use a consistent ledger-based approach.
+
+Closing balance = Opening balance + Additional disbursements + Approved adjustments - Posted deductions.
+
+Rules:
+
+1. Never deduct more than the outstanding balance.
+2. Never create deductions before the start month.
+3. Automatically adjust the final installment to the exact remaining amount.
+4. Stop deductions when the outstanding balance reaches zero.
+5. Automatically mark a fully repaid loan as Completed.
+6. Do not create duplicate installments for the same loan and payroll month.
+7. Do not silently carry skipped or missed installments forward.
+8. Keep posted financial transactions immutable.
+9. Corrections must use controlled reversals or adjustments.
+10. Pausing a loan must preserve its balance and repayment history.
+11. Prevent concurrent requests from posting the same deduction twice.
+12. Use database transactions and suitable uniqueness constraints.
+Historical reports must use the balance and deduction records applicable to the selected payroll month, not today's balance.
+
+## PHASE 4 — EMPLOYEE-WISE LOAN TABLE
+Keep the existing Employee Loans page and update its table.
+
+Use these columns:
+
+Employee | Outlet | Original loan | Remaining balance | Monthly deduction | Notes | Actions
+
+Do not create a duplicate page.
+
+### Loan status filters
+Add the following filters above the table:
+
+- All Loans
+- Ongoing
+- Completed
+- Paused
+Default filter: Ongoing.
+
+Definitions:
+
+**Ongoing:** Loan has a positive outstanding balance and is active.
+
+**Completed:** Loan has been fully repaid or closed through a properly authorized and recorded settlement/write-off process.
+
+**Paused:** Loan deductions are temporarily suspended, but the balance and history remain intact.
+
+**All Loans:** Show every loan, regardless of status.
+
+Show the current status as a compact badge in the employee row or existing details area.
+
+Add pagination and search using the existing application patterns.
+
+### Actions column
+Provide the following actions where applicable:
+
+- Edit Repayment Terms
+- Skip This Month
+- View Repayment History
+- Pause Loan
+- Resume Loan
+- Mark as Completed
+- Adjust Balance, if authorized
+Use a compact actions menu if necessary to preserve the responsive table layout.
+
+Hide or disable inappropriate actions for Completed loans. Completed loans must remain accessible through the Completed and All Loans filters.
+
+## PHASE 5 — SKIP THIS MONTH FEATURE
+Add a **Skip This Month** action for each eligible employee loan.
+
+The selected payroll month must be explicit. By default, use the currently selected payroll month in the application.
+
+When the user selects Skip This Month, open a confirmation dialog containing:
+
+- Employee name
+- Employee ID
+- Outlet
+- Selected payroll month
+- Scheduled deduction amount
+- Remaining balance
+- Mandatory reason for skipping
+- Confirm Skip button
+- Cancel button
+
+### Skip behaviour
+Example:
+
+- Original loan: ₹10,000
+- Remaining balance: ₹8,000
+- Monthly deduction: ₹600
+- Selected month: October 2026
+If October is skipped:
+
+- Deduction for October must be ₹0.
+- Remaining balance must stay ₹8,000 for that month.
+- The loan remains Ongoing.
+- October's installment status becomes Skipped.
+- Save the skip reason.
+- Save who performed the action and when.
+- Display the skipped installment in repayment history.
+- Show the correct status in the monthly payroll report.
+The normal ₹600 deduction should resume in November 2026 if the loan remains eligible.
+
+Do not automatically add the skipped ₹600 to November's installment.
+
+If an arrears/carry-forward policy is needed, make it an explicit authorized choice. Do not introduce automatic arrears collection without approval.
+
+### Skip restrictions
+
+- Prevent skipping a Completed loan.
+- Prevent skipping a Paused loan unless the existing business policy explicitly allows it.
+- Prevent skipping before the loan's start month.
+- Prevent skipping a month that has already been posted or finalized.
+- Prevent duplicate skip records for the same loan and payroll month.
+- If the installment is already skipped, display its current status rather than processing it again.
+- If payroll is finalized, use the existing authorized payroll correction/reversal process.
+
+## PHASE 6 — MARK AS COMPLETED BUTTON
+Add a **Mark as Completed** action in the Actions column of each Ongoing loan row.
+
+This is a required feature.
+
+### Scenario A: Outstanding balance is zero
+If the remaining balance is ₹0:
+
+- Automatically mark the loan Completed.
+- Record the completion date.
+- Disable future deductions.
+- Remove it from the Ongoing filter.
+- Display it under Completed and All Loans.
+- Preserve repayment history.
+- Keep View Repayment History available.
+
+### Scenario B: Outstanding balance is greater than zero
+Do not allow the user to silently close the loan or falsely mark it as fully repaid.
+
+When the user selects Mark as Completed, open a confirmation dialog showing:
+
+- Employee name
+- Outlet
+- Original loan amount
+- Total amount repaid
+- Remaining balance
+- Closure reason
+- Settlement date, when applicable
+- Settlement amount, when applicable
+- Notes or reference
+Provide authorized closure options:
+
+1. Fully settled outside payroll.
+2. Loan waived / written off.
+3. Other approved closure reason.
+For external settlement:
+
+- Record the settlement amount and date.
+- Record the payment reference or notes.
+- Apply the settlement through a proper ledger transaction.
+- Close the loan only when the balance is settled or the authorized closure process explicitly resolves the remainder.
+For a write-off:
+
+- Record the outstanding amount written off.
+- Require a mandatory reason.
+- Require the appropriate authorization.
+- Record the financial adjustment in the ledger.
+- Preserve the original loan amount and all previous repayments.
+For Other:
+
+- Require a detailed reason.
+- Require authorization.
+- Use a controlled adjustment or settlement process rather than silently setting the balance to zero.
+
+### Completion safeguards
+
+- Record the user who completed the loan.
+- Record completion date and time.
+- Record the reason and financial adjustment.
+- Add an audit log entry.
+- Do not delete repayment history.
+- Do not silently modify finalized payroll records.
+- Prevent further deductions after completion.
+- Disable Skip This Month, Pause, and normal repayment-term editing after completion.
+- Keep View Repayment History available.
+Do not provide an unrestricted button that changes the status to Completed while an unpaid balance remains without a recorded, authorized financial closure transaction.
+
+## PHASE 7 — PAUSE AND RESUME LOAN
+Provide Pause Loan and Resume Loan actions.
+
+Pause Loan:
+
+- Require a confirmation.
+- Require a reason.
+- Record the user and timestamp.
+- Do not delete scheduled or historical records.
+- Do not deduct installments during the paused period.
+- Preserve the outstanding balance.
+Resume Loan:
+
+- Require appropriate authorization.
+- Allow the user to specify the effective payroll month when needed.
+- Resume future deductions according to the configured repayment terms.
+- Do not automatically collect missed installments unless an authorized arrears policy explicitly allows it.
+Maintain the existing audit history.
+
+## PHASE 8 — MONTHLY PAYROLL INTEGRATION
+Integrate loan deductions into the existing monthly attendance and payroll report.
+
+Maintain these columns in the required order:
+
+Employee | Present | Absent | Half day | Week off | Filled days | Not marked | Fixed salary | Advances | Employee ESI | Employee PF | Employer PF | Original loan | Remaining balance | Monthly deduction | Payable
+
+Use the existing employee, attendance, outlet, and payroll records.
+
+### Payroll calculations
+First calculate attendance-adjusted salary using the existing payroll logic and configured attendance policy.
+
+Then calculate:
+
+Payable = Attendance-adjusted salary
+- Advances
+- Employee ESI
+- Employee PF
+- Actual posted loan deduction
+
+Important:
+
+- Employer PF is an employer expense. Never subtract Employer PF from employee payable.
+- Never subtract the original loan amount from monthly salary.
+- Never subtract the entire remaining loan balance unless that is the actual authorized final deduction.
+- Deduct only the installment applicable to the selected payroll month.
+- Cap the deduction at the actual outstanding balance.
+- A skipped installment must contribute ₹0 to the deduction.
+- A paused or completed loan must not generate a deduction.
+- Do not deduct anything before the start month.
+- Do not automatically deduct arrears from later months.
+- Prevent duplicate deductions if payroll is retried.
+- Follow the existing authorization and payroll finalization workflow.
+
+### Attendance rules
+Inspect and preserve the current attendance calculation logic.
+
+Clearly document:
+
+- Salary divisor used by the existing payroll system.
+- Treatment of Present, Absent, Half day, Week off, and Not marked days.
+- Treatment of pending attendance submissions.
+- Rules for paid and unpaid days.
+Do not automatically convert unmarked or pending attendance into Absent.
+
+If the existing application has a draft payroll calculation, recalculate draft payroll when attendance or loan terms change. Do not silently modify finalized payroll.
+
+### Payroll display
+For each employee, show the selected month's:
+
+- Original loan amount
+- Opening or applicable outstanding balance
+- Monthly scheduled deduction
+- Actual posted deduction
+- Closing remaining balance
+- Skipped, Scheduled, Posted, or Reversed status, where relevant
+Keep the required payroll columns. Additional details can be shown in an existing expandable row, tooltip, or loan-history dialog if the table would become too wide.
+
+## PHASE 9 — REPAYMENT HISTORY AND REPORTING
+Provide an employee-wise repayment history accessible from the Actions column.
+
+Show:
+
+- Payroll month
+- Opening balance
+- Scheduled deduction
+- Actual deduction
+- Closing balance
+- Installment status
+- Skip reason, if skipped
+- Reversal information, if reversed
+- Balance adjustment details
+- Closure reason, if completed with an outstanding balance
+- Payroll reference
+- Transaction date
+- User who performed the action
+Add or improve the following reports and filters:
+
+- Monthly loan deduction report
+- Employee-wise repayment history
+- Active/Ongoing loans
+- Completed loans
+- Paused loans
+- Total outstanding loan balance
+- Scheduled versus actual deductions
+- Expected completion month
+- Export using the existing application's export mechanism
+Use historical ledger records for past reports. Do not recalculate past balances from current loan settings.
+
+## PHASE 10 — FIX THE EXISTING VALIDATION ERROR
+The existing loan form displays:
+
+Invalid request: monthlyDeductionAmount: Invalid input: expected number, received string
+
+Inspect the complete path from frontend form state to API request and server-side validation.
+
+Fix the root cause.
+
+Requirements:
+
+- Convert valid numeric strings into validated numbers at the appropriate boundary.
+- Handle empty strings explicitly; do not silently convert them to zero.
+- Reject negative, invalid, NaN, and infinite monetary values.
+- Validate original loan amount, monthly deduction, installment count, and all related fields.
+- Preserve a legitimate zero balance.
+- Ensure consistent field names and types across frontend, backend, validation schemas, and database.
+- Follow existing currency precision conventions.
+- Return clear validation errors to the UI.
+- Do not weaken server-side validation merely to bypass the error.
+
+## PHASE 11 — DATABASE, SECURITY, AND AUDIT
+Inspect the current database and ORM before deciding whether migrations are required.
+
+Reuse existing tables and fields wherever possible.
+
+Add only the necessary schema changes to support:
+
+- Repayment method and terms
+- Repayment schedule
+- Loan transactions or ledger
+- Skip records and reasons
+- Loan status and closure details
+- Balance adjustments
+- Audit history
+- Payroll linkage and installment uniqueness
+Requirements:
+
+- Use database transactions for financial operations.
+- Enforce uniqueness for a loan's installment in a given payroll month.
+- Prevent concurrent duplicate deductions.
+- Protect all financial operations with the existing authentication and authorization system.
+- Validate permissions on the server, not only in the frontend.
+- Record audit history for loan creation, changes to future repayment terms, skipping, pausing, resuming, balance adjustments, settlement, write-off, completion, and reversals.
+- Preserve existing financial records.
+- Do not delete production data.
+- Do not modify unrelated schema or functionality.
+Create safe, backward-compatible migrations where necessary. Follow the project's established deployment practices.
+
+## PHASE 12 — UI AND USER EXPERIENCE
+Maintain the existing La Milano Operations design system.
+
+Reuse existing:
+
+- Layout
+- Typography
+- Colours
+- Table styles
+- Modals and confirmation dialogs
+- Buttons
+- Toast notifications
+- Filters
+- Pagination
+- Loading states
+- Error handling
+- Responsive design
+Make the loan page easy to operate for outlet and head-office users.
+
+Show clear loan status badges and current-month installment status.
+
+Provide confirmation dialogs for sensitive actions. Display clear success and error notifications.
+
+Do not change unrelated pages or introduce unnecessary redesigns.
+
+## PHASE 13 — TESTS AND VERIFICATION
+Add or update tests using the existing project's test framework.
+
+Cover at least these scenarios:
+
+1. ₹10,000 loan with ₹600 monthly deduction.
+2. Correct expected completion month and 17 total installments when the first ₹600 installment is October 2026.
+3. Final installment of ₹400.
+4. Automatic completion after the final deduction.
+5. Changing monthly deduction prospectively.
+6. No changes to previously posted installments.
+7. No deduction before the start month.
+8. Skipping October and resuming normal deduction in November.
+9. No automatic arrears after a skipped month.
+10. Mandatory skip reason.
+11. Preventing duplicate skip records.
+12. Preventing skips for finalized payroll.
+13. Preventing duplicate payroll deductions.
+14. Pausing and resuming loans.
+15. Completed loans excluded from future deductions.
+16. Authorized external settlement.
+17. Authorized write-off and audit history.
+18. Preventing unauthorized loan closure.
+19. Correct balance adjustment calculations.
+20. Correct employee payable after loan deductions.
+21. Employer PF excluded from employee payable deductions.
+22. Pending attendance not automatically counted as absent.
+23. Numeric string conversion.
+24. Empty, negative, NaN, and infinite input rejection.
+25. Zero balance handling.
+26. Reversal and correction workflow.
+27. Historical payroll balances remain unchanged after future loan-term changes.
+28. Concurrent requests cannot post the same installment twice.
+29. Loan filters correctly show Ongoing, Completed, Paused, and All Loans.
+30. Skip This Month and Mark as Completed actions behave correctly in the UI.
+Run the project's existing lint, type-check, test, and build commands where available. Validate database migrations using the project's established safe process.
+
+Fix any issues introduced by your changes.
+
+Do not claim tests passed unless they were actually executed successfully.
+
+## PHASE 14 — IMPLEMENTATION SUMMARY
+After completing the implementation, report:
+
+1. Files changed.
+2. Database migrations created and their purpose.
+3. APIs, schemas, and validation changes.
+4. Loan repayment calculation and completion logic.
+5. Skip This Month implementation.
+6. Mark as Completed, settlement, and write-off behaviour.
+7. Payroll integration and payable formula.
+8. Permissions and audit logging.
+9. Tests executed and their actual results.
+10. Any unresolved issues or business rules requiring confirmation.
+Implement the working solution in the existing codebase. Do not stop after writing a plan, mockup, or code snippets. Inspect first, implement carefully, verify the changes, and provide an honest completion summary.

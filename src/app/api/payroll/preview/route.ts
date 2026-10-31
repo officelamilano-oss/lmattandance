@@ -4,13 +4,17 @@ import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError } from "@/lib/http";
-import { calculatePayroll } from "@/lib/payroll/calculate";
+import {
+  calculateLoanInstallment,
+  calculatePayroll,
+} from "@/lib/payroll/calculate";
 import { getMonthDates } from "@/lib/payroll/dates";
 import type {
   AdvanceDocument,
   AttendanceDayDocument,
   EmployeeDocument,
   LoanDocument,
+  LoanInstallmentDocument,
   SalarySettings,
 } from "@/lib/models";
 import {
@@ -175,12 +179,37 @@ export async function GET(request: Request) {
               employeeId: employee._id,
               outletId,
               outstandingAmount: { $gt: 0 },
+              status: { $nin: ["PAUSED", "COMPLETED"] },
+              $or: [
+                { deductionStartMonth: { $exists: false } },
+                { deductionStartMonth: { $lte: input.month } },
+              ],
             })
             .toArray()
         : [];
+    const skippedInstallments =
+      actor.role === "MAIN_ADMIN"
+        ? await db
+            .collection<LoanInstallmentDocument>("loanInstallments")
+            .find({
+              employeeId: employee._id,
+              outletId,
+              payrollMonth: input.month,
+              status: "SKIPPED",
+            })
+            .project<{ loanId: ObjectId }>({ loanId: 1 })
+            .toArray()
+        : [];
+    const skippedLoanIds = new Set(
+      skippedInstallments.map((installment) => installment.loanId.toHexString()),
+    );
     const loanBalance = loans
       .reduce((sum, loan) => sum.plus(loan.outstandingAmount), new Decimal(0))
       .toNumber();
+    const loanDeduction = calculateLoanInstallment(
+      loans.filter((loan) => !skippedLoanIds.has(loan._id.toHexString())),
+      input.month,
+    );
     const monthEnd = `${input.month}-${String(daysInMonth).padStart(2, "0")}`;
     const calculation = calculatePayroll({
       monthlyBaseSalary: employee.monthlyBaseSalary,
@@ -201,7 +230,7 @@ export async function GET(request: Request) {
           ? 30
           : applicableDates.length,
       advances: advanceTotal,
-      loanDeduction: 0,
+      loanDeduction,
       overtime: 0,
       allowances: 0,
       otherDeductions: 0,
@@ -226,7 +255,7 @@ export async function GET(request: Request) {
         esi: calculation.esi,
         employeePf: calculation.employeePf,
         employerPf: calculation.employerPf,
-        loanDeduction: 0,
+        loanDeduction,
       },
       advances: advances.map((advance) => ({
         _id: advance._id.toHexString(),

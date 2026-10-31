@@ -1,10 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import bcrypt from "bcryptjs";
-import { calculatePayroll } from "../src/lib/payroll/calculate.ts";
+import { ObjectId } from "mongodb";
+import {
+  isAttendanceEntryLocked,
+  isAttendanceOutletSubmitted,
+} from "../src/lib/attendance.ts";
+import {
+  calculateLoanInstallment,
+  calculatePayroll,
+} from "../src/lib/payroll/calculate.ts";
 import { getIndiaDate, getIndiaMonth, getMonthDates } from "../src/lib/payroll/dates.ts";
 import { findExistingPayrollEmployees } from "../src/lib/payroll/duplicate.ts";
 import { hashPassword, verifyPassword } from "../src/lib/passwords.ts";
+import {
+  attendanceSchema,
+  loanSchema,
+} from "../src/lib/validation/business.ts";
+import {
+  expectedCompletionMonth,
+  loanScheduleSummary,
+} from "../src/lib/payroll/loans.ts";
 
 const base = {
   monthlyBaseSalary: 30000,
@@ -23,6 +39,54 @@ const base = {
   employeePfPercent: 12,
   employerPfPercent: 12,
 };
+
+test("attendance updates accept clear requests for saved draft entries", () => {
+  const parsed = attendanceSchema.parse({
+    outletId: "aaaaaaaaaaaaaaaaaaaaaaaa",
+    date: "2026-10-29",
+    entries: [],
+    clearEmployeeIds: ["bbbbbbbbbbbbbbbbbbbbbbbb"],
+  });
+  assert.deepEqual(parsed.clearEmployeeIds, ["bbbbbbbbbbbbbbbbbbbbbbbb"]);
+});
+
+test("attendance locks only submitted entries for non-admin users", () => {
+  assert.equal(isAttendanceEntryLocked(false, "OUTLET_USER"), false);
+  assert.equal(isAttendanceEntryLocked(true, "OUTLET_USER"), true);
+  assert.equal(isAttendanceEntryLocked(true, "CO_ADMIN"), true);
+  assert.equal(isAttendanceEntryLocked(true, "MAIN_ADMIN"), false);
+});
+
+test("an outlet is submitted only after every active employee is submitted", () => {
+  const firstEmployee = new ObjectId();
+  const secondEmployee = new ObjectId();
+  const day = {
+    status: "SUBMITTED",
+    entries: [
+      {
+        employeeId: firstEmployee,
+        status: "P",
+        submitted: true,
+      },
+      {
+        employeeId: secondEmployee,
+        status: "A",
+        submitted: false,
+      },
+    ],
+  };
+  const activeEmployees = [{ _id: firstEmployee }, { _id: secondEmployee }];
+
+  assert.equal(isAttendanceOutletSubmitted(day, activeEmployees), false);
+  assert.equal(
+    isAttendanceOutletSubmitted(day, [{ _id: firstEmployee }]),
+    true,
+  );
+  assert.equal(
+    isAttendanceOutletSubmitted({ ...day, status: "DRAFT" }, []),
+    false,
+  );
+});
 
 test("calendar divisor handles 28, 29, 30, and 31-day months including leap years", () => {
   assert.deepEqual(
@@ -224,6 +288,28 @@ test("PF is optional and employer PF is reported separately from take-home", () 
   assert.equal(result.netPayable, 22880);
 });
 
+test("employer PF never reduces employee payable, while loan deductions do", () => {
+  const withoutEmployerPf = calculatePayroll({
+    ...base,
+    daysInMonth: 30,
+    pfEnabled: true,
+    employeePfPercent: 12,
+    employerPfPercent: 0,
+    loanDeduction: 600,
+  });
+  const withEmployerPf = calculatePayroll({
+    ...base,
+    daysInMonth: 30,
+    pfEnabled: true,
+    employeePfPercent: 12,
+    employerPfPercent: 13,
+    loanDeduction: 600,
+  });
+  assert.equal(withEmployerPf.employerPf, 3380);
+  assert.equal(withEmployerPf.netPayable, withoutEmployerPf.netPayable);
+  assert.equal(withEmployerPf.loanDeduction, 600);
+});
+
 test("enabled ESI defaults to 0.75 percent and reduces take-home pay", () => {
   const result = calculatePayroll({
     ...base,
@@ -246,6 +332,223 @@ test("loan repayments and ESI are included in take-home deductions", () => {
   assert.equal(result.loanDeduction, 1200);
   assert.equal(result.esi, 195);
   assert.equal(result.netPayable, 24605);
+});
+
+test("monthly loan deduction is capped at the remaining loan balance", () => {
+  assert.equal(
+    calculateLoanInstallment([
+      { outstandingAmount: 10000, monthlyDeductionAmount: 1000 },
+      { outstandingAmount: 500, monthlyDeductionAmount: 1000 },
+      { outstandingAmount: 5000 },
+    ]),
+    1500,
+  );
+});
+
+test("loan installments respect the start month, status, and final balance", () => {
+  const loan = {
+    outstandingAmount: 10000,
+    monthlyDeductionAmount: 600,
+    deductionStartMonth: "2026-10",
+    status: "ACTIVE",
+  };
+  assert.equal(calculateLoanInstallment([loan], "2026-09"), 0);
+  assert.equal(calculateLoanInstallment([loan], "2026-10"), 600);
+  assert.equal(
+    calculateLoanInstallment(
+      [{ ...loan, outstandingAmount: 400 }],
+      "2028-02",
+    ),
+    400,
+  );
+  assert.equal(
+    calculateLoanInstallment([{ ...loan, status: "PAUSED" }], "2026-10"),
+    0,
+  );
+  assert.equal(
+    calculateLoanInstallment(
+      [{ ...loan, status: "COMPLETED" }],
+      "2026-10",
+    ),
+    0,
+  );
+});
+
+test("a 10000 loan with 600 deductions ends in February 2028 with a 400 final payment", () => {
+  const schedule = loanScheduleSummary({
+    amount: 10000,
+    method: "FIXED_AMOUNT",
+    monthlyDeductionAmount: 600,
+    startMonth: "2026-10",
+  });
+  assert.equal(schedule.installmentCount, 17);
+  assert.equal(schedule.endMonth, "2028-02");
+  assert.equal(
+    calculateLoanInstallment(
+      [{ outstandingAmount: 400, monthlyDeductionAmount: 600 }],
+      "2028-02",
+    ),
+    400,
+  );
+  assert.equal(
+    expectedCompletionMonth({
+      balance: 10000,
+      monthlyDeductionAmount: 600,
+      startMonth: "2026-10",
+    }),
+    "2028-02",
+  );
+});
+
+test("fixed installment and date-range methods calculate even monthly deductions", () => {
+  assert.deepEqual(
+    loanScheduleSummary({
+      amount: 10000,
+      method: "FIXED_INSTALLMENTS",
+      installmentCount: 10,
+      monthlyDeductionAmount: 0,
+      startMonth: "2026-10",
+    }),
+    {
+      monthlyDeductionAmount: 1000,
+      installmentCount: 10,
+      endMonth: "2027-07",
+    },
+  );
+  assert.deepEqual(
+    loanScheduleSummary({
+      amount: 10000,
+      method: "DATE_RANGE",
+      endMonth: "2027-07",
+      monthlyDeductionAmount: 0,
+      startMonth: "2026-10",
+    }),
+    {
+      monthlyDeductionAmount: 1000,
+      installmentCount: 10,
+      endMonth: "2027-07",
+    },
+  );
+});
+
+test("fixed installment schedules round up monthly amounts and cap the exact final balance", () => {
+  const schedule = loanScheduleSummary({
+    amount: 10000,
+    method: "FIXED_INSTALLMENTS",
+    installmentCount: 3,
+    monthlyDeductionAmount: 0,
+    startMonth: "2026-10",
+  });
+  assert.equal(schedule.monthlyDeductionAmount, 3333.34);
+  assert.equal(schedule.installmentCount, 3);
+  assert.equal(schedule.endMonth, "2026-12");
+  assert.equal(
+    calculateLoanInstallment(
+      [
+        {
+          outstandingAmount: 3333.32,
+          monthlyDeductionAmount: schedule.monthlyDeductionAmount,
+          repaymentMethod: "FIXED_INSTALLMENTS",
+          installmentCount: schedule.installmentCount,
+          deductionStartMonth: "2026-10",
+        },
+      ],
+      "2026-12",
+    ),
+    3333.32,
+  );
+});
+
+test("repayment schedule does not start before its start month or continue past its end", () => {
+  const dateRangeLoan = {
+    outstandingAmount: 500,
+    monthlyDeductionAmount: 100,
+    repaymentMethod: "DATE_RANGE",
+    deductionStartMonth: "2026-10",
+    deductionEndMonth: "2026-12",
+  };
+  assert.equal(calculateLoanInstallment([dateRangeLoan], "2026-09"), 0);
+  assert.equal(calculateLoanInstallment([dateRangeLoan], "2027-01"), 0);
+  assert.equal(calculateLoanInstallment([dateRangeLoan], "2026-10"), 100);
+});
+
+test("resuming a loan defers deductions until its effective payroll month", () => {
+  const resumedLoan = {
+    outstandingAmount: 1200,
+    monthlyDeductionAmount: 600,
+    deductionStartMonth: "2026-09",
+    status: "ACTIVE",
+    resumeEffectiveMonth: "2026-12",
+  };
+  assert.equal(calculateLoanInstallment([resumedLoan], "2026-11"), 0);
+  assert.equal(calculateLoanInstallment([resumedLoan], "2026-12"), 600);
+});
+
+test("a zero-balance loan has no future installment", () => {
+  assert.equal(
+    calculateLoanInstallment(
+      [{ outstandingAmount: 0, monthlyDeductionAmount: 600 }],
+      "2026-10",
+    ),
+    0,
+  );
+});
+
+test("loan validation converts numeric strings and rejects empty or invalid money", () => {
+  const loan = loanSchema.parse({
+    employeeId: "507f1f77bcf86cd799439011",
+    outletId: "507f1f77bcf86cd799439012",
+    totalAmount: "10000",
+    monthlyDeductionAmount: "600",
+    deductionStartMonth: "2026-10",
+  });
+  assert.equal(loan.totalAmount, 10000);
+  assert.equal(loan.monthlyDeductionAmount, 600);
+
+  const installmentLoan = loanSchema.parse({
+    employeeId: "507f1f77bcf86cd799439011",
+    outletId: "507f1f77bcf86cd799439012",
+    totalAmount: "10000",
+    monthlyDeductionAmount: "1000",
+    deductionStartMonth: "2026-10",
+    repaymentMethod: "FIXED_INSTALLMENTS",
+    installmentCount: "10",
+  });
+  assert.equal(installmentLoan.installmentCount, 10);
+
+  for (const invalidAmount of ["", "-1", "NaN", "Infinity"]) {
+    assert.throws(() =>
+      loanSchema.parse({
+        employeeId: "507f1f77bcf86cd799439011",
+        outletId: "507f1f77bcf86cd799439012",
+        totalAmount: "10000",
+        monthlyDeductionAmount: invalidAmount,
+        deductionStartMonth: "2026-10",
+      }),
+    );
+  }
+  assert.throws(() =>
+    loanSchema.parse({
+      employeeId: "507f1f77bcf86cd799439011",
+      outletId: "507f1f77bcf86cd799439012",
+      totalAmount: "10000",
+      monthlyDeductionAmount: "600",
+      deductionStartMonth: "2026-10",
+      repaymentMethod: "FIXED_INSTALLMENTS",
+      installmentCount: "",
+    }),
+  );
+  assert.throws(() =>
+    loanSchema.parse({
+      employeeId: "507f1f77bcf86cd799439011",
+      outletId: "507f1f77bcf86cd799439012",
+      totalAmount: "10000",
+      monthlyDeductionAmount: "600",
+      deductionStartMonth: "2026-10",
+      repaymentMethod: "DATE_RANGE",
+      deductionEndMonth: "2026-09",
+    }),
+  );
 });
 
 test("approved advances, other deductions, overtime, and allowances reconcile", () => {

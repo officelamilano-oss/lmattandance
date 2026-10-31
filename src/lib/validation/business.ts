@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { dateOnlySchema, objectIdSchema } from "./common";
+import { dateOnlySchema, monthSchema, objectIdSchema } from "./common";
 import {
   staffPermissionSet,
   staffPermissionValues,
@@ -9,7 +9,11 @@ export const employeeSchema = z.object({
   employeeCode: z.string().trim().min(1).max(30),
   fullName: z.string().trim().min(2).max(120),
   dateOfJoining: dateOnlySchema,
+  dateOfBirth: dateOnlySchema.nullable().optional(),
+  gender: z.enum(["MALE", "FEMALE"]).nullable().optional(),
   designation: z.string().trim().min(1).max(80),
+  designationKey: z.string().trim().max(80).nullable().optional(),
+  designationGroup: z.enum(["HEAD_OFFICE", "OUTLET"]).nullable().optional(),
   employmentType: z.enum(["FULL_TIME", "PART_TIME"]).default("FULL_TIME"),
   mobile: z.string().trim().min(7).max(20),
   outletId: objectIdSchema,
@@ -21,6 +25,62 @@ export const employeeSchema = z.object({
   esiEnabled: z.boolean().optional().default(false),
   esiPercent: z.number().min(0).max(100).optional().default(0.75),
   notes: z.string().trim().max(1000).optional().default(""),
+  beneficiaryName: z.string().trim().max(120).nullable().optional(),
+  bankName: z.string().trim().max(120).nullable().optional(),
+  branchName: z.string().trim().max(120).nullable().optional(),
+  accountNumber: z
+    .string()
+    .trim()
+    .regex(/^\d{9,18}$/, "Account number must contain 9 to 18 digits.")
+    .nullable()
+    .optional(),
+  ifscCode: z
+    .string()
+    .trim()
+    .regex(/^[A-Z]{4}0[A-Z0-9]{6}$/, "Enter a valid IFSC code.")
+    .nullable()
+    .optional(),
+  panNumber: z
+    .string()
+    .trim()
+    .regex(/^[A-Z]{5}\d{4}[A-Z]$/, "Enter PAN in the format AAAAA9999A.")
+    .nullable()
+    .optional(),
+  aadhaarNumber: z
+    .string()
+    .trim()
+    .regex(/^\d{12}$/, "Aadhaar number must contain exactly 12 digits.")
+    .nullable()
+    .optional(),
+  drivingLicenceNumber: z.string().trim().max(40).nullable().optional(),
+}).superRefine((employee, context) => {
+  if (!employee.dateOfBirth) return;
+  if (employee.dateOfBirth >= employee.dateOfJoining) {
+    context.addIssue({
+      code: "custom",
+      path: ["dateOfBirth"],
+      message: "Date of birth must be before the joining date.",
+    });
+    return;
+  }
+  const [birthYear, birthMonth, birthDay] = employee.dateOfBirth
+    .split("-")
+    .map(Number);
+  const [joinYear, joinMonth, joinDay] = employee.dateOfJoining
+    .split("-")
+    .map(Number);
+  let age = joinYear - birthYear;
+  if (
+    joinMonth < birthMonth ||
+    (joinMonth === birthMonth && joinDay < birthDay)
+  )
+    age -= 1;
+  if (age < 18)
+    context.addIssue({
+      code: "custom",
+      path: ["dateOfBirth"],
+      message: "Employee must be at least 18 on the joining date.",
+    });
 });
 
 export const attendanceSchema = z.object({
@@ -34,6 +94,8 @@ export const attendanceSchema = z.object({
       }),
     )
     .max(500),
+  clearEmployeeIds: z.array(objectIdSchema).max(500).optional().default([]),
+  reason: z.string().trim().max(500).optional(),
 });
 
 export const advanceSchema = z.object({
@@ -46,15 +108,97 @@ export const advanceSchema = z.object({
   notes: z.string().trim().max(1000).optional().default(""),
 });
 
+const loanMoney = (minimum: number) =>
+  z.preprocess(
+    (value) =>
+      typeof value === "string"
+        ? value.trim() === ""
+          ? Number.NaN
+          : Number(value)
+        : value,
+    z
+      .number()
+      .finite()
+      .min(minimum)
+      .max(10_000_000)
+      .refine(
+        (value) => Math.abs(value * 100 - Math.round(value * 100)) < 1e-7,
+        "Use no more than two decimal places.",
+      ),
+  );
+const loanInstallmentCount = z.preprocess(
+  (value) =>
+    typeof value === "string"
+      ? value.trim() === ""
+        ? Number.NaN
+        : Number(value)
+      : value,
+  z.number().finite().int().positive().max(600),
+);
+
 export const loanSchema = z.object({
   employeeId: objectIdSchema,
   outletId: objectIdSchema,
-  totalAmount: z.number().finite().positive().max(10_000_000),
-  outstandingAmount: z.number().finite().nonnegative().max(10_000_000),
+  totalAmount: loanMoney(0.01),
+  monthlyDeductionAmount: loanMoney(0.01),
+  deductionStartMonth: monthSchema,
+  repaymentMethod: z
+    .enum(["FIXED_AMOUNT", "FIXED_INSTALLMENTS", "DATE_RANGE"])
+    .default("FIXED_AMOUNT"),
+  installmentCount: loanInstallmentCount.optional(),
+  deductionEndMonth: monthSchema.optional(),
   notes: z.string().trim().max(1000).default(""),
-}).refine((loan) => loan.outstandingAmount <= loan.totalAmount, {
-  message: "Outstanding amount cannot exceed the original loan.",
-  path: ["outstandingAmount"],
+}).superRefine((input, context) => {
+  if (
+    input.repaymentMethod === "FIXED_INSTALLMENTS" &&
+    input.installmentCount === undefined
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["installmentCount"],
+      message: "Enter the number of monthly installments.",
+    });
+  if (
+    input.repaymentMethod === "DATE_RANGE" &&
+    (!input.deductionEndMonth ||
+      input.deductionEndMonth < input.deductionStartMonth)
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["deductionEndMonth"],
+      message: "End month must be on or after the deduction start month.",
+    });
+});
+
+export const loanTermsSchema = z.object({
+  monthlyDeductionAmount: loanMoney(0.01),
+  deductionStartMonth: monthSchema,
+  repaymentMethod: z
+    .enum(["FIXED_AMOUNT", "FIXED_INSTALLMENTS", "DATE_RANGE"])
+    .default("FIXED_AMOUNT"),
+  installmentCount: loanInstallmentCount.optional(),
+  deductionEndMonth: monthSchema.optional(),
+  notes: z.string().trim().max(1000).default(""),
+}).superRefine((input, context) => {
+  if (
+    input.repaymentMethod === "FIXED_INSTALLMENTS" &&
+    input.installmentCount === undefined
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["installmentCount"],
+      message: "Enter the number of monthly installments.",
+    });
+  if (
+    input.repaymentMethod === "DATE_RANGE" &&
+    (!input.deductionEndMonth ||
+      input.deductionEndMonth < input.deductionStartMonth)
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["deductionEndMonth"],
+      message: "End month must be on or after the deduction start month.",
+    });
 });
 
 export const outletSchema = z.object({
@@ -137,9 +281,6 @@ export const userProvisionSchema = z
 export const designationSchema = z.object({
   name: z.string().trim().min(2).max(80),
   description: z.string().trim().max(240).default(""),
-  color: z
-    .enum(["#635bdb", "#201f58", "#ef43b4", "#e91e63", "#a46526", "#3b82f6"])
-    .default("#635bdb"),
   permissions: z
     .array(z.enum(staffPermissionValues))
     .max(20)

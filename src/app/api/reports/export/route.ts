@@ -4,8 +4,10 @@ import { connection, NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError } from "@/lib/http";
-import { calculatePayroll } from "@/lib/payroll/calculate";
-import { dateAfter, getMonthDates } from "@/lib/payroll/dates";
+import { calculateLoanInstallment, calculatePayroll } from "@/lib/payroll/calculate";
+import { expectedCompletionMonth } from "@/lib/payroll/loans";
+import { formatExportDates } from "@/lib/reports/export-dates";
+import { dateAfter, getIndiaMonth, getMonthDates } from "@/lib/payroll/dates";
 import { dateOnlySchema, objectIdSchema } from "@/lib/validation/common";
 import type {
   AdvanceDocument,
@@ -13,6 +15,9 @@ import type {
   AttendanceStatus,
   AuditLogDocument,
   EmployeeDocument,
+  LoanDocument,
+  LoanInstallmentDocument,
+  LoanTransactionDocument,
   OutletDocument,
   SalaryRecordDocument,
   SalarySettings,
@@ -20,7 +25,7 @@ import type {
 import { z } from "zod";
 
 const querySchema = z.object({
-  type: z.enum(["attendance", "salary", "employees", "advances", "audit", "away"]),
+  type: z.enum(["attendance", "salary", "employees", "advances", "audit", "away", "loans"]),
   format: z.enum(["xlsx", "csv"]).default("xlsx"),
   from: dateOnlySchema,
   to: dateOnlySchema,
@@ -58,6 +63,11 @@ export async function GET(request: Request) {
       outletId: url.searchParams.get("outletId") || undefined,
       employeeId: url.searchParams.get("employeeId") || undefined,
     });
+    if (query.type === "loans" && actor.role !== "MAIN_ADMIN")
+      return NextResponse.json(
+        { error: "Loan export is restricted to MAIN_ADMIN." },
+        { status: 403 },
+      );
     if (query.from > query.to)
       return NextResponse.json(
         { error: "Start date must be on or before end date." },
@@ -83,7 +93,7 @@ export async function GET(request: Request) {
         { status: 403 },
       );
     if (
-      query.type === "salary" &&
+      (query.type === "salary" || query.type === "loans") &&
       !actor.permissions.includes("salary.read")
     )
       return NextResponse.json(
@@ -108,17 +118,6 @@ export async function GET(request: Request) {
     workbook.creator = "La Milano Attendance Management System";
     workbook.created = new Date();
     workbook.subject = `${query.type} export ${query.from} to ${query.to}`;
-    workbook.views = [
-      {
-        x: 0,
-        y: 0,
-        width: 16000,
-        height: 9000,
-        firstSheet: 0,
-        activeTab: 0,
-        visibility: "visible",
-      },
-    ];
     const byOutlet: Array<{ outlet: OutletDocument; rows: ExportRow[] }> = [];
     for (const outlet of outlets)
       byOutlet.push({
@@ -185,19 +184,24 @@ export async function GET(request: Request) {
       });
     }
 
-    for (const item of byOutlet) {
+    const salaryAllowed = actor.permissions.includes("salary.read");
+    // Sirf data wale outlets ke sheets banao (warna pehli sheet khali dikhti hai).
+    // Agar kisi outlet me data nahi hai to sab khali hone par sirf ek sheet banegi.
+    const outletsWithData = byOutlet.filter((item) => item.rows.length > 0);
+    const outletsToWrite = outletsWithData.length
+      ? outletsWithData
+      : byOutlet.slice(0, 1);
+    for (const item of outletsToWrite) {
       const sheet = workbook.addWorksheet(
         sheetName(`${item.outlet.code} ${item.outlet.name}`, workbook),
       );
       const headers = item.rows.length
-        ? Object.keys(item.rows[0])
-        : emptyHeaders(query.type, actor.permissions.includes("salary.read"));
+        ? [...new Set(item.rows.flatMap((row) => Object.keys(row)))]
+        : emptyHeaders(query.type, salaryAllowed);
       sheet.addRow(headers);
-      if (!item.rows.length)
-        sheet.addRow(["No records found for this outlet and date range."]);
       for (const row of item.rows)
         sheet.addRow(headers.map((header) => safeCell(row[header])));
-      styleSheet(sheet, true);
+      styleSheet(sheet, item.rows.length === 0);
     }
     if (globalAuditRows.length) {
       const sheet = workbook.addWorksheet(sheetName("Global audit", workbook));
@@ -205,12 +209,20 @@ export async function GET(request: Request) {
       sheet.addRow(headers);
       for (const row of globalAuditRows)
         sheet.addRow(headers.map((header) => safeCell(row[header])));
+      styleSheet(sheet, false);
+    }
+    // Zero worksheets wali workbook Excel me corrupt/blank khulti hai.
+    if (workbook.worksheets.length === 0) {
+      const sheet = workbook.addWorksheet("No data");
+      const headers = emptyHeaders(query.type, salaryAllowed);
+      sheet.addRow(headers);
       styleSheet(sheet, true);
     }
+    workbook.views = [{ x: 0, y: 0, width: 20000, height: 12000, firstSheet: 0, activeTab: 0, visibility: "visible" }];
 
     const buffer = await workbook.xlsx.writeBuffer();
     const filename = `la-milano-${query.type}-${query.from}-to-${query.to}.xlsx`;
-    return new NextResponse(buffer, {
+    return new NextResponse(new Uint8Array(buffer as ArrayBuffer), {
       headers: {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -221,151 +233,6 @@ export async function GET(request: Request) {
   } catch (error) {
     return apiError(error);
   }
-}
-
-function addAttendanceSummary(
-  sheet: ExcelJS.Worksheet,
-  byOutlet: Array<{ outlet: OutletDocument; rows: ExportRow[] }>,
-  from: string,
-  to: string,
-  canReadSalary: boolean,
-) {
-  sheet.addRow(["LA MILANO", "Employee-wise Attendance & Payable"]);
-  sheet.addRow(["Period", from, "to", to]);
-  sheet.addRow(["Generated", new Date().toISOString()]);
-  sheet.addRow([]);
-  const headers = [
-    "Outlet",
-    "Outlet Name",
-    "Employee Code",
-    "Employee",
-    "Designation",
-    "Present Days",
-    "Absent Days",
-    "Half Days",
-    "Week Offs",
-    "Attendance Filled Days",
-    "Present Dates",
-    "Absent Dates",
-    "Half Day Dates",
-    "Week Off Dates",
-    "Missing Dates",
-    "Unsubmitted Dates",
-    ...(canReadSalary
-      ? [
-          "Fixed Monthly Salary INR",
-          "Daily Rate INR",
-          "Payable Day Units",
-          "Gross Earnings INR",
-          "Advance Deduction INR",
-          "Employee ESI INR",
-          "Employee PF INR",
-          "Employer PF INR",
-          "Loan Deduction INR",
-          "Other Deductions INR",
-          "Net Payable INR",
-          "Payable Type",
-        ]
-      : []),
-  ];
-  sheet.addRow(headers);
-  let recordCount = 0;
-  for (const item of byOutlet) {
-    for (const row of item.rows) {
-      recordCount += 1;
-      sheet.addRow(
-        headers.map((header) =>
-          safeCell(
-            header === "Outlet Name"
-              ? item.outlet.name
-              : header === "Present Days"
-                ? row.Present
-                : header === "Absent Days"
-                  ? row.Absent
-                  : header === "Half Days"
-                    ? row["Half Days"]
-                    : header === "Week Offs"
-                      ? row["Week Offs"]
-                      : header === "Attendance Filled Days"
-                        ? row["Attendance Filled Days"]
-                        : row[header],
-          ),
-        ),
-      );
-    }
-  }
-  if (recordCount === 0) {
-    sheet.addRow(["No employees found for the selected outlet and period."]);
-  }
-  sheet.addRow([]);
-  sheet.addRow(["Outlet summary"]);
-  sheet.addRow(["Outlet", "Code", "Employee Records"]);
-  for (const item of byOutlet)
-    sheet.addRow([
-      safeCell(item.outlet.name),
-      safeCell(item.outlet.code),
-      item.rows.length,
-    ]);
-
-  sheet.views = [
-    {
-      state: "frozen",
-      xSplit: 0,
-      ySplit: 5,
-      topLeftCell: "A6",
-    },
-  ];
-  sheet.views[0].showGridLines = true;
-  sheet.views[0].zoomScale = 80;
-  sheet.getRow(1).font = { bold: true, size: 16, color: { argb: "FF30312E" } };
-  sheet.getRow(5).font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-  sheet.getRow(5).fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF30312E" },
-  };
-  for (const rowNumber of [recordCount + 8, recordCount + 9]) {
-    sheet.getRow(rowNumber).font = { bold: true };
-    if (rowNumber === recordCount + 9)
-      sheet.getRow(rowNumber).fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: { argb: "FFECE9E2" },
-      };
-  }
-  sheet.columns.forEach((column) => {
-    column.width = Math.min(
-      40,
-      Math.max(
-        14,
-        ...(column.values ?? []).map(
-          (value) => String(value ?? "").length + 2,
-        ),
-      ),
-    );
-  });
-  for (let column = 1; column <= headers.length; column += 1) {
-    if (!headers[column - 1].includes("INR")) continue;
-    for (let row = 6; row <= recordCount + 5; row += 1) {
-      const cell = sheet.getRow(row).getCell(column);
-      if (typeof cell.value === "number") cell.numFmt = "₹#,##0.00";
-    }
-  }
-  sheet.autoFilter = {
-    from: { row: 5, column: 1 },
-    to: { row: 5, column: headers.length },
-  };
-  sheet.eachRow((row) => {
-    row.alignment = { vertical: "middle" };
-    row.eachCell((cell) => {
-      cell.border = {
-        top: { style: "thin", color: { argb: "FFD5D7D2" } },
-        left: { style: "thin", color: { argb: "FFD5D7D2" } },
-        bottom: { style: "thin", color: { argb: "FFD5D7D2" } },
-        right: { style: "thin", color: { argb: "FFD5D7D2" } },
-      };
-    });
-  });
 }
 
 async function getRows(
@@ -387,6 +254,110 @@ async function getRows(
   const employeeById = new Map(
     employees.map((employee) => [employee._id.toHexString(), employee]),
   );
+  if (type === "loans") {
+    const loanQuery = {
+      outletId: outlet._id,
+      ...(employeeId ? { employeeId: new ObjectId(employeeId) } : {}),
+    };
+    const loans = await db
+      .collection<LoanDocument>("loans")
+      .find(loanQuery)
+      .sort({ createdAt: 1, _id: 1 })
+      .toArray();
+    const loanIds = loans.map((loan) => loan._id);
+    if (!loanIds.length) return [];
+    const cutoffMonth = to.slice(0, 7);
+    const [installments, transactions] = await Promise.all([
+      db
+        .collection<LoanInstallmentDocument>("loanInstallments")
+        .find({ loanId: { $in: loanIds }, payrollMonth: { $lte: cutoffMonth } })
+        .toArray(),
+      db
+        .collection<LoanTransactionDocument>("loanTransactions")
+        .find({ loanId: { $in: loanIds }, transactionDate: { $lte: to } })
+        .toArray(),
+    ]);
+    return loans.map((loan) => {
+      const employee = employeeById.get(loan.employeeId.toHexString());
+      const loanInstallments = installments.filter((entry) =>
+        entry.loanId.equals(loan._id),
+      );
+      const loanTransactions = transactions.filter((entry) =>
+        entry.loanId.equals(loan._id),
+      );
+      const events = [
+        ...loanInstallments
+          .filter((entry) => entry.status === "POSTED")
+          .map((entry) => ({
+            date: `${entry.payrollMonth}-31`,
+            createdAt: entry.createdAt,
+            delta: -entry.actualDeduction,
+          })),
+        ...loanTransactions.map((entry) => ({
+          date: entry.transactionDate,
+          createdAt: entry.createdAt,
+          delta: entry.balanceAfter - entry.balanceBefore,
+        })),
+      ].sort(
+        (left, right) =>
+          left.date.localeCompare(right.date) ||
+          left.createdAt.getTime() - right.createdAt.getTime(),
+      );
+      let closingBalance =
+        events.length > 0
+          ? loan.totalAmount
+          : loan.outstandingAmount;
+      for (const event of events)
+        closingBalance = Math.max(
+          0,
+          Number((closingBalance + event.delta).toFixed(2)),
+        );
+      const currentInstallment = loanInstallments.find(
+        (entry) => entry.payrollMonth === cutoffMonth,
+      );
+      const termsStart =
+        loan.deductionStartMonth ?? loan.createdAt.toISOString().slice(0, 7);
+      const scheduled =
+        currentInstallment?.scheduledDeduction ??
+        (cutoffMonth >= termsStart && loan.status !== "PAUSED"
+          ? calculateLoanInstallment(
+              [{ ...loan, outstandingAmount: closingBalance }],
+              cutoffMonth,
+            )
+          : 0);
+      return {
+        "Employee Code": employee?.employeeCode ?? "",
+        Employee: employee?.fullName ?? "",
+        Outlet: outlet.code,
+        "Payroll Month": cutoffMonth,
+        "Original Loan INR": loan.totalAmount,
+        "Remaining Balance INR": closingBalance,
+        "Total Repaid INR": loan.repaidAmount ?? Math.max(0, loan.totalAmount - closingBalance),
+        "Scheduled Deduction INR": scheduled,
+        "Actual Deduction INR": currentInstallment?.actualDeduction ?? 0,
+        "Installment Status":
+          currentInstallment?.status ??
+          (loan.status === "PAUSED"
+            ? "PAUSED"
+            : loan.status === "COMPLETED" || closingBalance <= 0
+              ? "COMPLETED"
+              : scheduled > 0
+                ? "SCHEDULED"
+                : "NOT_DUE"),
+        "Expected Completion Month":
+          closingBalance > 0 && loan.monthlyDeductionAmount
+            ? expectedCompletionMonth({
+                balance: closingBalance,
+                monthlyDeductionAmount: loan.monthlyDeductionAmount,
+                startMonth:
+                  cutoffMonth > termsStart ? cutoffMonth : termsStart,
+              }) ?? ""
+            : "",
+        Status: loan.status ?? (closingBalance > 0 ? "ACTIVE" : "COMPLETED"),
+        Notes: loan.notes,
+      };
+    });
+  }
   if (type === "employees")
     return employees.map((employee) => ({
       Code: employee.employeeCode,
@@ -452,7 +423,7 @@ async function getRows(
         .findOne({ _id: "payroll" })),
     };
     const employeeIds = employees.map((employee) => employee._id);
-    const [advances, salaryRecords] = canReadSalary
+    const [advances, salaryRecords, loans, loanInstallments] = canReadSalary
       ? await Promise.all([
           db
             .collection<AdvanceDocument>("advances")
@@ -475,8 +446,26 @@ async function getRows(
               },
             })
             .toArray(),
+          db
+            .collection<LoanDocument>("loans")
+            .find({
+              employeeId: { $in: employeeIds },
+              outletId: outlet._id,
+            })
+            .toArray(),
+          db
+            .collection<LoanInstallmentDocument>("loanInstallments")
+            .find({
+              employeeId: { $in: employeeIds },
+              outletId: outlet._id,
+              payrollMonth: {
+                $gte: from.slice(0, 7),
+                $lte: to.slice(0, 7),
+              },
+            })
+            .toArray(),
         ])
-      : [[], []];
+      : [[], [], [], []];
     const advancesByEmployee = new Map<string, AdvanceDocument[]>();
     for (const advance of advances) {
       const key = advance.employeeId.toHexString();
@@ -491,6 +480,25 @@ async function getRows(
         record,
       ]),
     );
+    const loansByEmployee = new Map<string, LoanDocument[]>();
+    for (const loan of loans) {
+      const key = loan.employeeId.toHexString();
+      loansByEmployee.set(key, [
+        ...(loansByEmployee.get(key) ?? []),
+        loan,
+      ]);
+    }
+    const installmentsByEmployeeMonth = new Map<
+      string,
+      LoanInstallmentDocument[]
+    >();
+    for (const installment of loanInstallments) {
+      const key = `${installment.employeeId.toHexString()}:${installment.payrollMonth}`;
+      installmentsByEmployeeMonth.set(key, [
+        ...(installmentsByEmployeeMonth.get(key) ?? []),
+        installment,
+      ]);
+    }
     return employees.map((employee) => {
       const start =
         employee.dateOfJoining > from ? employee.dateOfJoining : from;
@@ -614,6 +622,39 @@ async function getRows(
           ) ?? [])
             .filter((advance) => advance.date.startsWith(`${month}-`))
             .reduce((sum, advance) => sum + advance.amount, 0);
+          const monthLoans =
+            loansByEmployee.get(employee._id.toHexString()) ?? [];
+          const monthInstallments =
+            installmentsByEmployeeMonth.get(
+              `${employee._id.toHexString()}:${month}`,
+            ) ?? [];
+          const installmentLoanIds = new Set(
+            monthInstallments.map((installment) =>
+              installment.loanId.toHexString(),
+            ),
+          );
+          const ledgerLoanDeduction = monthInstallments.reduce(
+            (sum, installment) =>
+              sum +
+              (installment.status === "POSTED"
+                ? installment.actualDeduction
+                : installment.status === "SCHEDULED"
+                  ? installment.scheduledDeduction
+                  : 0),
+            0,
+          );
+          const currentMonthLoanSchedule =
+            month === getIndiaMonth()
+              ? calculateLoanInstallment(
+                  monthLoans.filter(
+                    (loan) =>
+                      !installmentLoanIds.has(loan._id.toHexString()),
+                  ),
+                  month,
+                )
+              : 0;
+          const loanDeductionForMonth =
+            ledgerLoanDeduction + currentMonthLoanSchedule;
           const calculation = calculatePayroll({
             monthlyBaseSalary: employee.monthlyBaseSalary,
             salaryMethod: "FIXED_30_DAYS",
@@ -634,7 +675,7 @@ async function getRows(
                 ? 30
                 : monthDayCounts.eligibleDays,
             advances: advanceAmount,
-            loanDeduction: 0,
+            loanDeduction: loanDeductionForMonth,
             overtime: 0,
             allowances: 0,
             otherDeductions: 0,
@@ -656,9 +697,9 @@ async function getRows(
           netPayable += calculation.netPayable;
         }
         result["Fixed Monthly Salary INR"] = employee.monthlyBaseSalary;
-        result["Daily Rate INR"] = dailyRate;
-        result["Payable Day Units"] = payableDayUnits;
-        result["Gross Earnings INR"] = grossEarnings;
+        result["Salary per Paid Day INR"] = dailyRate;
+        result["Paid Attendance Days"] = payableDayUnits;
+        result["Attendance Salary Before Deductions INR"] = grossEarnings;
         result["Advance Deduction INR"] = advanceDeduction;
         result["Employee ESI INR"] = employeeEsi;
         result["Employee PF INR"] = employeePf;
@@ -854,71 +895,120 @@ async function getRows(
 }
 
 function safeCell(value: unknown): string | number | boolean | null {
-  if (value === null || value === undefined) return null;
+  if (value === null || value === undefined || value === "") return null;
   if (typeof value === "number" || typeof value === "boolean") return value;
-  const text = String(value);
+  const text = formatExportDates(String(value));
+  // Formula injection se bachao
   return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
 }
 
 function csvCell(value: unknown): string {
-  let text = value == null ? "" : String(value);
+  if (value === null || value === undefined) return "";
+  // Numbers ko quotes me mat daalo, taaki Excel unhe number hi maane.
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  let text = formatExportDates(String(value));
   if (/^[\u0000-\u0020]*[=+\-@]/.test(text)) text = `'${text}`;
   return `"${text.replaceAll('"', '""')}"`;
 }
 
-function styleSheet(sheet: ExcelJS.Worksheet, hasHeaders = false) {
-  sheet.views = [
-    {
-      state: "frozen",
-      xSplit: 0,
-      ySplit: hasHeaders ? 1 : 4,
-      topLeftCell: hasHeaders ? "A2" : "A5",
-    },
-  ];
-  sheet.views[0].showGridLines = true;
-  sheet.views[0].zoomScale = 80;
-  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-  sheet.getRow(1).fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF30312E" },
-  };
-  if (!hasHeaders) {
-    sheet.getRow(5).font = { bold: true, color: { argb: "FFFFFFFF" } };
-    sheet.getRow(5).fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FF30312E" },
-    };
+const HEADER_FILL = "FF1F7A45"; // green header
+const ZEBRA_FILL = "FFF4F9F5";
+const BORDER_COLOR = { argb: "FFB8C2BA" };
+const thinBorder: Partial<ExcelJS.Borders> = {
+  top: { style: "thin", color: BORDER_COLOR },
+  left: { style: "thin", color: BORDER_COLOR },
+  bottom: { style: "thin", color: BORDER_COLOR },
+  right: { style: "thin", color: BORDER_COLOR },
+};
+const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
+  Present: { bg: "FF22C55E", fg: "FF152018" },
+  Absent: { bg: "FFFF4D5E", fg: "FF2C1115" },
+  "Half-day": { bg: "FFFFB020", fg: "FF30220A" },
+  "Half day": { bg: "FFFFB020", fg: "FF30220A" },
+  "Week off": { bg: "FF8EA2C0", fg: "FF17202B" },
+  ACTIVE: { bg: "FFE5F6EA", fg: "FF1E8A48" },
+  COMPLETED: { bg: "FFE5F6EA", fg: "FF1E8A48" },
+  APPROVED: { bg: "FFE5F6EA", fg: "FF1E8A48" },
+  PAUSED: { bg: "FFFFF1D9", fg: "FFD98A0F" },
+  "Not generated": { bg: "FFFFF1D9", fg: "FFD98A0F" },
+  REJECTED: { bg: "FFFDE8E6", fg: "FFD6312B" },
+};
+
+/**
+ * Header row 1 me hona chahiye. isEmpty=true ho to neeche "No records" note lagta hai.
+ */
+function styleSheet(sheet: ExcelJS.Worksheet, isEmpty = false) {
+  if (isEmpty) {
+    const columnCount = Math.max(sheet.getRow(1).cellCount, 1);
+    const note = sheet.addRow(["No records found for this outlet and date range."]);
+    if (columnCount > 1) sheet.mergeCells(note.number, 1, note.number, columnCount);
   }
-  sheet.columns.forEach((column) => {
-    column.width = Math.min(
-      36,
-      Math.max(
-        14,
-        ...(column.values ?? []).map((value) => String(value ?? "").length + 2),
-      ),
-    );
-  });
-  sheet.autoFilter =
-    hasHeaders && sheet.rowCount > 1
-      ? {
-          from: { row: 1, column: 1 },
-          to: { row: 1, column: sheet.columnCount },
-        }
-      : undefined;
-  const headerRow = hasHeaders ? 1 : 5;
-  for (let column = 1; column <= sheet.columnCount; column += 1) {
-    const heading = String(sheet.getRow(headerRow).getCell(column).value ?? "");
-    if (!heading.includes("INR")) continue;
-    for (let row = headerRow + 1; row <= sheet.rowCount; row += 1) {
-      const cell = sheet.getRow(row).getCell(column);
-      if (typeof cell.value === "number") cell.numFmt = "₹#,##0.00";
+  const columnCount = Math.max(sheet.getRow(1).cellCount, 1);
+  const headerRow = sheet.getRow(1);
+
+  // Column widths (merged note row ko ignore karte hain)
+  for (let c = 1; c <= columnCount; c += 1) {
+    let max = String(headerRow.getCell(c).value ?? "").length;
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1 || (isEmpty && rowNumber === 2)) return;
+      const value = row.getCell(c).value;
+      const length = value === null || value === undefined ? 0 : String(value).length;
+      if (length > max) max = length;
+    });
+    sheet.getColumn(c).width = Math.min(42, Math.max(14, max + 4));
+  }
+
+  // Header
+  headerRow.height = 28;
+  for (let c = 1; c <= columnCount; c += 1) {
+    const cell = headerRow.getCell(c);
+    cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: HEADER_FILL } };
+    cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    cell.border = thinBorder;
+  }
+
+  const headings = Array.from({ length: columnCount }, (_, i) =>
+    String(headerRow.getCell(i + 1).value ?? ""),
+  );
+
+  // Body
+  sheet.eachRow((row, rowNumber) => {
+    if (rowNumber === 1) return;
+    if (isEmpty && rowNumber === 2) {
+      const cell = row.getCell(1);
+      cell.font = { italic: true, color: { argb: "FF6F786F" } };
+      cell.alignment = { vertical: "middle", horizontal: "left" };
+      cell.border = thinBorder;
+      row.height = 24;
+      return;
     }
-  }
-  sheet.eachRow((row) => {
-    row.alignment = { vertical: "middle" };
+    for (let c = 1; c <= columnCount; c += 1) {
+      const cell = row.getCell(c);
+      const heading = headings[c - 1];
+      cell.border = thinBorder;
+      if (rowNumber % 2 === 1)
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: ZEBRA_FILL } };
+      if (typeof cell.value === "number") {
+        cell.alignment = { vertical: "middle", horizontal: "right" };
+        if (heading.includes("INR")) cell.numFmt = '"₹"#,##0.00';
+        else if (heading.includes("%")) cell.numFmt = "0.00";
+      } else {
+        cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        const color = typeof cell.value === "string" ? STATUS_COLORS[cell.value] : undefined;
+        if (color && /status/i.test(heading)) {
+          cell.font = { bold: true, color: { argb: color.fg } };
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: color.bg } };
+          cell.alignment = { vertical: "middle", horizontal: "center" };
+        }
+      }
+    }
   });
+
+  sheet.views = [{ state: "frozen", xSplit: 0, ySplit: 1, topLeftCell: "A2", zoomScale: 90, showGridLines: false }];
+  if (!isEmpty && sheet.rowCount > 1)
+    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columnCount } };
 }
 
 function sheetName(value: string, workbook: ExcelJS.Workbook) {
@@ -937,6 +1027,22 @@ function sheetName(value: string, workbook: ExcelJS.Workbook) {
 }
 
 function emptyHeaders(type: string, canReadSalary = false): string[] {
+  if (type === "loans")
+    return [
+      "Employee Code",
+      "Employee",
+      "Outlet",
+      "Payroll Month",
+      "Original Loan INR",
+      "Remaining Balance INR",
+      "Total Repaid INR",
+      "Scheduled Deduction INR",
+      "Actual Deduction INR",
+      "Installment Status",
+      "Expected Completion Month",
+      "Status",
+      "Notes",
+    ];
   if (type === "away")
     return ["Employee", "Employee Code", "Outlet", "Date", "Status"];
   if (type === "attendance") {
@@ -960,9 +1066,9 @@ function emptyHeaders(type: string, canReadSalary = false): string[] {
     if (canReadSalary)
       headers.push(
         "Fixed Monthly Salary INR",
-        "Daily Rate INR",
-        "Payable Day Units",
-        "Gross Earnings INR",
+        "Salary per Paid Day INR",
+        "Paid Attendance Days",
+        "Attendance Salary Before Deductions INR",
         "Advance Deduction INR",
         "Employee ESI INR",
         "Employee PF INR",
@@ -1023,8 +1129,4 @@ function emptyHeaders(type: string, canReadSalary = false): string[] {
       "Payroll Claimed",
     ];
   return ["Timestamp", "Actor", "Action", "Entity", "Entity ID", "Reason"];
-}
-
-function label(value: string) {
-  return value.slice(0, 1).toUpperCase() + value.slice(1);
 }

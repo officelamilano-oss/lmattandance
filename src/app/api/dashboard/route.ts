@@ -4,7 +4,8 @@ import { assertOutletAccess, getActor } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError } from "@/lib/http";
 import { calculatePayroll } from "@/lib/payroll/calculate";
-import { getMonthDates } from "@/lib/payroll/dates";
+import { isAttendanceOutletSubmitted } from "@/lib/attendance";
+import { dateAfter, getMonthDates } from "@/lib/payroll/dates";
 import { dateOnlySchema } from "@/lib/validation/common";
 import type {
   AdvanceDocument,
@@ -44,6 +45,30 @@ export async function GET(request: Request) {
         { status: 400 },
       );
     const dashboardDate = dateResult.data;
+    const requestedAttendanceFrom =
+      url.searchParams.get("from") ?? `${dashboardDate.slice(0, 7)}-01`;
+    const requestedAttendanceTo =
+      url.searchParams.get("to") ?? dashboardDate;
+    const attendanceFromResult = dateOnlySchema.safeParse(
+      requestedAttendanceFrom,
+    );
+    const attendanceToResult = dateOnlySchema.safeParse(requestedAttendanceTo);
+    if (
+      !attendanceFromResult.success ||
+      !attendanceToResult.success ||
+      requestedAttendanceFrom > requestedAttendanceTo ||
+      requestedAttendanceTo > today ||
+      (Date.parse(`${requestedAttendanceTo}T00:00:00Z`) -
+        Date.parse(`${requestedAttendanceFrom}T00:00:00Z`)) /
+        86_400_000 >
+        366
+    )
+      return NextResponse.json(
+        { error: "Dashboard attendance range must be valid and no later than today." },
+        { status: 400 },
+      );
+    const attendanceFrom = attendanceFromResult.data;
+    const attendanceTo = attendanceToResult.data;
     const requestedAwayFrom = url.searchParams.get("awayFrom") ?? dashboardDate;
     const requestedAwayTo = url.searchParams.get("awayTo") ?? dashboardDate;
     const awayFromResult = dateOnlySchema.safeParse(requestedAwayFrom);
@@ -88,7 +113,7 @@ export async function GET(request: Request) {
       .sort({ code: 1 })
       .toArray();
     const outletIds = outlets.map((outlet) => outlet._id);
-    const [activeEmployees, fullTimeEmployees, partTimeEmployees, todayDays, salaryRecords, pendingAdvances, employees, monthDays] =
+    const [activeEmployees, fullTimeEmployees, partTimeEmployees, todayDays, salaryRecords, pendingAdvances, employees, monthDays, attendanceSubmissionEmployees] =
       await Promise.all([
         db
           .collection<EmployeeDocument>("employees")
@@ -139,7 +164,41 @@ export async function GET(request: Request) {
                 })
                 .toArray()
             : Promise.resolve([]),
+        outletIds.length
+          ? db
+              .collection<EmployeeDocument>("employees")
+              .find(
+                {
+                  outletId: { $in: outletIds },
+                  dateOfJoining: { $lte: attendanceTo },
+                  $or: [
+                    { deactivatedAt: { $exists: false } },
+                    { deactivatedAt: { $gte: attendanceFrom } },
+                  ],
+                },
+                {
+                  projection: {
+                    _id: 1,
+                    outletId: 1,
+                    dateOfJoining: 1,
+                    deactivatedAt: 1,
+                  },
+                },
+              )
+              .toArray()
+          : Promise.resolve([]),
       ]);
+    const attendanceDays =
+      actor.permissions.includes("attendance.read") && outletIds.length
+        ? await db
+            .collection<AttendanceDayDocument>("attendance")
+            .find({
+              outletId: { $in: outletIds },
+              date: { $gte: attendanceFrom, $lte: attendanceTo },
+            })
+            .sort({ date: 1 })
+            .toArray()
+        : [];
     const whoIsAway: Array<{
       employeeId: string;
       employeeName: string;
@@ -204,6 +263,8 @@ export async function GET(request: Request) {
     }
     let liveGrossSalary = 0;
     let liveNetPayable = 0;
+    let projectedMonthEndBase = 0;
+    let approvedAdvancesPendingPayroll = 0;
     if (canReadSalary) {
       const activePayrollEmployees = employees.filter(
         (employee) =>
@@ -211,6 +272,13 @@ export async function GET(request: Request) {
             (!employee.deactivatedAt || employee.deactivatedAt >= monthStart),
       );
       const employeeIds = activePayrollEmployees.map((employee) => employee._id);
+      projectedMonthEndBase = activePayrollEmployees
+        .filter((employee) => employee.active)
+        .reduce(
+          (sum, employee) =>
+            sum + Number(employee.monthlyBaseSalary ?? 0),
+          0,
+        );
       const approvedAdvances = employeeIds.length
         ? await db
               .collection<AdvanceDocument>("advances")
@@ -230,6 +298,10 @@ export async function GET(request: Request) {
             (advanceTotals.get(employeeId) ?? 0) + advance.amount,
         );
       }
+      approvedAdvancesPendingPayroll = approvedAdvances.reduce(
+        (sum, advance) => sum + advance.amount,
+        0,
+      );
       const attendanceCounts = new Map<
         string,
         { P: number; A: number; HD: number; WO: number }
@@ -345,11 +417,122 @@ export async function GET(request: Request) {
     const attendance = { P: 0, A: 0, WO: 0, HD: 0 };
     for (const day of todayDays)
       for (const entry of day.entries) attendance[entry.status] += 1;
+    const attendanceEmployees = actor.permissions.includes("attendance.read")
+      ? await db
+          .collection<EmployeeDocument>("employees")
+          .find({
+            outletId: { $in: outletIds },
+            dateOfJoining: { $lte: dashboardDate },
+            $or: [
+              { deactivatedAt: { $exists: false } },
+              { deactivatedAt: { $gte: dashboardDate } },
+            ],
+          })
+          .sort({ fullName: 1 })
+          .toArray()
+      : [];
     const submittedOutlets = new Set(
       todayDays
-        .filter((day) => day.status === "SUBMITTED")
+        .filter((day) => {
+          if (day.status !== "SUBMITTED") return false;
+          return isAttendanceOutletSubmitted(
+            day,
+            attendanceSubmissionEmployees.filter(
+              (employee) =>
+                employee.outletId.equals(day.outletId) &&
+                employee.dateOfJoining <= dashboardDate &&
+                (!employee.deactivatedAt ||
+                  employee.deactivatedAt >= dashboardDate),
+            ),
+          );
+        })
         .map((day) => day.outletId.toHexString()),
     );
+    const attendanceStatusByEmployee = new Map(
+      todayDays.flatMap((day) =>
+        day.entries.map((entry) => [
+          entry.employeeId.toHexString(),
+          {
+            status: entry.status,
+            submitted:
+              day.status === "SUBMITTED" && entry.submitted !== false,
+          },
+        ] as const),
+      ),
+    );
+    const outletCodeById = new Map(
+      outlets.map((outlet) => [outlet._id.toHexString(), outlet.code]),
+    );
+    const attendanceEmployeeSummaries = attendanceEmployees.map((employee) => {
+      const attendance = attendanceStatusByEmployee.get(
+        employee._id.toHexString(),
+      );
+      return {
+        employeeId: employee._id.toHexString(),
+        employeeName: employee.fullName,
+        employeeCode: employee.employeeCode,
+        designation: employee.designation,
+        outletCode: outletCodeById.get(employee.outletId.toHexString()) ?? "",
+        status: attendance?.status ?? null,
+        submitted: attendance?.submitted ?? false,
+      };
+    });
+    const attendanceDayByDate = new Map(
+      attendanceDays.map((day) => [
+        `${day.outletId.toHexString()}:${day.date}`,
+        day,
+      ]),
+    );
+    const attendanceTrend = [];
+    for (
+      let trendDate = attendanceFrom;
+      trendDate <= attendanceTo;
+      trendDate = dateAfter(trendDate, 1)
+    ) {
+      const trendDays = attendanceDays.filter((day) => day.date === trendDate);
+      const trendAttendance = { P: 0, A: 0, WO: 0, HD: 0 };
+      const trendOutletRows = outlets.map((outlet) => {
+        const day = attendanceDayByDate.get(
+          `${outlet._id.toHexString()}:${trendDate}`,
+        );
+        const counts = { P: 0, A: 0, WO: 0, HD: 0 };
+        if (day)
+          for (const entry of day.entries) counts[entry.status] += 1;
+        return {
+          id: outlet._id.toHexString(),
+          code: outlet.code,
+          attendance: counts,
+        };
+      });
+      for (const day of trendDays)
+        for (const entry of day.entries)
+          trendAttendance[entry.status] += 1;
+      attendanceTrend.push({
+        date: trendDate,
+        attendance: trendAttendance,
+        submittedOutlets: new Set(
+          trendDays
+            .filter((day) =>
+              isAttendanceOutletSubmitted(
+                day,
+                attendanceSubmissionEmployees.filter(
+                  (employee) =>
+                    employee.outletId.equals(day.outletId) &&
+                    employee.dateOfJoining <= trendDate &&
+                    (!employee.deactivatedAt ||
+                      employee.deactivatedAt >= trendDate),
+                ),
+              ),
+            )
+            .map((day) => day.outletId.toHexString()),
+        ).size,
+        markedEmployees: Object.values(trendAttendance).reduce(
+          (sum, count) => sum + count,
+          0,
+        ),
+        outlets: trendOutletRows,
+      });
+    }
     const outletSummaries = await Promise.all(
       outlets.map(async (outlet) => {
         const employeeCount = await db
@@ -380,6 +563,7 @@ export async function GET(request: Request) {
         activeOutlets: outlets.length,
         attendance,
         missingSubmissions: outlets.length - submittedOutlets.size,
+        submittedOutlets: submittedOutlets.size,
         payrollCount: canReadSalary ? salaryRecords.length : null,
         pendingPayroll: canReadSalary
           ? salaryRecords.filter((record) => record.status === "DRAFT").length
@@ -388,10 +572,38 @@ export async function GET(request: Request) {
           (canReadSalary
             ? salaryRecords.filter((record) => record.status === "DRAFT").length
             : 0) + pendingAdvances,
+        pendingAdvanceApprovals: pendingAdvances,
         grossSalary: canReadSalary ? liveGrossSalary : null,
         netPayable: canReadSalary ? liveNetPayable : null,
+        projectedMonthEndBase: canReadSalary ? projectedMonthEndBase : null,
+        approvedAdvancesPendingPayroll: canReadSalary
+          ? approvedAdvancesPendingPayroll
+          : null,
+        recordedLoanDeductions: canReadSalary
+          ? salaryRecords.reduce(
+              (sum, record) =>
+                sum + Number(record.calculation.loanDeduction ?? 0),
+              0,
+            )
+          : null,
+        recordedPayrollGross: canReadSalary
+          ? salaryRecords.reduce(
+              (sum, record) =>
+                sum + Number(record.calculation.grossEarnings ?? 0),
+              0,
+            )
+          : null,
+        recordedPayrollNet: canReadSalary
+          ? salaryRecords.reduce(
+              (sum, record) =>
+                sum + Number(record.calculation.netPayable ?? 0),
+              0,
+            )
+          : null,
       },
       outlets: outletSummaries,
+      attendanceEmployees: attendanceEmployeeSummaries,
+      attendanceTrend,
       whoIsAway,
     });
   } catch (error) {

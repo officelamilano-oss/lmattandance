@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import type { SalaryMethod } from "@/lib/models";
+import { addMonths } from "@/lib/payroll/loans";
 
 export interface PayrollInputs {
   monthlyBaseSalary: number;
@@ -47,6 +48,59 @@ export interface PayrollCalculation {
 }
 
 const money = (amount: Decimal) => amount.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+
+export function calculateLoanInstallment(
+  loans: Array<{
+    outstandingAmount: number;
+    monthlyDeductionAmount?: number;
+    deductionStartMonth?: string;
+    resumeEffectiveMonth?: string;
+    repaymentMethod?: "FIXED_AMOUNT" | "FIXED_INSTALLMENTS" | "DATE_RANGE";
+    installmentCount?: number;
+    deductionEndMonth?: string;
+    createdAt?: Date | string;
+    status?: "ACTIVE" | "PAUSED" | "COMPLETED";
+  }>,
+  month?: string,
+): number {
+  return money(
+    loans.reduce(
+      (sum, loan) => {
+        const createdMonth =
+          loan.createdAt instanceof Date
+            ? loan.createdAt.toISOString().slice(0, 7)
+            : loan.createdAt?.slice(0, 7);
+        const startMonth = loan.deductionStartMonth ?? createdMonth;
+        if (
+          loan.outstandingAmount <= 0 ||
+          loan.status === "PAUSED" ||
+          loan.status === "COMPLETED" ||
+          (month && startMonth && startMonth > month)
+          || (month && loan.resumeEffectiveMonth && loan.resumeEffectiveMonth > month)
+        )
+          return sum;
+        if (
+          loan.repaymentMethod === "DATE_RANGE" &&
+          month &&
+          loan.deductionEndMonth &&
+          month > loan.deductionEndMonth
+        )
+          return sum;
+        if (
+          loan.repaymentMethod === "FIXED_INSTALLMENTS" &&
+          month &&
+          startMonth &&
+          loan.installmentCount &&
+          month > addMonths(startMonth, loan.installmentCount - 1)
+        )
+          return sum;
+        const scheduled = new Decimal(loan.monthlyDeductionAmount ?? 0);
+        return sum.plus(Decimal.min(new Decimal(loan.outstandingAmount), scheduled));
+      },
+      new Decimal(0),
+    ),
+  );
+}
 
 export function calculatePayroll(input: PayrollInputs): PayrollCalculation {
   const divisor = 30;

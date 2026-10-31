@@ -1,3 +1,4 @@
+import "../globals.css";
 import { WorkspacePanel } from "@/components/workspace-panel";
 import { connection } from "next/server";
 import { redirect } from "next/navigation";

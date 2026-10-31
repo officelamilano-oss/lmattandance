@@ -67,7 +67,7 @@ export function LoginForm() {
           />
           <div>
             <strong>LA MILANO</strong>
-            <span>ATTENDANCE MANAGEMENT SYSTEM by Roshan</span>
+            <span>AMS powered by Roshan</span>
           </div>
         </div>
         <div className="login-copy">
@@ -125,7 +125,7 @@ export function LoginForm() {
           </p>
         </div>
         <footer>
-          LA MILANO <span>ATTENDANCE MANAGEMENT SYSTEM by Roshan</span>
+          LA MILANO <span>AMS powered by Roshan</span>
         </footer>
       </section>
     </main>
