@@ -161,7 +161,6 @@
                 employeeId: { $in: employeeIds },
                 status: "APPROVED",
                 date: { $gte: query.from, $lte: query.to },
-                payrollRecordId: { $exists: false },
               })
               .toArray()
           : Promise.resolve([]),

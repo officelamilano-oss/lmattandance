@@ -282,6 +282,13 @@ export interface WorkspaceData {
     partTimeEmployees?: number;
     activeOutlets?: number;
     attendance?: AttendanceCounts;
+    periodAttendance?: AttendanceCounts;
+    attendanceRateChange?: number | null;
+    lowestOutletCode?: string | null;
+    lowestOutletRate?: number | null;
+    bestOutletCode?: string | null;
+    bestOutletRate?: number | null;
+    unmarkedAttendanceEmployees?: number;
     missingSubmissions?: number;
     submittedOutlets?: number;
     payrollCount?: number | null;
@@ -298,6 +305,7 @@ export interface WorkspaceData {
   };
   outlets?: DashboardOutlet[];
   attendanceEmployees?: DashboardAttendanceEmployee[];
+  dashboardNotifications?: DashboardAttendanceEmployee[];
   attendanceTrend?: DashboardTrendDay[];
   whoIsAway?: WhoIsAwayView[];
   employeeAttendance?: EmployeeAttendanceReport;

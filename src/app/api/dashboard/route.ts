@@ -16,6 +16,14 @@ import type {
   SalarySettings,
 } from "@/lib/models";
 
+type DashboardPart =
+  | "summary"
+  | "trend"
+  | "away"
+  | "outlets"
+  | "attendance"
+  | "notifications";
+
 export async function GET(request: Request) {
   try {
     await connection();
@@ -37,6 +45,32 @@ export async function GET(request: Request) {
       timeZone: timezone,
     }).format(new Date());
     const url = new URL(request.url);
+    const requestedParts = url.searchParams.get("parts");
+    const validParts: DashboardPart[] = [
+      "summary",
+      "trend",
+      "away",
+      "outlets",
+      "attendance",
+      "notifications",
+    ];
+    const parts = new Set<DashboardPart>(
+      requestedParts
+        ? requestedParts.split(",").filter((part): part is DashboardPart =>
+            validParts.includes(part as DashboardPart),
+          )
+        : validParts,
+    );
+    if (
+      requestedParts &&
+      (!parts.size ||
+        requestedParts.split(",").some((part) => !validParts.includes(part as DashboardPart)))
+    )
+      return NextResponse.json(
+        { error: "Dashboard parts must be summary, trend, away, outlets, attendance, or notifications." },
+        { status: 400 },
+      );
+    const wants = (part: DashboardPart) => parts.has(part);
     const requestedDate = url.searchParams.get("date") ?? today;
     const dateResult = dateOnlySchema.safeParse(requestedDate);
     if (!dateResult.success || requestedDate > today)
@@ -107,6 +141,11 @@ export async function GET(request: Request) {
           : actor.outletIds;
     const canReadSalary = actor.permissions.includes("salary.read");
     const canReviewAdvances = actor.permissions.includes("advances.approve");
+    const wantsSummary = wants("summary");
+    const wantsTrend = wants("trend");
+    const wantsAway = wants("away");
+    const wantsOutlets = wants("outlets");
+    const wantsAttendance = wants("attendance");
     const outlets = await db
       .collection<OutletDocument>("outlets")
       .find({ ...(allowed ? { _id: { $in: allowed } } : {}), active: true })
@@ -115,46 +154,54 @@ export async function GET(request: Request) {
     const outletIds = outlets.map((outlet) => outlet._id);
     const [activeEmployees, fullTimeEmployees, partTimeEmployees, todayDays, salaryRecords, pendingAdvances, employees, monthDays, attendanceSubmissionEmployees] =
       await Promise.all([
-        db
+        wantsSummary
+          ? db
           .collection<EmployeeDocument>("employees")
-          .countDocuments({ active: true, outletId: { $in: outletIds } }),
-        db
+          .countDocuments({ active: true, outletId: { $in: outletIds } })
+          : Promise.resolve(0),
+        wantsSummary
+          ? db
           .collection<EmployeeDocument>("employees")
           .countDocuments({
             active: true,
             outletId: { $in: outletIds },
             employmentType: { $ne: "PART_TIME" },
-          }),
-        db
+          })
+          : Promise.resolve(0),
+        wantsSummary
+          ? db
           .collection<EmployeeDocument>("employees")
           .countDocuments({
             active: true,
             outletId: { $in: outletIds },
             employmentType: "PART_TIME",
-          }),
-        db
+          })
+          : Promise.resolve(0),
+        wantsSummary || wantsOutlets || wantsAttendance || wants("notifications")
+          ? db
           .collection<AttendanceDayDocument>("attendance")
           .find({ date: dashboardDate, outletId: { $in: outletIds } })
-          .toArray(),
-        canReadSalary
+          .toArray()
+          : Promise.resolve([]),
+        wantsSummary && canReadSalary
           ? db
               .collection<SalaryRecordDocument>("salaryRecords")
               .find({ month, outletId: { $in: outletIds } })
               .toArray()
           : Promise.resolve([]),
-        canReviewAdvances
+        wantsSummary && canReviewAdvances
           ? db.collection("advances").countDocuments({
               status: "PENDING",
               outletId: { $in: outletIds },
             })
           : Promise.resolve(0),
-        canReadSalary && outletIds.length
+        wantsSummary && canReadSalary && outletIds.length
             ? db
                 .collection<EmployeeDocument>("employees")
                 .find({ outletId: { $in: outletIds } })
                 .toArray()
             : Promise.resolve([]),
-        canReadSalary && outletIds.length
+        wantsSummary && canReadSalary && outletIds.length
             ? db
                 .collection<AttendanceDayDocument>("attendance")
                 .find({
@@ -164,7 +211,7 @@ export async function GET(request: Request) {
                 })
                 .toArray()
             : Promise.resolve([]),
-        outletIds.length
+        (wantsSummary || wantsTrend || wantsOutlets) && outletIds.length
           ? db
               .collection<EmployeeDocument>("employees")
               .find(
@@ -189,7 +236,9 @@ export async function GET(request: Request) {
           : Promise.resolve([]),
       ]);
     const attendanceDays =
-      actor.permissions.includes("attendance.read") && outletIds.length
+      (wantsSummary || wantsTrend) &&
+      actor.permissions.includes("attendance.read") &&
+      outletIds.length
         ? await db
             .collection<AttendanceDayDocument>("attendance")
             .find({
@@ -207,7 +256,7 @@ export async function GET(request: Request) {
       date: string;
       status: "A" | "HD";
     }> = [];
-    if (actor.permissions.includes("attendance.read") && outletIds.length) {
+    if (wantsAway && actor.permissions.includes("attendance.read") && outletIds.length) {
       const [awayDays, awayEmployees] = await Promise.all([
         db
           .collection<AttendanceDayDocument>("attendance")
@@ -265,7 +314,7 @@ export async function GET(request: Request) {
     let liveNetPayable = 0;
     let projectedMonthEndBase = 0;
     let approvedAdvancesPendingPayroll = 0;
-    if (canReadSalary) {
+    if (wantsSummary && canReadSalary) {
       const activePayrollEmployees = employees.filter(
         (employee) =>
             employee.dateOfJoining <= dashboardDate &&
@@ -417,7 +466,111 @@ export async function GET(request: Request) {
     const attendance = { P: 0, A: 0, WO: 0, HD: 0 };
     for (const day of todayDays)
       for (const entry of day.entries) attendance[entry.status] += 1;
-    const attendanceEmployees = actor.permissions.includes("attendance.read")
+    const periodAttendance = { P: 0, A: 0, WO: 0, HD: 0 };
+    const periodAttendanceByDate = new Map<
+      string,
+      { P: number; A: number; HD: number; WO: number }
+    >();
+    const periodAttendanceByOutlet = new Map<
+      string,
+      { code: string; P: number; A: number; HD: number; WO: number }
+    >();
+    if (wantsSummary) {
+      for (const day of attendanceDays) {
+        const dailyCounts = periodAttendanceByDate.get(day.date) ?? {
+          P: 0,
+          A: 0,
+          HD: 0,
+          WO: 0,
+        };
+        const outletId = day.outletId.toHexString();
+        const outletCounts = periodAttendanceByOutlet.get(outletId) ?? {
+          code: outlets.find((outlet) => outlet._id.equals(day.outletId))?.code ?? "",
+          P: 0,
+          A: 0,
+          HD: 0,
+          WO: 0,
+        };
+        for (const entry of day.entries) {
+          dailyCounts[entry.status] += 1;
+          outletCounts[entry.status] += 1;
+          periodAttendance[entry.status] += 1;
+        }
+        periodAttendanceByDate.set(day.date, dailyCounts);
+        periodAttendanceByOutlet.set(outletId, outletCounts);
+      }
+    }
+    const attendanceRateForCounts = (counts: {
+      P: number;
+      A: number;
+      HD: number;
+      WO: number;
+    }) => {
+      const marked = counts.P + counts.A + counts.HD;
+      return marked > 0 ? ((counts.P + counts.HD / 2) / marked) * 100 : null;
+    };
+    const dailyRates: Array<number | null> = [];
+    if (wantsSummary) {
+      for (
+        let day = attendanceFrom;
+        day <= attendanceTo;
+        day = dateAfter(day, 1)
+      )
+        dailyRates.push(
+          attendanceRateForCounts(
+            periodAttendanceByDate.get(day) ?? {
+              P: 0,
+              A: 0,
+              HD: 0,
+              WO: 0,
+            },
+          ),
+        );
+    }
+    const averageRate = (rates: Array<number | null>) => {
+      const validRates = rates.filter(
+        (rate): rate is number => rate !== null,
+      );
+      return validRates.length
+        ? validRates.reduce((sum, rate) => sum + rate, 0) / validRates.length
+        : null;
+    };
+    const recentRates = dailyRates.slice(-7);
+    const previousRates = dailyRates.slice(-14, -7);
+    const attendanceRateChange =
+      recentRates.some((rate) => rate !== null) &&
+      previousRates.some((rate) => rate !== null)
+        ? averageRate(recentRates)! - averageRate(previousRates)!
+        : null;
+    const lowestOutletWithData = [...periodAttendanceByOutlet.entries()]
+      .map(([id, counts]) => ({
+        id,
+        code: counts.code,
+        rate: attendanceRateForCounts(counts),
+      }))
+      .filter((outlet) => outlet.rate !== null)
+      .sort((left, right) => left.rate! - right.rate!)[0];
+    const bestOutletWithData = [...periodAttendanceByOutlet.entries()]
+      .map(([id, counts]) => ({
+        id,
+        code: counts.code,
+        rate: attendanceRateForCounts(counts),
+      }))
+      .filter((outlet) => outlet.rate !== null)
+      .sort((left, right) => right.rate! - left.rate!)[0];
+    const markedTodayIds = new Set(
+      todayDays.flatMap((day) =>
+        day.entries.map((entry) => entry.employeeId.toHexString()),
+      ),
+    );
+    const unmarkedAttendanceEmployees = attendanceSubmissionEmployees.filter(
+      (employee) =>
+        employee.dateOfJoining <= dashboardDate &&
+        (!employee.deactivatedAt || employee.deactivatedAt >= dashboardDate) &&
+        !markedTodayIds.has(employee._id.toHexString()),
+    ).length;
+    const attendanceEmployees =
+      wantsAttendance && actor.permissions.includes("attendance.read")
       ? await db
           .collection<EmployeeDocument>("employees")
           .find({
@@ -431,8 +584,39 @@ export async function GET(request: Request) {
           .sort({ fullName: 1 })
           .toArray()
       : [];
+    const absentEmployeeIds = wants("notifications")
+      ? [
+          ...new Set(
+            todayDays
+              .flatMap((day) =>
+                day.entries
+                  .filter((entry) => entry.status === "A")
+                  .map((entry) => entry.employeeId.toHexString()),
+              ),
+          ),
+        ].map((id) => new ObjectId(id))
+      : [];
+    const notificationEmployees =
+      wants("notifications") &&
+      actor.permissions.includes("attendance.read") &&
+      absentEmployeeIds.length
+        ? await db
+            .collection<EmployeeDocument>("employees")
+            .find({
+              _id: { $in: absentEmployeeIds },
+              outletId: { $in: outletIds },
+              dateOfJoining: { $lte: dashboardDate },
+              $or: [
+                { deactivatedAt: { $exists: false } },
+                { deactivatedAt: { $gte: dashboardDate } },
+              ],
+            })
+            .sort({ fullName: 1 })
+            .toArray()
+        : [];
     const submittedOutlets = new Set(
-      todayDays
+      wantsSummary || wantsOutlets
+        ? todayDays
         .filter((day) => {
           if (day.status !== "SUBMITTED") return false;
           return isAttendanceOutletSubmitted(
@@ -446,10 +630,12 @@ export async function GET(request: Request) {
             ),
           );
         })
-        .map((day) => day.outletId.toHexString()),
+        .map((day) => day.outletId.toHexString())
+        : [],
     );
     const attendanceStatusByEmployee = new Map(
-      todayDays.flatMap((day) =>
+      wantsAttendance
+        ? todayDays.flatMap((day) =>
         day.entries.map((entry) => [
           entry.employeeId.toHexString(),
           {
@@ -458,7 +644,8 @@ export async function GET(request: Request) {
               day.status === "SUBMITTED" && entry.submitted !== false,
           },
         ] as const),
-      ),
+      )
+        : [],
     );
     const outletCodeById = new Map(
       outlets.map((outlet) => [outlet._id.toHexString(), outlet.code]),
@@ -477,6 +664,30 @@ export async function GET(request: Request) {
         submitted: attendance?.submitted ?? false,
       };
     });
+    const notificationAttendanceSummaries = notificationEmployees.map(
+      (employee) => {
+        const attendance = attendanceStatusByEmployee.get(
+          employee._id.toHexString(),
+        );
+        const day = todayDays.find((item) =>
+          item.outletId.equals(employee.outletId),
+        );
+        const entry = day?.entries.find((item) =>
+          item.employeeId.equals(employee._id),
+        );
+        return {
+          employeeId: employee._id.toHexString(),
+          employeeName: employee.fullName,
+          employeeCode: employee.employeeCode,
+          designation: employee.designation,
+          outletCode: outletCodeById.get(employee.outletId.toHexString()) ?? "",
+          status: attendance?.status ?? entry?.status ?? null,
+          submitted:
+            attendance?.submitted ??
+            (day?.status === "SUBMITTED" && entry?.submitted !== false),
+        };
+      },
+    );
     const attendanceDayByDate = new Map(
       attendanceDays.map((day) => [
         `${day.outletId.toHexString()}:${day.date}`,
@@ -485,7 +696,8 @@ export async function GET(request: Request) {
     );
     const attendanceTrend = [];
     for (
-      let trendDate = attendanceFrom;
+      let trendDate = wantsTrend ? attendanceFrom : attendanceTo;
+      wantsTrend &&
       trendDate <= attendanceTo;
       trendDate = dateAfter(trendDate, 1)
     ) {
@@ -533,7 +745,7 @@ export async function GET(request: Request) {
         outlets: trendOutletRows,
       });
     }
-    const outletSummaries = await Promise.all(
+    const outletSummaries = wantsOutlets ? await Promise.all(
       outlets.map(async (outlet) => {
         const employeeCount = await db
           .collection<EmployeeDocument>("employees")
@@ -552,16 +764,24 @@ export async function GET(request: Request) {
           submitted: submittedOutlets.has(outlet._id.toHexString()),
         };
       }),
-    );
+    ) : [];
     return NextResponse.json({
       today: dashboardDate,
       month,
+      ...(wantsSummary
+        ? {
       metrics: {
         activeEmployees,
         fullTimeEmployees,
         partTimeEmployees,
         activeOutlets: outlets.length,
         attendance,
+        periodAttendance,
+        attendanceRateChange,
+        lowestOutletCode: lowestOutletWithData?.code ?? null,
+        bestOutletCode: bestOutletWithData?.code ?? null,
+        bestOutletRate: bestOutletWithData?.rate ?? null,
+        unmarkedAttendanceEmployees,
         missingSubmissions: outlets.length - submittedOutlets.size,
         submittedOutlets: submittedOutlets.size,
         payrollCount: canReadSalary ? salaryRecords.length : null,
@@ -601,10 +821,17 @@ export async function GET(request: Request) {
             )
           : null,
       },
-      outlets: outletSummaries,
-      attendanceEmployees: attendanceEmployeeSummaries,
-      attendanceTrend,
-      whoIsAway,
+        }
+        : {}),
+      ...(wantsOutlets ? { outlets: outletSummaries } : {}),
+      ...(wantsAttendance
+        ? { attendanceEmployees: attendanceEmployeeSummaries }
+        : {}),
+      ...(wants("notifications")
+        ? { dashboardNotifications: notificationAttendanceSummaries }
+        : {}),
+      ...(wantsTrend ? { attendanceTrend } : {}),
+      ...(wantsAway ? { whoIsAway } : {}),
     });
   } catch (error) {
     return apiError(error);

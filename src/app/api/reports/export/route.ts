@@ -432,7 +432,6 @@ async function getRows(
               outletId: outlet._id,
               status: "APPROVED",
               date: { $gte: from, $lte: to },
-              payrollRecordId: { $exists: false },
             })
             .toArray(),
           db

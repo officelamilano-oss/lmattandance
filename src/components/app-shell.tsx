@@ -54,7 +54,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
     try {
       const [dashboardResponse, advancesResponse] = await Promise.all([
         canReadDashboard
-          ? fetch("/api/dashboard", { cache: "no-store" })
+          ? fetch("/api/dashboard?parts=summary,notifications", { cache: "no-store" })
           : Promise.resolve(null),
         canReadAdvances
           ? fetch("/api/advances?status=PENDING&pageSize=100", {
@@ -84,7 +84,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
               icon: "attendance",
             });
           }
-          for (const employee of dashboard.attendanceEmployees ?? []) {
+          for (const employee of dashboard.dashboardNotifications ?? []) {
             if (employee.status !== "A") continue;
             nextNotifications.push({
               id: `absent:${today}:${employee.employeeId}`,

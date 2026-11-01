@@ -70,6 +70,8 @@
   import { EmployeeImportPanel } from "@/components/employee-import-panel";
   import { EmployeeCreatePanel } from "@/components/employee-create-panel";
   import { AutoDismissNotice } from "@/components/auto-dismiss-notice";
+  import { LazySection } from "@/components/lazy-section";
+  import { DashboardPartLoader } from "@/components/dashboard-part-loader";
   import { getIndiaDate, getIndiaMonth } from "@/lib/payroll/dates";
   import { isAttendanceEntryLocked } from "@/lib/attendance";
   import { calculateLoanInstallment } from "@/lib/payroll/calculate";
@@ -309,6 +311,7 @@
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [dashboardFetching, setDashboardFetching] = useState(false);
+    const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
     const attendanceReloadId = useRef(0);
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
@@ -378,20 +381,13 @@
       installments: Array<Record<string, unknown>>;
       transactions: Array<Record<string, unknown>>;
     } | null>(null);
-    const dashboardTeamReport = useEmployeeAttendanceReport({
-      enabled:
-        section === "dashboard" &&
-        user.permissions.includes("employees.read"),
-      from: dashboardFrom,
-      to: dashboardTo,
-      outletId: selectedOutlet,
-      employeeId: "",
-    });
-
     async function reload() {
       const reloadId = ++attendanceReloadId.current;
-      if (section !== "dashboard") setRefreshing(true);
-      else setDashboardFetching(true);
+      if (section !== "dashboard") {
+        if (!loading) setRefreshing(true);
+      } else {
+        setDashboardFetching(true);
+      }
       setError("");
       const commitData = (nextData: WorkspaceData) => {
         if (reloadId === attendanceReloadId.current) setData(nextData);
@@ -412,6 +408,7 @@
           dashboardParams.set("awayFrom", awayDates.from);
           dashboardParams.set("awayTo", awayDates.to);
           if (selectedOutlet) dashboardParams.set("outletId", selectedOutlet);
+          dashboardParams.set("parts", "summary");
           const dashboardUrl = `/api/dashboard?${dashboardParams.toString()}`;
           const dashboard = await request<WorkspaceData>(dashboardUrl);
           commitData(dashboard);
@@ -588,9 +585,6 @@
       dashboardDate,
       dashboardFrom,
       dashboardTo,
-      awayPeriod,
-      awayFrom,
-      awayTo,
       debouncedSearch,
       page,
       advanceStatus,
@@ -653,11 +647,13 @@
       }
     }
 
-    async function exportWhoIsAway(format: ExportFormat) {
+    async function exportWhoIsAway(
+      format: ExportFormat,
+      rows: WhoIsAwayView[],
+    ) {
       setDashboardExportBusy(format);
       setError("");
       try {
-        const rows = data.whoIsAway ?? [];
         if (!rows.length) {
           setError(
             "There are no absent or half-day attendance records to export.",
@@ -828,7 +824,11 @@
           className="icon-button"
           title="Refresh"
           aria-label="Refresh"
-          onClick={() => void reload()}
+          onClick={() => {
+            if (section === "dashboard")
+              setDashboardRefreshKey((current) => current + 1);
+            void reload();
+          }}
         >
           <RefreshCw size={17} />
         </button>
@@ -837,20 +837,8 @@
 
     const dashboardAttendance =
       data.metrics?.attendance ?? { P: 0, A: 0, HD: 0, WO: 0 };
-    const attendanceTrend = data.attendanceTrend ?? [];
-    const dashboardPeriodAttendance = attendanceTrend.reduce(
-      (total, day) => ({
-        P: total.P + day.attendance.P,
-        A: total.A + day.attendance.A,
-        WO: total.WO + day.attendance.WO,
-        HD: total.HD + day.attendance.HD,
-      }),
-      { P: 0, A: 0, WO: 0, HD: 0 },
-    );
     const dashboardRangeAttendance =
-      attendanceTrend.length > 0
-        ? dashboardPeriodAttendance
-        : dashboardAttendance;
+      data.metrics?.periodAttendance ?? dashboardAttendance;
     const dashboardMarkedCount =
       dashboardRangeAttendance.P +
       dashboardRangeAttendance.A +
@@ -875,146 +863,18 @@
             (dashboardSubmittedOutlets / dashboardActiveOutlets) * 100,
           )
         : 0;
-    const filteredAttendanceEmployees = (
-      data.attendanceEmployees ?? []
-    ).filter((employee) => {
-      if (dashboardAttendanceFilter === "ALL") return true;
-      if (dashboardAttendanceFilter === "UNMARKED")
-        return employee.status === null;
-      return employee.status === dashboardAttendanceFilter;
-    });
-    const unmarkedAttendanceEmployees = (
-      data.attendanceEmployees ?? []
-    ).filter((employee) => employee.status === null).length;
-    const dashboardDayRate = (day: (typeof attendanceTrend)[number]) => {
-      const { P, A, HD } = day.attendance;
-      const marked = P + A + HD;
-      return marked > 0 ? ((P + HD / 2) / marked) * 100 : null;
-    };
-    const validDashboardDayRates = attendanceTrend
-      .map((day) => dashboardDayRate(day))
-      .filter((rate): rate is number => rate !== null);
-    const lastWeekRates = attendanceTrend
-      .slice(-7)
-      .map((day) => dashboardDayRate(day))
-      .filter((rate): rate is number => rate !== null);
-    const previousWeekRates = attendanceTrend
-      .slice(-14, -7)
-      .map((day) => dashboardDayRate(day))
-      .filter((rate): rate is number => rate !== null);
-    const averageRate = (rates: number[]) =>
-      rates.length
-        ? rates.reduce((sum, rate) => sum + rate, 0) / rates.length
-        : null;
-    const rateChange =
-      lastWeekRates.length && previousWeekRates.length
-        ? averageRate(lastWeekRates)! - averageRate(previousWeekRates)!
-        : null;
-    const outletPeriodTotals = new Map<
-      string,
-      { code: string; P: number; A: number; HD: number; WO: number }
-    >();
-    for (const day of attendanceTrend) {
-      for (const outlet of day.outlets) {
-        const total = outletPeriodTotals.get(outlet.id) ?? {
-          code: outlet.code,
-          P: 0,
-          A: 0,
-          HD: 0,
-          WO: 0,
-        };
-        total.P += outlet.attendance.P;
-        total.A += outlet.attendance.A;
-        total.HD += outlet.attendance.HD;
-        total.WO += outlet.attendance.WO;
-        outletPeriodTotals.set(outlet.id, total);
-      }
-    }
-    const outletPerformance = [...outletPeriodTotals.entries()]
-      .map(([id, totals]) => {
-        const marked = totals.P + totals.A + totals.HD;
-        return {
-          id,
-          ...totals,
-          rate: marked
-            ? ((totals.P + totals.HD / 2) / marked) * 100
-            : null,
-        };
-      })
-      .sort((left, right) => (right.rate ?? -1) - (left.rate ?? -1));
-    const dashboardSuggestions: Array<{
-      title: string;
-      detail: string;
-      href: string;
-      icon: "attendance" | "advance" | "payroll" | "outlet";
-    }> = [];
-    const missingOutlets = data.metrics?.missingSubmissions ?? 0;
-    if (missingOutlets > 0)
-      dashboardSuggestions.push({
-        title: `${missingOutlets} outlet${missingOutlets === 1 ? "" : "s"} missing attendance submission`,
-        detail: `Review attendance for ${formatDate(dashboardDate)}`,
-        href: "/attendance",
-        icon: "attendance",
-      });
-    if (unmarkedAttendanceEmployees > 0)
-      dashboardSuggestions.push({
-        title: `${unmarkedAttendanceEmployees} team member${unmarkedAttendanceEmployees === 1 ? "" : "s"} not marked`,
-        detail: "Complete the attendance list for this date",
-        href: "/attendance",
-        icon: "attendance",
-      });
-    if (
-      user.permissions.includes("advances.approve") &&
-      (data.metrics?.pendingAdvanceApprovals ?? 0) > 0
-    )
-      dashboardSuggestions.push({
-        title: `${data.metrics?.pendingAdvanceApprovals} advance request${data.metrics?.pendingAdvanceApprovals === 1 ? "" : "s"} awaiting review`,
-        detail: "Review pending advance requests",
-        href: "/advances",
-        icon: "advance",
-      });
-    if (
-      user.permissions.includes("salary.read") &&
-      (data.metrics?.pendingPayroll ?? 0) > 0
-    )
-      dashboardSuggestions.push({
-        title: `${data.metrics?.pendingPayroll} payroll draft${data.metrics?.pendingPayroll === 1 ? "" : "s"} to review`,
-        detail: "Open the selected month’s payroll records",
-        href: "/salary",
-        icon: "payroll",
-      });
-    const lowestOutletWithData = [...outletPerformance]
-      .filter((outlet) => outlet.rate !== null)
-      .sort((left, right) => left.rate! - right.rate!)[0];
-    if (lowestOutletWithData)
-      dashboardSuggestions.push({
-        title: `${lowestOutletWithData.code} has the lowest recorded attendance rate`,
-        detail: `${lowestOutletWithData.rate!.toFixed(1)}% · review the selected period`,
-        href: "/attendance",
-        icon: "outlet",
-      });
-    if (!dashboardSuggestions.length)
-      dashboardSuggestions.push({
-        title: validDashboardDayRates.length
-          ? "No outstanding attendance actions found"
-          : "No attendance has been recorded for this period",
-        detail: validDashboardDayRates.length
-          ? "Attendance and outlet submissions are up to date"
-          : `Review the attendance range ending ${formatDate(dashboardTo)}`,
-        href: "/attendance",
-        icon: "attendance",
-      });
+    const rateChange = data.metrics?.attendanceRateChange ?? null;
 
     if (section === "dashboard")
       return (
         <div
-          className={`content-area${dashboardFetching || dashboardTeamReport.isFetching ? " dashboard-refreshing" : ""}`}
-          aria-busy={dashboardFetching || dashboardTeamReport.isFetching}
+          className={`content-area${!loading && dashboardFetching ? " dashboard-refreshing" : ""}`}
+          aria-busy={!loading && dashboardFetching}
         >
           <Notice
-            error={error || dashboardTeamReport.error}
+            error={error}
             success={success}
-            refreshing={dashboardFetching || dashboardTeamReport.isFetching}
+            refreshing={!loading && dashboardFetching}
           />
           {loading ? (
             <Loading />
@@ -1038,9 +898,9 @@
                           <Bell size={14} /> {data.metrics?.pendingAdvanceApprovals} pending approval
                         </span>
                       )}
-                    {lowestOutletWithData && (
+                    {data.metrics?.bestOutletCode && (
                       <span>
-                        <Building2 size={14} /> Best outlet: {outletPerformance.find((outlet) => outlet.rate !== null)?.code} ({outletPerformance.find((outlet) => outlet.rate !== null)?.rate?.toFixed(1)}%)
+                        <Building2 size={14} /> Best outlet: {data.metrics.bestOutletCode} ({data.metrics.bestOutletRate?.toFixed(1)}%)
                       </span>
                     )}
                   </div>
@@ -1171,207 +1031,144 @@
                 </article>
               </div>
               {user.permissions.includes("attendance.read") && (
-                <section className="panel dashboard-checkins-panel">
-                  <div className="panel-heading dashboard-checkins-heading">
-                    <div>
-                      <span className="dashboard-panel-kicker">TEAM ATTENDANCE</span>
-                      <h2>Attendance overview</h2>
-                      <p>
-                        {formatDate(dashboardDate)} · {(data.attendanceEmployees ?? []).length} team members in your accessible outlets
-                      </p>
-                    </div>
-                    <div className="dashboard-checkin-filters" role="group" aria-label="Filter attendance employees">
-                      {([
-                        ["ALL", "All"],
-                        ["P", "Present"],
-                        ["A", "Absent"],
-                        ["HD", "Half day"],
-                        ["WO", "Week off"],
-                        ["UNMARKED", "Unmarked"],
-                      ] as const).map(([value, label]) => (
-                        <button
-                          key={value}
-                          type="button"
-                          className={dashboardAttendanceFilter === value ? "dashboard-filter-active" : ""}
-                          aria-pressed={dashboardAttendanceFilter === value}
-                          onClick={() => setDashboardAttendanceFilter(value)}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                      <span className="dashboard-late-unavailable" title="Check-in times are not stored in attendance records">Late · not tracked</span>
-                    </div>
-                  </div>
-                  <div className="table-wrap">
-                    <table className="dashboard-checkin-table">
-                      <thead>
-                        <tr>
-                          <th>Employee</th>
-                          <th>Department</th>
-                          <th>Check-in</th>
-                          <th>Hours</th>
-                          <th>Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {filteredAttendanceEmployees.map((employee) => (
-                          <tr key={employee.employeeId}>
-                            <td>
-                              <span className="dashboard-employee-cell">
-                                <span className="dashboard-employee-avatar">{employee.employeeName.slice(0, 1).toUpperCase()}</span>
-                                <span><strong>{employee.employeeName}</strong><small>{employee.employeeCode} · {employee.outletCode || "Outlet"}</small></span>
-                              </span>
-                            </td>
-                            <td>{employee.designation || "—"}</td>
-                            <td><span className="dashboard-untracked"><Clock3 size={13} /> Not captured</span></td>
-                            <td><span className="dashboard-hours-placeholder">Not tracked</span></td>
-                            <td>
-                              <span className={`badge ${employee.status ? `attendance-status-${employee.status.toLowerCase()}` : "badge-muted"}`}>
-                                {employee.status === "P" ? "Present" : employee.status === "A" ? "Absent" : employee.status === "HD" ? "Half day" : employee.status === "WO" ? "Week off" : "Unmarked"}
-                              </span>
-                              {employee.status && !employee.submitted && <small className="dashboard-draft-label">Draft</small>}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {filteredAttendanceEmployees.length === 0 && (
-                      <Empty>{data.attendanceEmployees?.length ? "No team members match this status filter." : "No employee attendance is available for this date and outlet scope."}</Empty>
-                    )}
-                  </div>
-                </section>
-              )}
-              {user.permissions.includes("attendance.read") && (
-                <>
-                  <div className="dashboard-analytics-trend-row">
-                    <DashboardAttendanceTrend
-                      days={attendanceTrend}
-                      from={dashboardFrom}
-                      to={dashboardTo}
-                    />
-                    <AttendanceStatusChart
-                      attendance={dashboardRangeAttendance}
-                      subtitle={`${formatDate(dashboardFrom)} – ${formatDate(dashboardTo)}`}
-                    />
-                  </div>
-                  <div className="dashboard-analytics-grid">
-                    <DashboardAttendanceHeatmap
-                      days={attendanceTrend}
-                      from={dashboardFrom}
-                      to={dashboardTo}
-                    />
-                    <DashboardOutletRanking
-                      outlets={outletPerformance}
-                      activeOutlets={data.outlets ?? []}
-                      selectedOutlet={selectedOutlet}
-                      onSelect={(outletId) => setSelectedOutlet(outletId)}
-                    />
-                    {user.permissions.includes("employees.read") && (
-                      <DashboardTeamPerformance
-                        rows={dashboardTeamReport.rows}
-                        from={dashboardFrom}
-                        to={dashboardTo}
+                <LazySection minHeight={360}>
+                  <DashboardPartLoader
+                    part="attendance"
+                    filters={{
+                      date: dashboardDate,
+                      from: dashboardFrom,
+                      to: dashboardTo,
+                      outletId: selectedOutlet,
+                      refreshKey: dashboardRefreshKey,
+                    }}
+                  >
+                    {(attendanceData) => (
+                      <DashboardAttendanceOverview
+                        employees={attendanceData.attendanceEmployees ?? []}
+                        date={dashboardDate}
+                        filter={dashboardAttendanceFilter}
+                        onFilterChange={setDashboardAttendanceFilter}
                       />
                     )}
-                  </div>
-                </>
+                  </DashboardPartLoader>
+                </LazySection>
               )}
-              <div className="dashboard-payroll-suggestions-grid">
-                {user.permissions.includes("salary.read") && (
-                  <DashboardPayrollBreakdown
-                    metrics={data.metrics}
-                    employeeCount={data.metrics?.activeEmployees ?? 0}
-                    from={dashboardFrom}
-                    to={dashboardTo}
-                  />
-                )}
-                <DashboardSuggestions items={dashboardSuggestions} />
-              </div>
               {user.permissions.includes("attendance.read") && (
-                <WhoIsAwayPanel
-                  employees={data.whoIsAway ?? []}
-                  period={awayPeriod}
-                  customFrom={awayFrom}
-                  customTo={awayTo}
-                  canExport={user.permissions.includes("reports.export")}
-                  exportBusy={dashboardExportBusy}
-                  onPeriodChange={setAwayPeriod}
-                  onCustomFromChange={setAwayFrom}
-                  onCustomToChange={setAwayTo}
-                  onExport={(format) => void exportWhoIsAway(format)}
-                />
+                <LazySection minHeight={680}>
+                  <DashboardPartLoader
+                    part="trend"
+                    filters={{
+                      date: dashboardDate,
+                      from: dashboardFrom,
+                      to: dashboardTo,
+                      outletId: selectedOutlet,
+                      refreshKey: dashboardRefreshKey,
+                    }}
+                  >
+                    {(trendData) => (
+                      <DashboardAnalyticsSections
+                        days={trendData.attendanceTrend ?? []}
+                        from={dashboardFrom}
+                        to={dashboardTo}
+                        metrics={data.metrics}
+                        selectedOutlet={selectedOutlet}
+                        onSelectOutlet={setSelectedOutlet}
+                        canReadEmployees={user.permissions.includes("employees.read")}
+                        canReadSalary={user.permissions.includes("salary.read")}
+                      />
+                    )}
+                  </DashboardPartLoader>
+                </LazySection>
               )}
-              <section className="panel">
-                <div className="panel-heading">
-                  <div>
-                    <h2>Outlet operations</h2>
-                    <p>Attendance and submission progress for {dashboardDate}</p>
-                  </div>
-                  <span className="live-tag">
-                    <i /> LIVE
-                  </span>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Outlet</th>
-                        <th>Active team</th>
-                        <th>Present</th>
-                        <th>Absent</th>
-                        <th>Half day</th>
-                        <th>Submission</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(data.outlets ?? []).map((outlet: DashboardOutlet) => (
-                        <tr key={outlet.id}>
-                          <td>
-                            <strong>{outlet.code}</strong>
-                            <span className="sub-cell">{outlet.name}</span>
-                          </td>
-                          <td>{outlet.employees}</td>
-                          <td>{outlet.attendance?.P ?? 0}</td>
-                          <td>{outlet.attendance?.A ?? 0}</td>
-                          <td>{outlet.attendance?.HD ?? 0}</td>
-                          <td>
-                            <span
-                              className={`badge ${outlet.submitted ? "badge-green" : "badge-red"}`}
-                            >
-                              {outlet.submitted ? "Submitted" : "Missing"}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!data.outlets?.length && (
-                    <Empty>No outlets are assigned to this account.</Empty>
+              {user.permissions.includes("attendance.read") && (
+                <LazySection minHeight={300}>
+                  <DashboardPartLoader
+                    part="away"
+                    filters={{
+                      date: dashboardDate,
+                      from: dashboardFrom,
+                      to: dashboardTo,
+                      outletId: selectedOutlet,
+                      awayFrom: getAwayDateRange(
+                        awayPeriod,
+                        awayFrom,
+                        awayTo,
+                        today,
+                      ).from,
+                      awayTo: getAwayDateRange(
+                        awayPeriod,
+                        awayFrom,
+                        awayTo,
+                        today,
+                      ).to,
+                      refreshKey: dashboardRefreshKey,
+                    }}
+                  >
+                    {(awayData) => (
+                      <WhoIsAwayPanel
+                        employees={awayData.whoIsAway ?? []}
+                        period={awayPeriod}
+                        customFrom={awayFrom}
+                        customTo={awayTo}
+                        canExport={user.permissions.includes("reports.export")}
+                        exportBusy={dashboardExportBusy}
+                        onPeriodChange={setAwayPeriod}
+                        onCustomFromChange={setAwayFrom}
+                        onCustomToChange={setAwayTo}
+                        onExport={(format) =>
+                          void exportWhoIsAway(
+                            format,
+                            awayData.whoIsAway ?? [],
+                          )
+                        }
+                      />
+                    )}
+                  </DashboardPartLoader>
+                </LazySection>
+              )}
+              <LazySection minHeight={300}>
+                <DashboardPartLoader
+                  part="outlets"
+                  filters={{
+                    date: dashboardDate,
+                    from: dashboardFrom,
+                    to: dashboardTo,
+                    outletId: selectedOutlet,
+                    refreshKey: dashboardRefreshKey,
+                  }}
+                >
+                  {(outletData) => (
+                    <DashboardOutletOperations
+                      date={dashboardDate}
+                      outlets={outletData.outlets ?? []}
+                    />
                   )}
-                </div>
-              </section>
+                </DashboardPartLoader>
+              </LazySection>
               {user.permissions.includes("employees.read") && (
-                <EmployeeAttendanceTable
-                  key={`${selectedOutlet}|${dashboardFrom}|${dashboardTo}`}
-                  canReadSalary={user.permissions.includes("salary.read")}
-                  globalFrom={dashboardFrom}
-                  globalTo={dashboardTo}
-                  globalOutletId={selectedOutlet}
-                  outlets={activeOutlets}
-                  canExport={user.permissions.includes("reports.export")}
-                  exportBusy={dashboardExportBusy}
-                  onExport={(format, filters) =>
-                    void exportDashboardAttendance(format, filters)
-                  }
-                  title={
-                    dashboardPreset === "This Month"
-                      ? "Employee attendance this month"
-                      : dashboardPreset === "Last Month"
-                        ? "Employee attendance last month"
-                        : "Employee attendance by date"
-                  }
-                  description="Choose an outlet, employee, and date range to review or download the submitted attendance report."
-                />
+                <LazySection minHeight={440}>
+                  <EmployeeAttendanceTable
+                    key={`${selectedOutlet}|${dashboardFrom}|${dashboardTo}`}
+                    canReadSalary={user.permissions.includes("salary.read")}
+                    globalFrom={dashboardFrom}
+                    globalTo={dashboardTo}
+                    globalOutletId={selectedOutlet}
+                    outlets={activeOutlets}
+                    canExport={user.permissions.includes("reports.export")}
+                    exportBusy={dashboardExportBusy}
+                    onExport={(format, filters) =>
+                      void exportDashboardAttendance(format, filters)
+                    }
+                    title={
+                      dashboardPreset === "This Month"
+                        ? "Employee attendance this month"
+                        : dashboardPreset === "Last Month"
+                          ? "Employee attendance last month"
+                          : "Employee attendance by date"
+                    }
+                    description="Choose an outlet, employee, and date range to review or download the submitted attendance report."
+                  />
+                </LazySection>
               )}
             </>
           )}
@@ -4597,6 +4394,385 @@
     };
   }
 
+  function DashboardAttendanceOverview({
+    employees,
+    date,
+    filter,
+    onFilterChange,
+  }: {
+    employees: NonNullable<WorkspaceData["attendanceEmployees"]>;
+    date: string;
+    filter: "ALL" | "P" | "A" | "HD" | "WO" | "UNMARKED";
+    onFilterChange: (filter: "ALL" | "P" | "A" | "HD" | "WO" | "UNMARKED") => void;
+  }) {
+    const filteredEmployees = employees.filter((employee) => {
+      if (filter === "ALL") return true;
+      if (filter === "UNMARKED") return employee.status === null;
+      return employee.status === filter;
+    });
+
+    return (
+      <section className="panel dashboard-checkins-panel">
+        <div className="panel-heading dashboard-checkins-heading">
+          <div>
+            <span className="dashboard-panel-kicker">TEAM ATTENDANCE</span>
+            <h2>Attendance overview</h2>
+            <p>
+              {formatDate(date)} · {employees.length} team members in your
+              accessible outlets
+            </p>
+          </div>
+          <div
+            className="dashboard-checkin-filters"
+            role="group"
+            aria-label="Filter attendance employees"
+          >
+            {([
+              ["ALL", "All"],
+              ["P", "Present"],
+              ["A", "Absent"],
+              ["HD", "Half day"],
+              ["WO", "Week off"],
+              ["UNMARKED", "Unmarked"],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={filter === value ? "dashboard-filter-active" : ""}
+                aria-pressed={filter === value}
+                onClick={() => onFilterChange(value)}
+              >
+                {label}
+              </button>
+            ))}
+            <span
+              className="dashboard-late-unavailable"
+              title="Check-in times are not stored in attendance records"
+            >
+              Late · not tracked
+            </span>
+          </div>
+        </div>
+        <div className="table-wrap">
+          <table className="dashboard-checkin-table">
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th>Department</th>
+                <th>Check-in</th>
+                <th>Hours</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredEmployees.map((employee) => (
+                <tr key={employee.employeeId}>
+                  <td>
+                    <span className="dashboard-employee-cell">
+                      <span className="dashboard-employee-avatar">
+                        {employee.employeeName.slice(0, 1).toUpperCase()}
+                      </span>
+                      <span>
+                        <strong>{employee.employeeName}</strong>
+                        <small>
+                          {employee.employeeCode} · {employee.outletCode || "Outlet"}
+                        </small>
+                      </span>
+                    </span>
+                  </td>
+                  <td>{employee.designation || "—"}</td>
+                  <td>
+                    <span className="dashboard-untracked">
+                      <Clock3 size={13} /> Not captured
+                    </span>
+                  </td>
+                  <td>
+                    <span className="dashboard-hours-placeholder">Not tracked</span>
+                  </td>
+                  <td>
+                    <span
+                      className={`badge ${employee.status ? `attendance-status-${employee.status.toLowerCase()}` : "badge-muted"}`}
+                    >
+                      {employee.status === "P"
+                        ? "Present"
+                        : employee.status === "A"
+                          ? "Absent"
+                          : employee.status === "HD"
+                            ? "Half day"
+                            : employee.status === "WO"
+                              ? "Week off"
+                              : "Unmarked"}
+                    </span>
+                    {employee.status && !employee.submitted && (
+                      <small className="dashboard-draft-label">Draft</small>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {filteredEmployees.length === 0 && (
+            <Empty>
+              {employees.length
+                ? "No team members match this status filter."
+                : "No employee attendance is available for this date and outlet scope."}
+            </Empty>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function DashboardOutletOperations({
+    date,
+    outlets,
+  }: {
+    date: string;
+    outlets: DashboardOutlet[];
+  }) {
+    return (
+      <section className="panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Outlet operations</h2>
+            <p>Attendance and submission progress for {date}</p>
+          </div>
+          <span className="live-tag">
+            <i /> LIVE
+          </span>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Outlet</th>
+                <th>Active team</th>
+                <th>Present</th>
+                <th>Absent</th>
+                <th>Half day</th>
+                <th>Submission</th>
+              </tr>
+            </thead>
+            <tbody>
+              {outlets.map((outlet) => (
+                <tr key={outlet.id}>
+                  <td>
+                    <strong>{outlet.code}</strong>
+                    <span className="sub-cell">{outlet.name}</span>
+                  </td>
+                  <td>{outlet.employees}</td>
+                  <td>{outlet.attendance?.P ?? 0}</td>
+                  <td>{outlet.attendance?.A ?? 0}</td>
+                  <td>{outlet.attendance?.HD ?? 0}</td>
+                  <td>
+                    <span
+                      className={`badge ${outlet.submitted ? "badge-green" : "badge-red"}`}
+                    >
+                      {outlet.submitted ? "Submitted" : "Missing"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!outlets.length && (
+            <Empty>No outlets are assigned to this account.</Empty>
+          )}
+        </div>
+      </section>
+    );
+  }
+
+  function DashboardAnalyticsSections({
+    days,
+    from,
+    to,
+    metrics,
+    selectedOutlet,
+    onSelectOutlet,
+    canReadEmployees,
+    canReadSalary,
+  }: {
+    days: NonNullable<WorkspaceData["attendanceTrend"]>;
+    from: string;
+    to: string;
+    metrics?: WorkspaceData["metrics"];
+    selectedOutlet: string;
+    onSelectOutlet: (outletId: string) => void;
+    canReadEmployees: boolean;
+    canReadSalary: boolean;
+  }) {
+    const periodAttendance = days.reduce(
+      (total, day) => ({
+        P: total.P + day.attendance.P,
+        A: total.A + day.attendance.A,
+        HD: total.HD + day.attendance.HD,
+        WO: total.WO + day.attendance.WO,
+      }),
+      { P: 0, A: 0, HD: 0, WO: 0 },
+    );
+    const outletTotals = new Map<
+      string,
+      { code: string; P: number; A: number; HD: number; WO: number }
+    >();
+    for (const day of days) {
+      for (const outlet of day.outlets) {
+        const total = outletTotals.get(outlet.id) ?? {
+          code: outlet.code,
+          P: 0,
+          A: 0,
+          HD: 0,
+          WO: 0,
+        };
+        total.P += outlet.attendance.P;
+        total.A += outlet.attendance.A;
+        total.HD += outlet.attendance.HD;
+        total.WO += outlet.attendance.WO;
+        outletTotals.set(outlet.id, total);
+      }
+    }
+    const outletPerformance = [...outletTotals.entries()]
+      .map(([id, totals]) => {
+        const marked = totals.P + totals.A + totals.HD;
+        return {
+          id,
+          ...totals,
+          rate: marked
+            ? ((totals.P + totals.HD / 2) / marked) * 100
+            : null,
+        };
+      })
+      .sort((left, right) => (right.rate ?? -1) - (left.rate ?? -1));
+    const lowestOutletWithData = [...outletPerformance]
+      .filter((outlet) => outlet.rate !== null)
+      .sort((left, right) => left.rate! - right.rate!)[0];
+    const suggestions: Array<{
+      title: string;
+      detail: string;
+      href: string;
+      icon: "attendance" | "advance" | "payroll" | "outlet";
+    }> = [];
+    const missingOutlets = metrics?.missingSubmissions ?? 0;
+    const unmarkedEmployees = metrics?.unmarkedAttendanceEmployees ?? 0;
+    if (missingOutlets > 0)
+      suggestions.push({
+        title: `${missingOutlets} outlet${missingOutlets === 1 ? "" : "s"} missing attendance submission`,
+        detail: `Review attendance for ${formatDate(to)}`,
+        href: "/attendance",
+        icon: "attendance",
+      });
+    if (unmarkedEmployees > 0)
+      suggestions.push({
+        title: `${unmarkedEmployees} team member${unmarkedEmployees === 1 ? "" : "s"} not marked`,
+        detail: "Complete the attendance list for this date",
+        href: "/attendance",
+        icon: "attendance",
+      });
+    if ((metrics?.pendingAdvanceApprovals ?? 0) > 0)
+      suggestions.push({
+        title: `${metrics?.pendingAdvanceApprovals} advance request${metrics?.pendingAdvanceApprovals === 1 ? "" : "s"} awaiting review`,
+        detail: "Review pending advance requests",
+        href: "/advances",
+        icon: "advance",
+      });
+    if ((metrics?.pendingPayroll ?? 0) > 0)
+      suggestions.push({
+        title: `${metrics?.pendingPayroll} payroll draft${metrics?.pendingPayroll === 1 ? "" : "s"} to review`,
+        detail: "Open the selected month’s payroll records",
+        href: "/salary",
+        icon: "payroll",
+      });
+    if (lowestOutletWithData)
+      suggestions.push({
+        title: `${lowestOutletWithData.code} has the lowest recorded attendance rate`,
+        detail: `${lowestOutletWithData.rate!.toFixed(1)}% · review the selected period`,
+        href: "/attendance",
+        icon: "outlet",
+      });
+    if (!suggestions.length) {
+      const hasAttendance = days.some((day) =>
+        Object.values(day.attendance).some((count) => count > 0),
+      );
+      suggestions.push({
+        title: hasAttendance
+          ? "No outstanding attendance actions found"
+          : "No attendance has been recorded for this period",
+        detail: hasAttendance
+          ? "Attendance and outlet submissions are up to date"
+          : `Review the attendance range ending ${formatDate(to)}`,
+        href: "/attendance",
+        icon: "attendance",
+      });
+    }
+
+    return (
+      <>
+        <div className="dashboard-analytics-trend-row">
+          <DashboardAttendanceTrend days={days} from={from} to={to} />
+          <AttendanceStatusChart
+            attendance={periodAttendance}
+            subtitle={`${formatDate(from)} – ${formatDate(to)}`}
+          />
+        </div>
+        <div className="dashboard-analytics-grid">
+          <DashboardAttendanceHeatmap days={days} from={from} to={to} />
+          <DashboardOutletRanking
+            outlets={outletPerformance}
+            selectedOutlet={selectedOutlet}
+            onSelect={onSelectOutlet}
+          />
+          {canReadEmployees && (
+            <DashboardTeamPerformanceLoader from={from} to={to} outletId={selectedOutlet} />
+          )}
+        </div>
+        <div className="dashboard-payroll-suggestions-grid">
+          {canReadSalary && (
+            <DashboardPayrollBreakdown
+              metrics={metrics}
+              employeeCount={metrics?.activeEmployees ?? 0}
+              from={from}
+              to={to}
+            />
+          )}
+          <DashboardSuggestions items={suggestions} />
+        </div>
+      </>
+    );
+  }
+
+  function DashboardTeamPerformanceLoader({
+    from,
+    to,
+    outletId,
+  }: {
+    from: string;
+    to: string;
+    outletId: string;
+  }) {
+    const report = useEmployeeAttendanceReport({
+      enabled: true,
+      from,
+      to,
+      outletId,
+      employeeId: "",
+    });
+    if (report.error)
+      return (
+        <section className="panel dashboard-ranking-panel dashboard-team-panel">
+          <div className="notice notice-error" role="alert">
+            {report.error}
+          </div>
+        </section>
+      );
+    if (report.isFetching)
+      return (
+        <section className="panel dashboard-ranking-panel dashboard-team-panel">
+          <div className="loading-state" role="status">Loading team performance</div>
+        </section>
+      );
+    return <DashboardTeamPerformance rows={report.rows} from={from} to={to} />;
+  }
+
   function WhoIsAwayPanel({
     employees,
     period,
@@ -4931,7 +5107,6 @@
 
   function DashboardOutletRanking({
     outlets,
-    activeOutlets,
     selectedOutlet,
     onSelect,
   }: {
@@ -4944,11 +5119,9 @@
       HD: number;
       WO: number;
     }>;
-    activeOutlets: DashboardOutlet[];
     selectedOutlet: string;
     onSelect: (outletId: string) => void;
   }) {
-    const codeById = new Map(activeOutlets.map((outlet) => [outlet._id, outlet.code]));
     return (
       <section className="panel dashboard-ranking-panel">
         <div className="panel-heading">
@@ -4966,7 +5139,7 @@
               onClick={() => onSelect(selectedOutlet === outlet.id ? "" : outlet.id)}
               title={`${outlet.code} · ${outlet.rate === null ? "No attendance data" : `${outlet.rate.toFixed(1)}% attendance`}`}
             >
-              <span>{codeById.get(outlet.id) ?? outlet.code}</span>
+              <span>{outlet.code}</span>
               <span className="dashboard-ranking-bar"><i className={dashboardPercentClass(outlet.rate ?? 0, "dashboard-width")} /></span>
               <strong>{outlet.rate === null ? "No data" : `${outlet.rate.toFixed(1)}%`}</strong>
             </button>
