@@ -486,7 +486,6 @@ export async function PUT(request: Request) {
         outletId,
         date: input.date,
         corrections: [],
-        ...(!shouldBeSubmitted ? { status: "DRAFT" as const } : {}),
       },
       ...(correctionEvents.length
         ? {
