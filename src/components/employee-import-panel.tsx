@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import {
   Check,
   FileSpreadsheet,
@@ -709,14 +710,15 @@ export function EmployeeImportPanel({
       </form>
 
       {preview && mapping && (
-        <div className="access-modal-backdrop import-preview-backdrop">
-          <form
-            className="import-preview-modal"
-            onSubmit={importSheet}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="employee-import-title"
-          >
+        createPortal(
+          <div className="access-modal-backdrop import-preview-backdrop">
+            <form
+              className="import-preview-modal"
+              onSubmit={importSheet}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="employee-import-title"
+            >
             <header className="import-preview-header">
               <div>
                 <h2 id="employee-import-title">
@@ -1053,8 +1055,10 @@ export function EmployeeImportPanel({
                 Import {editRows.length} rows
               </button>
             </footer>
-          </form>
-        </div>
+            </form>
+          </div>,
+          document.body,
+        )
       )}
     </details>
   );
