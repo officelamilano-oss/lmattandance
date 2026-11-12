@@ -2,10 +2,15 @@ import { ObjectId } from "mongodb";
 import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
-import { apiError, readJson } from "@/lib/http";
+import { apiError, assertSameOrigin, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
-import type { EmployeeDocument, OutletDocument } from "@/lib/models";
+import type {
+  EmployeeDocument,
+  EmployeeFileDocument,
+  OutletDocument,
+} from "@/lib/models";
 import { employeeSchema } from "@/lib/validation/business";
+import { employeeDocumentStorage } from "@/lib/employee-document-storage";
 import {
   getEmployeeCodePrefix,
 } from "@/lib/employee-code";
@@ -82,6 +87,62 @@ export async function GET(
   }
 }
 
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    assertSameOrigin(request);
+    const actor = await getActor();
+    if (!actor)
+      return NextResponse.json(
+        { error: "Authentication required." },
+        { status: 401 },
+      );
+    if (
+      actor.role !== "MAIN_ADMIN" ||
+      !actor.permissions.includes("employees.deactivate")
+    )
+      return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+    const { id } = await context.params;
+    if (!ObjectId.isValid(id))
+      return NextResponse.json(
+        { error: "Invalid employee ID." },
+        { status: 400 },
+      );
+    const db = await getDb();
+    const employee = await db
+      .collection<EmployeeDocument>("employees")
+      .findOne({ _id: new ObjectId(id) });
+    if (!employee) throw new Error("NOT_FOUND");
+    assertOutletAccess(actor, employee.outletId);
+    const documents = await db
+      .collection<EmployeeFileDocument>("employeeFiles")
+      .find({ employeeId: employee._id })
+      .toArray();
+    for (const document of documents)
+      await employeeDocumentStorage.deleteFile(document.storageKey);
+    await db
+      .collection<EmployeeFileDocument>("employeeFiles")
+      .deleteMany({ employeeId: employee._id });
+    const deletion = await db
+      .collection<EmployeeDocument>("employees")
+      .deleteOne({ _id: employee._id });
+    if (deletion.deletedCount !== 1) throw new Error("NOT_FOUND");
+    await writeAudit({
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: "EMPLOYEE_DELETED",
+      entityType: "employee",
+      entityId: id,
+      outletId: employee.outletId,
+    });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return apiError(error);
+  }
+}
+
 export async function PATCH(
   request: Request,
   context: { params: Promise<{ id: string }> },
@@ -106,15 +167,40 @@ export async function PATCH(
     if (!current) throw new Error("NOT_FOUND");
     assertOutletAccess(actor, current.outletId);
     const raw = await readJson<Record<string, unknown>>(request);
-    if (raw.active === false) {
+    if (typeof raw.active === "boolean") {
       if (
         actor.role !== "MAIN_ADMIN" ||
         !actor.permissions.includes("employees.deactivate")
       )
         return NextResponse.json(
-          { error: "Only MAIN_ADMIN can deactivate employees." },
+          { error: "Only MAIN_ADMIN can change employee active status." },
           { status: 403 },
         );
+      if (Object.keys(raw).length !== 1)
+        return NextResponse.json(
+          { error: "Active status must be changed separately from employee details." },
+          { status: 400 },
+        );
+      if (raw.active === current.active)
+        return NextResponse.json({ ok: true });
+      if (raw.active) {
+        await db.collection<EmployeeDocument>("employees").updateOne(
+          { _id: current._id },
+          {
+            $set: { active: true, updatedAt: new Date() },
+            $unset: { deactivatedAt: "" },
+          },
+        );
+        await writeAudit({
+          actorId: actor.id,
+          actorEmail: actor.email,
+          action: "EMPLOYEE_ACTIVATED",
+          entityType: "employee",
+          entityId: id,
+          outletId: current.outletId,
+        });
+        return NextResponse.json({ ok: true });
+      }
       const settings = await db
         .collection<{ _id: string; timezone?: string }>("settings")
         .findOne({ _id: "payroll" });

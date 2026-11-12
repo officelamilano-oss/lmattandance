@@ -567,6 +567,11 @@ tbody tr:hover {
     background: #fdfdfb
 }
 
+tbody tr.employee-inactive-row {
+    opacity: .58;
+    background: #f0f1ee
+}
+
 td strong {
     font-weight: 600;
     color: #292b27
@@ -887,6 +892,24 @@ td strong {
     display: flex;
     align-items: center;
     gap: 6px
+}
+
+.employee-row-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px
+}
+
+.employee-delete-modal {
+    width: min(460px, 100%)
+}
+
+.employee-delete-actions {
+    justify-content: flex-end
+}
+
+:root[data-theme="dark"] tbody tr.employee-inactive-row {
+    background: #252b26
 }
 
 .button-full {

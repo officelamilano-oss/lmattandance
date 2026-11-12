@@ -39,6 +39,7 @@
     Search,
     Send,
     SlidersHorizontal,
+    Trash2,
     Users,
     X,
   } from "lucide-react";
@@ -315,6 +316,9 @@
     const attendanceReloadId = useRef(0);
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
+    const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(
+      null,
+    );
     const [data, setData] = useState<WorkspaceData>({});
     const [date, setDate] = useState(() => getIndiaDate());
     const [month, setMonth] = useState(() => getIndiaMonth());
@@ -431,7 +435,7 @@
         if (section === "employees")
           commitData(
             await request<WorkspaceData>(
-              `/api/employees?page=${page}&pageSize=20&q=${encodeURIComponent(debouncedSearch)}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
+              `/api/employees?page=${page}&pageSize=20&q=${encodeURIComponent(debouncedSearch)}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}${user.role === "MAIN_ADMIN" ? "&active=all" : ""}`,
             ),
           );
         if (section === "advances") {
@@ -1934,6 +1938,33 @@
       }
     }
 
+    async function setEmployeeActive(employee: Employee, active: boolean) {
+      if (
+        !active &&
+        !window.confirm(
+          `Deactivate ${employee.fullName}? Historical attendance, payroll, advances, and loans will remain.`,
+        )
+      )
+        return;
+      await mutate(
+        `/api/employees/${employee._id}`,
+        { active },
+        "PATCH",
+        active ? "Employee activated." : "Employee deactivated.",
+      );
+    }
+
+    async function deleteEmployee() {
+      if (!employeeToDelete) return;
+      const deleted = await mutate(
+        `/api/employees/${employeeToDelete._id}`,
+        undefined,
+        "DELETE",
+        "Employee permanently deleted. Historical records remain.",
+      );
+      if (deleted) setEmployeeToDelete(null);
+    }
+
     if (section === "employees")
       return (
         <div className="content-area">
@@ -1987,6 +2018,9 @@
                 "Status",
                 "Actions",
               ]}
+              rowClassNames={(data.employees ?? []).map((employee: Employee) =>
+                employee.active ? "" : "employee-inactive-row",
+              )}
               rows={(data.employees ?? []).map((employee: Employee) => {
                 const cells: React.ReactNode[] = [
                   <span key="name">
@@ -2015,26 +2049,29 @@
                   </span>,
                 );
                 cells.push(
-                  user.role === "MAIN_ADMIN" && employee.active ? (
-                    <button
-                      key="deactivate"
-                      className="button button-small"
-                      disabled={busy}
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            `Deactivate ${employee.fullName}? Historical attendance and salary will remain.`,
-                          )
-                        )
-                          void mutate(
-                            `/api/employees/${employee._id}`,
-                            { active: false },
-                            "PATCH",
-                          );
-                      }}
-                    >
-                      Deactivate
-                    </button>
+                  user.role === "MAIN_ADMIN" ? (
+                    <span key="actions" className="employee-row-actions">
+                      <button
+                        type="button"
+                        className="button button-small"
+                        disabled={busy}
+                        onClick={() =>
+                          void setEmployeeActive(employee, !employee.active)
+                        }
+                      >
+                        {employee.active ? "Deactivate" : "Activate"}
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-small button-danger"
+                        disabled={busy}
+                        onClick={() => setEmployeeToDelete(employee)}
+                        aria-label={`Permanently delete ${employee.fullName}`}
+                      >
+                        <Trash2 size={13} />
+                        Delete
+                      </button>
+                    </span>
                   ) : (
                     "—"
                   ),
@@ -2047,6 +2084,53 @@
               total={data.total ?? 0}
               onPageChange={setPage}
             />
+          )}
+          {employeeToDelete && (
+            <ModalPortal>
+              <div className="access-modal-backdrop">
+                <section
+                  className="access-modal employee-delete-modal"
+                  role="alertdialog"
+                  aria-modal="true"
+                  aria-labelledby="employee-delete-title"
+                  aria-describedby="employee-delete-description"
+                >
+                  <div className="access-modal-heading">
+                    <div>
+                      <h2 id="employee-delete-title">Delete employee</h2>
+                      <p id="employee-delete-description">
+                        Are you sure you want to permanently delete{" "}
+                        {employeeToDelete.fullName}? This action cannot be
+                        undone.
+                      </p>
+                      <p>
+                        Attendance, payroll, advances, and loan history will be
+                        preserved. Uploaded employee files will be deleted.
+                      </p>
+                    </div>
+                  </div>
+                  {error && <Notice error={error} success="" />}
+                  <div className="employee-row-actions employee-delete-actions">
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      disabled={busy}
+                      onClick={() => setEmployeeToDelete(null)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-danger"
+                      disabled={busy}
+                      onClick={() => void deleteEmployee()}
+                    >
+                      {busy ? "Deleting…" : "Delete permanently"}
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </ModalPortal>
           )}
         </div>
       );
@@ -5413,6 +5497,7 @@
     className,
     headers,
     rows,
+    rowClassNames,
     empty,
     page = 1,
     pageSize = 25,
@@ -5422,6 +5507,7 @@
     className?: string;
     headers: string[];
     rows: React.ReactNode[][];
+    rowClassNames?: string[];
     empty: string;
     page?: number;
     pageSize?: number;
@@ -5443,7 +5529,7 @@
             </thead>
             <tbody>
               {rows.map((row, index) => (
-                <tr key={index}>
+                <tr key={index} className={rowClassNames?.[index]}>
                   {row.map((cell, cellIndex) => (
                     <td key={cellIndex}>{cell}</td>
                   ))}
