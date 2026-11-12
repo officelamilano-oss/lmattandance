@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import type { DashboardOutlet } from "@/lib/ui-types";
 import { AutoDismissNotice } from "@/components/auto-dismiss-notice";
@@ -424,6 +425,7 @@ export function EmployeeImportPanel({
   const [preview, setPreview] = useState<Preview>();
   const [mapping, setMapping] = useState<Record<ImportField, string>>();
   const [editRows, setEditRows] = useState<EditableRow[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
   const [outletId, setOutletId] = useState(selectedOutlet);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -431,6 +433,11 @@ export function EmployeeImportPanel({
 
   const activeOutletId = outletId || selectedOutlet;
   const activeOutlet = outlets.find((outlet) => outlet._id === activeOutletId);
+  const pageSize = 10;
+  const pageCount = Math.max(1, Math.ceil(editRows.length / pageSize));
+  const visiblePage = Math.min(currentPage, pageCount);
+  const pageStartIndex = (visiblePage - 1) * pageSize;
+  const visibleRows = editRows.slice(pageStartIndex, pageStartIndex + pageSize);
 
   const problems = useMemo(
     () => editRows.map((row) => rowProblems(row, editRows)),
@@ -478,6 +485,7 @@ export function EmployeeImportPanel({
       const detected = detectMapping(result);
       setPreview(result);
       setMapping(detected);
+      setCurrentPage(1);
       setEditRows(
         assignCodes(
           buildRows(result, detected),
@@ -574,6 +582,14 @@ export function EmployeeImportPanel({
     });
   }
 
+  function cancelPreview() {
+    setPreview(undefined);
+    setMapping(undefined);
+    setEditRows([]);
+    setCurrentPage(1);
+    setError("");
+  }
+
   async function importSheet(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editRows.length) {
@@ -629,6 +645,7 @@ export function EmployeeImportPanel({
       setPreview(undefined);
       setMapping(undefined);
       setEditRows([]);
+      setCurrentPage(1);
       setFile(undefined);
       setFileInputKey((current) => current + 1);
       await onImported();
@@ -646,7 +663,7 @@ export function EmployeeImportPanel({
       <summary>
         <FileSpreadsheet size={17} /> Import employee sheet
       </summary>
-      {error && (
+      {error && !preview && (
         <AutoDismissNotice
           key={`error:${error}`}
           message={error}
@@ -672,6 +689,7 @@ export function EmployeeImportPanel({
               setPreview(undefined);
               setMapping(undefined);
               setEditRows([]);
+              setCurrentPage(1);
               setError("");
               setSuccess("");
             }}
@@ -691,265 +709,352 @@ export function EmployeeImportPanel({
       </form>
 
       {preview && mapping && (
-        <form className="form-grid import-mapping" onSubmit={importSheet}>
-          <label className="field">
-            <span>Outlet * (employee codes are generated from it)</span>
-            <select
-              value={activeOutletId}
-              onChange={(event) => changeOutlet(event.target.value)}
-              required
-            >
-              <option value="">Choose outlet</option>
-              {outlets
-                .filter((outlet) => outlet.active)
-                .map((outlet) => (
-                  <option key={outlet._id} value={outlet._id}>
-                    {outlet.code} · {outlet.name}
-                  </option>
-                ))}
-            </select>
-          </label>
-
-          {unmappedFields.length > 0 && (
-            <p style={{ gridColumn: "1 / -1", color: "#b26a00" }}>
-              These columns were not found in your sheet:{" "}
-              {unmappedFields.map((field) => field.label).join(", ")}. If they
-              are in the sheet under another name, choose them in Column
-              mapping below.
-            </p>
-          )}
-
-          <details
-            style={{ gridColumn: "1 / -1" }}
-            open={unmappedFields.length > 0}
+        <div className="access-modal-backdrop import-preview-backdrop">
+          <form
+            className="import-preview-modal"
+            onSubmit={importSheet}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="employee-import-title"
           >
-            <summary>Column mapping (auto-detected, change only if needed)</summary>
-            <div className="form-grid" style={{ marginTop: 12 }}>
-              {fields.map((field) => (
-                <label className="field" key={field.key}>
-                  <span>
-                    {field.label}
-                    {field.key === "employeeCode"
-                      ? " (blank = auto-generate)"
-                      : DEFAULTS[field.key] !== undefined
-                        ? ` (blank = ${DEFAULTS[field.key]})`
-                        : field.required
-                          ? " *"
-                          : " (optional)"}
-                  </span>
-                  <select
-                    value={mapping[field.key]}
-                    onChange={(event) =>
-                      changeMapping(field.key, event.target.value)
-                    }
-                  >
-                    <option value="">Not in sheet</option>
-                    {preview.columns.map((column) => (
-                      <option key={column.index} value={column.index}>
-                        {column.label}
+            <header className="import-preview-header">
+              <div>
+                <h2 id="employee-import-title">
+                  Preview &amp; Edit Employees before importing
+                </h2>
+                <p>
+                  {editRows.length} employee row(s) ·{" "}
+                  {activeOutlet?.name ?? "Choose an outlet"}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Cancel employee import preview"
+                disabled={busy}
+                onClick={cancelPreview}
+              >
+                <X size={18} />
+              </button>
+            </header>
+            <div className="import-preview-modal-body">
+              {error && (
+                <AutoDismissNotice
+                  key={`preview-error:${error}`}
+                  message={error}
+                  variant="error"
+                />
+              )}
+              <label className="field">
+                <span>Outlet * (employee codes are generated from it)</span>
+                <select
+                  value={activeOutletId}
+                  onChange={(event) => changeOutlet(event.target.value)}
+                  required
+                >
+                  <option value="">Choose outlet</option>
+                  {outlets
+                    .filter((outlet) => outlet.active)
+                    .map((outlet) => (
+                      <option key={outlet._id} value={outlet._id}>
+                        {outlet.code} · {outlet.name}
                       </option>
                     ))}
-                  </select>
-                </label>
-              ))}
-            </div>
-          </details>
+                </select>
+              </label>
 
-          <div className="import-preview-table" style={{ gridColumn: "1 / -1" }}>
-            <strong>
-              Edit before importing · {editRows.length} employee row(s)
-            </strong>
-            <p>
-              Change any cell. Red cells are missing or invalid. Fields that are
-              not in the sheet use defaults: Full-time, PF No, ESI No.
-            </p>
-            <div
-              style={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 8,
-                margin: "8px 0",
-              }}
-            >
+              {unmappedFields.length > 0 && (
+                <p style={{ gridColumn: "1 / -1", color: "#b26a00" }}>
+                  These columns were not found in your sheet:{" "}
+                  {unmappedFields.map((field) => field.label).join(", ")}. If
+                  they are in the sheet under another name, choose them in
+                  Column mapping below.
+                </p>
+              )}
+
+              <details
+                style={{ gridColumn: "1 / -1" }}
+                open={unmappedFields.length > 0}
+              >
+                <summary>
+                  Column mapping (auto-detected, change only if needed)
+                </summary>
+                <div className="form-grid" style={{ marginTop: 12 }}>
+                  {fields.map((field) => (
+                    <label className="field" key={field.key}>
+                      <span>
+                        {field.label}
+                        {field.key === "employeeCode"
+                          ? " (blank = auto-generate)"
+                          : DEFAULTS[field.key] !== undefined
+                            ? ` (blank = ${DEFAULTS[field.key]})`
+                            : field.required
+                              ? " *"
+                              : " (optional)"}
+                      </span>
+                      <select
+                        value={mapping[field.key]}
+                        onChange={(event) =>
+                          changeMapping(field.key, event.target.value)
+                        }
+                      >
+                        <option value="">Not in sheet</option>
+                        {preview.columns.map((column) => (
+                          <option key={column.index} value={column.index}>
+                            {column.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ))}
+                </div>
+              </details>
+
+              <div
+                className="import-preview-table"
+                style={{ gridColumn: "1 / -1" }}
+              >
+                <strong>
+                  Edit before importing · {editRows.length} employee row(s)
+                </strong>
+                <p>
+                  Change any cell. Red cells are missing or invalid. Fields that
+                  are not in the sheet use defaults: Full-time, PF No, ESI No.
+                </p>
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    margin: "8px 0",
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={regenerateCodes}
+                    disabled={!activeOutlet}
+                  >
+                    <RefreshCw size={15} /> Auto-generate codes
+                  </button>
+                  {noDateCount > 0 && (
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={removeRowsWithoutDate}
+                    >
+                      <Trash2 size={15} /> Remove {noDateCount} row(s) without
+                      name or joining date
+                    </button>
+                  )}
+                  {duplicateRows.size > 0 && (
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={removeDuplicates}
+                    >
+                      <Trash2 size={15} /> Remove {duplicateRows.size} duplicate
+                      row(s)
+                    </button>
+                  )}
+                </div>
+                {!activeOutlet && (
+                  <p>Select an outlet to fill employee codes automatically.</p>
+                )}
+                <div className="table-wrap" style={{ overflowX: "auto" }}>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Row</th>
+                        {fields.map((field) => (
+                          <th key={field.key}>
+                            {field.label}
+                            {field.required ? " *" : ""}
+                          </th>
+                        ))}
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleRows.map((row, pageIndex) => {
+                        const rowIndex = pageStartIndex + pageIndex;
+                        return (
+                          <tr key={row.sheetRow}>
+                            <td>
+                              {(visiblePage - 1) * pageSize + (pageIndex + 1)}
+                              {duplicateRows.has(row.sheetRow) && (
+                                <div style={{ color: "#b26a00", fontSize: 12 }}>
+                                  Duplicate
+                                </div>
+                              )}
+                            </td>
+                            {fields.map((field) => {
+                              const invalid = problems[rowIndex]?.has(
+                                field.key,
+                              );
+                              const style = {
+                                minWidth: field.width,
+                                width: "100%",
+                                ...(invalid
+                                  ? {
+                                      borderColor: "#d64545",
+                                      background: "#fdecec",
+                                    }
+                                  : {}),
+                              };
+                              return (
+                                <td key={field.key}>
+                                  {yesNoFields.includes(field.key) ? (
+                                    <select
+                                      className="cell-input"
+                                      style={style}
+                                      value={row[field.key]}
+                                      onChange={(event) =>
+                                        updateCell(
+                                          row.sheetRow,
+                                          field.key,
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      <option value="No">No</option>
+                                      <option value="Yes">Yes</option>
+                                    </select>
+                                  ) : field.key === "employmentType" ? (
+                                    <select
+                                      className="cell-input"
+                                      style={style}
+                                      value={row[field.key] || "Full-time"}
+                                      onChange={(event) =>
+                                        updateCell(
+                                          row.sheetRow,
+                                          field.key,
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      <option value="Full-time">
+                                        Full-time
+                                      </option>
+                                      <option value="Part-time">
+                                        Part-time
+                                      </option>
+                                      {row[field.key] &&
+                                        !["Full-time", "Part-time"].includes(
+                                          row[field.key],
+                                        ) && (
+                                          <option value={row[field.key]}>
+                                            {row[field.key]}
+                                          </option>
+                                        )}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      className="cell-input"
+                                      style={style}
+                                      type={
+                                        field.key === "dateOfJoining"
+                                          ? "date"
+                                          : numberFields.includes(field.key)
+                                            ? "number"
+                                            : "text"
+                                      }
+                                      min={
+                                        numberFields.includes(field.key)
+                                          ? "0"
+                                          : undefined
+                                      }
+                                      step={
+                                        numberFields.includes(field.key)
+                                          ? "0.01"
+                                          : undefined
+                                      }
+                                      value={row[field.key]}
+                                      onChange={(event) =>
+                                        updateCell(
+                                          row.sheetRow,
+                                          field.key,
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  )}
+                                </td>
+                              );
+                            })}
+                            <td>
+                              <button
+                                type="button"
+                                className="button button-secondary"
+                                aria-label={`Remove row ${row.sheetRow}`}
+                                onClick={() => removeRow(row.sheetRow)}
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <nav
+                  className="import-preview-pagination"
+                  aria-label="Employee preview pages"
+                >
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    disabled={visiblePage <= 1}
+                    onClick={() => setCurrentPage(visiblePage - 1)}
+                  >
+                    Previous
+                  </button>
+                  <span>
+                    Page {visiblePage} of {pageCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    disabled={visiblePage >= pageCount}
+                    onClick={() => setCurrentPage(visiblePage + 1)}
+                  >
+                    Next
+                  </button>
+                </nav>
+                {invalidCount > 0 && (
+                  <p>
+                    {invalidCount} row(s) still need attention before you can
+                    import.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <footer className="import-preview-footer">
               <button
                 type="button"
                 className="button button-secondary"
-                onClick={regenerateCodes}
-                disabled={!activeOutlet}
+                disabled={busy}
+                onClick={cancelPreview}
               >
-                <RefreshCw size={15} /> Auto-generate codes
+                Cancel
               </button>
-              {noDateCount > 0 && (
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  onClick={removeRowsWithoutDate}
-                >
-                  <Trash2 size={15} /> Remove {noDateCount} row(s) without name
-                  or joining date
-                </button>
-              )}
-              {duplicateRows.size > 0 && (
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  onClick={removeDuplicates}
-                >
-                  <Trash2 size={15} /> Remove {duplicateRows.size} duplicate
-                  row(s)
-                </button>
-              )}
-            </div>
-            {!activeOutlet && (
-              <p>Select an outlet to fill employee codes automatically.</p>
-            )}
-            <div className="table-wrap" style={{ overflowX: "auto" }}>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Row</th>
-                    {fields.map((field) => (
-                      <th key={field.key}>
-                        {field.label}
-                        {field.required ? " *" : ""}
-                      </th>
-                    ))}
-                    <th />
-                  </tr>
-                </thead>
-                <tbody>
-                  {editRows.map((row, rowIndex) => (
-                    <tr key={row.sheetRow}>
-                      <td>
-                        {row.sheetRow}
-                        {duplicateRows.has(row.sheetRow) && (
-                          <div style={{ color: "#b26a00", fontSize: 12 }}>
-                            Duplicate
-                          </div>
-                        )}
-                      </td>
-                      {fields.map((field) => {
-                        const invalid = problems[rowIndex]?.has(field.key);
-                        const style = {
-                          minWidth: field.width,
-                          width: "100%",
-                          ...(invalid
-                            ? { borderColor: "#d64545", background: "#fdecec" }
-                            : {}),
-                        };
-                        return (
-                          <td key={field.key}>
-                            {yesNoFields.includes(field.key) ? (
-                              <select
-                                className="cell-input"
-                                style={style}
-                                value={row[field.key]}
-                                onChange={(event) =>
-                                  updateCell(
-                                    row.sheetRow,
-                                    field.key,
-                                    event.target.value,
-                                  )
-                                }
-                              >
-                                <option value="No">No</option>
-                                <option value="Yes">Yes</option>
-                              </select>
-                            ) : field.key === "employmentType" ? (
-                              <select
-                                className="cell-input"
-                                style={style}
-                                value={row[field.key] || "Full-time"}
-                                onChange={(event) =>
-                                  updateCell(
-                                    row.sheetRow,
-                                    field.key,
-                                    event.target.value,
-                                  )
-                                }
-                              >
-                                <option value="Full-time">Full-time</option>
-                                <option value="Part-time">Part-time</option>
-                                {row[field.key] &&
-                                  !["Full-time", "Part-time"].includes(
-                                    row[field.key],
-                                  ) && (
-                                    <option value={row[field.key]}>
-                                      {row[field.key]}
-                                    </option>
-                                  )}
-                              </select>
-                            ) : (
-                              <input
-                                className="cell-input"
-                                style={style}
-                                type={
-                                  field.key === "dateOfJoining"
-                                    ? "date"
-                                    : numberFields.includes(field.key)
-                                      ? "number"
-                                      : "text"
-                                }
-                                min={
-                                  numberFields.includes(field.key)
-                                    ? "0"
-                                    : undefined
-                                }
-                                step={
-                                  numberFields.includes(field.key)
-                                    ? "0.01"
-                                    : undefined
-                                }
-                                value={row[field.key]}
-                                onChange={(event) =>
-                                  updateCell(
-                                    row.sheetRow,
-                                    field.key,
-                                    event.target.value,
-                                  )
-                                }
-                              />
-                            )}
-                          </td>
-                        );
-                      })}
-                      <td>
-                        <button
-                          type="button"
-                          className="button button-secondary"
-                          aria-label={`Remove row ${row.sheetRow}`}
-                          onClick={() => removeRow(row.sheetRow)}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {invalidCount > 0 && (
-              <p>
-                {invalidCount} row(s) still need attention before you can
-                import.
-              </p>
-            )}
-          </div>
-
-          <div className="form-actions">
-            <button
-              className="button button-primary"
-              disabled={busy || !editRows.length || !activeOutletId}
-            >
-              {busy ? (
-                <LoaderCircle className="spin" size={16} />
-              ) : (
-                <Check size={16} />
-              )}
-              Import {editRows.length} rows
-            </button>
-          </div>
-        </form>
+              <button
+                type="submit"
+                className="button button-primary"
+                disabled={busy || !editRows.length || !activeOutletId}
+              >
+                {busy ? (
+                  <LoaderCircle className="spin" size={16} />
+                ) : (
+                  <Check size={16} />
+                )}
+                Import {editRows.length} rows
+              </button>
+            </footer>
+          </form>
+        </div>
       )}
     </details>
   );
