@@ -31,6 +31,14 @@ test("employee profile accepts valid personal, bank, and identity details", () =
   assert.equal(result.success, true);
 });
 
+test("employee profile accepts a missing or blank date of birth", () => {
+  assert.equal(employeeSchema.safeParse(employee).success, true);
+  assert.equal(
+    employeeSchema.safeParse({ ...employee, dateOfBirth: null }).success,
+    true,
+  );
+});
+
 test("employee profile requires employees to be at least 18 on joining date", () => {
   const result = employeeSchema.safeParse({
     ...employee,

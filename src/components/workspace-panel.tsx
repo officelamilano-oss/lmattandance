@@ -698,8 +698,15 @@
         const formData = new FormData(form);
         const body = normalizeForm(Object.fromEntries(formData.entries()));
         if (body.designationId === "") delete body.designationId;
-        for (const key of ["outletIds", "permissions"])
-          if (formData.has(key)) body[key] = formData.getAll(key).map(String);
+        if (formData.has("outletIds")) {
+          const outletIds = formData.getAll("outletIds").map(String);
+          body.outletIds =
+            url === "/api/users" && outletIds.includes("__ALL_OUTLETS__")
+              ? activeOutlets.map((outlet) => outlet._id)
+              : outletIds;
+        }
+        if (formData.has("permissions"))
+          body.permissions = formData.getAll("permissions").map(String);
         if (url === "/api/users") {
           const selectedProfile = String(body.accessProfile ?? "");
           delete body.accessProfile;
@@ -3474,6 +3481,7 @@
                         {outlet.code} · {outlet.name}
                       </option>
                     ))}
+                    <option value="__ALL_OUTLETS__">All outlets</option>
                   </select>
                 </label>
               )}
@@ -6302,17 +6310,15 @@
           <label className="field">
             <span>Assigned outlets</span>
             <select
-              multiple={role !== "OUTLET_USER"}
-              size={role === "OUTLET_USER" ? 1 : 3}
-              value={role === "OUTLET_USER" ? outletIds[0] ?? "" : outletIds}
+              multiple
+              size={3}
+              value={outletIds}
               onChange={(event) =>
                 setOutletIds(
-                  role === "OUTLET_USER"
-                    ? [event.target.value].filter(Boolean)
-                    : Array.from(
-                        event.target.selectedOptions,
-                        (option) => option.value,
-                      ),
+                  Array.from(
+                    event.target.selectedOptions,
+                    (option) => option.value,
+                  ),
                 )
               }
             >

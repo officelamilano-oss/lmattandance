@@ -262,7 +262,10 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     const employeeCode =
-      payload.autoGenerate === true || payload.autoGenerate === "true"
+      payload.autoGenerate === true ||
+      payload.autoGenerate === "true" ||
+      typeof payload.employeeCode !== "string" ||
+      !payload.employeeCode.trim()
         ? await getNextEmployeeCode(
             db.collection<EmployeeDocument>("employees"),
             prefix,

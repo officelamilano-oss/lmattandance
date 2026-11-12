@@ -77,19 +77,20 @@ export async function PATCH(
         { error: "Every assigned outlet must exist." },
         { status: 400 },
       );
-    if (input.role === "OUTLET_USER" && input.outletIds.length !== 1)
+    if (input.role === "OUTLET_USER" && input.outletIds.length === 0)
       return NextResponse.json(
-        { error: "Assign an OUTLET_USER to exactly one outlet." },
+        { error: "Assign an OUTLET_USER to at least one outlet." },
         { status: 400 },
       );
     if (
       input.role === "OUTLET_USER" &&
-      !(await db
-        .collection("outlets")
-        .findOne({ _id: outletIds[0], active: true }, { projection: { _id: 1 } }))
+      (await db.collection("outlets").countDocuments({
+        _id: { $in: outletIds },
+        active: true,
+      })) !== new Set(input.outletIds).size
     )
       return NextResponse.json(
-        { error: "Assign the OUTLET_USER to an active outlet." },
+        { error: "Assign every OUTLET_USER to an active outlet." },
         { status: 400 },
       );
     const passwordHash = input.password ? await hashPassword(input.password) : undefined;

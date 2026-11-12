@@ -27,7 +27,7 @@ const navigation: Array<{ href: string; label: string; icon: typeof LayoutDashbo
   { href: "/advances", label: "Advances", icon: Wallet, permission: "advances.read" },
   { href: "/loans", label: "Loans", icon: HandCoins, permission: "salary.read", mainAdminOnly: true },
   { href: "/outlets", label: "Outlets", icon: Building2, permission: "outlets.manage" },
-  { href: "/access", label: "Access mana  gement", icon: ShieldCheck, permission: "access.manage" },
+  { href: "/access", label: "Access management", icon: ShieldCheck, permission: "access.manage" },
   { href: "/reports", label: "Reports & exports", icon: FileSpreadsheet, permission: "reports.export" },
   { href: "/active-logs", label: "Active logs", icon: ClipboardList, permission: "audit.read" },
   { href: "/settings", label: "Settings", icon: Settings2, permission: "settings.manage" },

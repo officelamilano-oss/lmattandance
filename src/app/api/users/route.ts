@@ -44,23 +44,24 @@ export async function POST(request: Request) {
         { error: "The selected designation no longer exists." },
         { status: 400 },
       );
-    if (input.role === "OUTLET_USER" && input.outletIds.length !== 1)
+    if (input.role === "OUTLET_USER" && input.outletIds.length === 0)
       return NextResponse.json(
-        { error: "Assign an OUTLET_USER to exactly one outlet." },
-        { status: 400 },
-      );
-    if (
-      input.role === "OUTLET_USER" &&
-      !(await db
-        .collection("outlets")
-        .findOne({ _id: outletIds[0], active: true }, { projection: { _id: 1 } }))
-    )
-      return NextResponse.json(
-        { error: "Assign the OUTLET_USER to an active outlet." },
+        { error: "Assign an OUTLET_USER to at least one outlet." },
         { status: 400 },
       );
     const validOutlets = await db.collection("outlets").countDocuments({ _id: { $in: outletIds } });
     if (validOutlets !== new Set(input.outletIds).size) return NextResponse.json({ error: "Every assigned outlet must exist." }, { status: 400 });
+    if (
+      input.role === "OUTLET_USER" &&
+      (await db.collection("outlets").countDocuments({
+        _id: { $in: outletIds },
+        active: true,
+      })) !== new Set(input.outletIds).size
+    )
+      return NextResponse.json(
+        { error: "Assign every OUTLET_USER to an active outlet." },
+        { status: 400 },
+      );
     if (input.role === "MAIN_ADMIN" && input.email.trim().toLowerCase() !== actor.email && !await db.collection<UserDocument>("users").findOne({ role: "MAIN_ADMIN", active: true })) {
       return NextResponse.json({ error: "Use the documented bootstrap command to create the first MAIN_ADMIN." }, { status: 403 });
     }
