@@ -63,7 +63,7 @@ export interface EmployeeView {
   fullName: string;
   designation: string;
   employmentType?: EmploymentType;
-  mobile?: string;
+  mobile?: string | null;
   active: boolean;
   outletId: string;
   dateOfJoining?: string;

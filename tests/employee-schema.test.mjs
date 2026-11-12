@@ -39,6 +39,12 @@ test("employee profile accepts a missing or blank date of birth", () => {
   );
 });
 
+test("employee profile accepts a missing or blank mobile number", () => {
+  assert.equal(employeeSchema.safeParse({ ...employee, mobile: undefined }).success, true);
+  assert.equal(employeeSchema.safeParse({ ...employee, mobile: "" }).success, true);
+  assert.equal(employeeSchema.safeParse({ ...employee, mobile: null }).success, true);
+});
+
 test("employee profile requires employees to be at least 18 on joining date", () => {
   const result = employeeSchema.safeParse({
     ...employee,

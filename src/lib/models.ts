@@ -69,7 +69,7 @@ export interface EmployeeDocument {
   designationKey?: string | null;
   designationGroup?: "HEAD_OFFICE" | "OUTLET" | null;
   employmentType?: EmploymentType;
-  mobile: string;
+  mobile?: string | null;
   outletId: ObjectId;
   monthlyBaseSalary: number;
   salaryMethod: SalaryMethod;

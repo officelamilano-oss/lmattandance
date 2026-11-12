@@ -365,7 +365,7 @@ async function getRows(
       Designation: employee.designation,
       "Employment Type":
         employee.employmentType === "PART_TIME" ? "Part-time" : "Full-time",
-      Mobile: employee.mobile,
+      Mobile: employee.mobile ?? null,
       "Date Joined": employee.dateOfJoining,
       "Base Salary INR": employee.monthlyBaseSalary,
       "Salary Method": "Fixed 30-day",

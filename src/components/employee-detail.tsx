@@ -523,7 +523,7 @@ export function EmployeeDetail({
             <span>Mobile</span>
             <input
               name="mobile"
-              defaultValue={employee.mobile}
+              defaultValue={employee.mobile ?? ""}
               required
               disabled={!canEdit || !canViewSensitive}
             />

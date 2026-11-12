@@ -15,7 +15,10 @@ export const employeeSchema = z.object({
   designationKey: z.string().trim().max(80).nullable().optional(),
   designationGroup: z.enum(["HEAD_OFFICE", "OUTLET"]).nullable().optional(),
   employmentType: z.enum(["FULL_TIME", "PART_TIME"]).default("FULL_TIME"),
-  mobile: z.string().trim().min(7).max(20),
+  mobile: z.preprocess(
+    (value) => (value === "" ? null : value),
+    z.string().trim().min(7).max(20).nullable().optional(),
+  ),
   outletId: objectIdSchema,
   monthlyBaseSalary: z.number().finite().min(0).max(100_000_000),
   salaryMethod: z.enum(["FIXED_30_DAYS", "CALENDAR_DAYS", "WORKING_DAYS_26"]),
