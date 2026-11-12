@@ -1692,7 +1692,7 @@ td strong {
     overflow: hidden;
     border: 1px solid var(--line);
     border-radius: 12px;
-    background: var(--surface);
+    background: #fff;
     color: var(--ink);
     box-shadow: 0 20px 60px rgba(20, 21, 19, .24)
 }
@@ -1756,7 +1756,12 @@ td strong {
     gap: 8px;
     padding: 14px 22px;
     border-top: 1px solid var(--line);
-    background: var(--surface)
+    background: #fff
+}
+
+:root[data-theme="dark"] .import-preview-modal,
+:root[data-theme="dark"] .import-preview-footer {
+    background: #222a24
 }
 
 .form-grid .form-actions {
