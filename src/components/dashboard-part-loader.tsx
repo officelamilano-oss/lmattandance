@@ -23,7 +23,7 @@ export function DashboardPartLoader({
   part,
   filters,
   children,
-}: {
+} : {
   part: DashboardPart;
   filters: DashboardPartFilters;
   children: (data: WorkspaceData) => ReactNode;
@@ -71,17 +71,21 @@ export function DashboardPartLoader({
   }, [url]);
 
   const currentResult = result?.url === url ? result : null;
+
   if (!currentResult)
     return (
       <div className="loading-state" role="status">
         Loading records
       </div>
     );
+
   if (currentResult.error)
     return (
       <div className="notice notice-error" role="alert">
         {currentResult.error}
       </div>
     );
+
   return children(currentResult.data ?? {});
 }
+

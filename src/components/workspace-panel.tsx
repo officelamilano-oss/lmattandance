@@ -1161,6 +1161,7 @@
                   <EmployeeAttendanceTable
                     key={`${selectedOutlet}|${dashboardFrom}|${dashboardTo}`}
                     canReadSalary={user.permissions.includes("salary.read")}
+                    paginate
                     globalFrom={dashboardFrom}
                     globalTo={dashboardTo}
                     globalOutletId={selectedOutlet}
@@ -4497,11 +4498,19 @@
     filter: "ALL" | "P" | "A" | "HD" | "WO" | "UNMARKED";
     onFilterChange: (filter: "ALL" | "P" | "A" | "HD" | "WO" | "UNMARKED") => void;
   }) {
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(10);
     const filteredEmployees = employees.filter((employee) => {
       if (filter === "ALL") return true;
       if (filter === "UNMARKED") return employee.status === null;
       return employee.status === filter;
     });
+    const pageCount = Math.max(1, Math.ceil(filteredEmployees.length / pageSize));
+    const currentPage = Math.min(page, pageCount);
+    const visibleEmployees = filteredEmployees.slice(
+      (currentPage - 1) * pageSize,
+      currentPage * pageSize,
+    );
 
     return (
       <section className="panel dashboard-checkins-panel">
@@ -4532,7 +4541,10 @@
                 type="button"
                 className={filter === value ? "dashboard-filter-active" : ""}
                 aria-pressed={filter === value}
-                onClick={() => onFilterChange(value)}
+                onClick={() => {
+                  setPage(1);
+                  onFilterChange(value);
+                }}
               >
                 {label}
               </button>
@@ -4557,7 +4569,7 @@
               </tr>
             </thead>
             <tbody>
-              {filteredEmployees.map((employee) => (
+              {visibleEmployees.map((employee) => (
                 <tr key={employee.employeeId}>
                   <td>
                     <span className="dashboard-employee-cell">
@@ -4611,6 +4623,18 @@
             </Empty>
           )}
         </div>
+        {filteredEmployees.length > 0 && (
+          <TablePagination
+            page={currentPage}
+            pageSize={pageSize}
+            total={filteredEmployees.length}
+            onPageChange={setPage}
+            onPageSizeChange={(nextPageSize) => {
+              setPageSize(nextPageSize);
+              setPage(1);
+            }}
+          />
+        )}
       </section>
     );
   }
@@ -5566,6 +5590,71 @@
           </div>
         </div>
       </section>
+    );
+  }
+
+  const TABLE_PAGE_SIZES = [10, 50, 100] as const;
+
+  function TablePagination({
+    page,
+    pageSize,
+    total,
+    onPageChange,
+    onPageSizeChange,
+  }: {
+    page: number;
+    pageSize: number;
+    total: number;
+    onPageChange: (page: number) => void;
+    onPageSizeChange: (pageSize: number) => void;
+  }) {
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const firstItem = (page - 1) * pageSize + 1;
+    const lastItem = Math.min(page * pageSize, total);
+
+    return (
+      <div className="panel-footer dashboard-table-pagination">
+        <span>
+          Showing {firstItem}–{lastItem} of {total} employees
+        </span>
+        <div className="pagination table-pagination-controls">
+          <label className="table-page-size">
+            Rows per page
+            <select
+              aria-label="Rows per page"
+              value={pageSize}
+              onChange={(event) => onPageSizeChange(Number(event.target.value))}
+            >
+              {TABLE_PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="icon-button"
+            aria-label="Previous page"
+            title="Previous page"
+            disabled={page <= 1}
+            onClick={() => onPageChange(page - 1)}
+          >
+            <ChevronLeft size={17} />
+          </button>
+          <span>
+            {page} / {pageCount}
+          </span>
+          <button
+            className="icon-button"
+            aria-label="Next page"
+            title="Next page"
+            disabled={page >= pageCount}
+            onClick={() => onPageChange(page + 1)}
+          >
+            <ChevronRight size={17} />
+          </button>
+        </div>
+      </div>
     );
   }
 
@@ -6649,6 +6738,7 @@
   function EmployeeAttendanceTable({
     rows: providedRows,
     canReadSalary,
+    paginate = false,
     globalFrom,
     globalTo,
     globalOutletId,
@@ -6661,6 +6751,7 @@
   }: {
     rows?: EmployeeAttendanceReportRow[];
     canReadSalary: boolean;
+    paginate?: boolean;
     globalFrom?: string;
     globalTo?: string;
     globalOutletId?: string;
@@ -6687,6 +6778,8 @@
       globalOutletId ?? "",
     );
     const [localEmployeeId, setLocalEmployeeId] = useState("");
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(10);
     const report = useEmployeeAttendanceReport({
         enabled: hasLocalFilters,
         from: localFrom,
@@ -6698,6 +6791,11 @@
     const employees = report.employees;
     const isFetching = hasLocalFilters && report.isFetching;
     const error = hasLocalFilters ? report.error : "";
+    const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+    const currentPage = Math.min(page, pageCount);
+    const visibleRows = paginate
+      ? rows.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+      : rows;
 
     return (
       <section className="panel">
@@ -6712,6 +6810,7 @@
               aria-label="Attendance report outlet"
               value={localOutletId}
               onChange={(event) => {
+                setPage(1);
                 setLocalOutletId(event.target.value);
                 setLocalEmployeeId("");
               }}
@@ -6726,7 +6825,10 @@
             <select
               aria-label="Attendance report employee"
               value={localEmployeeId}
-              onChange={(event) => setLocalEmployeeId(event.target.value)}
+              onChange={(event) => {
+                setPage(1);
+                setLocalEmployeeId(event.target.value);
+              }}
             >
               <option value="">All employees</option>
               {employees
@@ -6745,14 +6847,20 @@
               aria-label="Attendance report from date"
               value={localFrom}
               max={localTo}
-              onChange={(event) => setLocalFrom(event.target.value)}
+              onChange={(event) => {
+                setPage(1);
+                setLocalFrom(event.target.value);
+              }}
             />
             <input
               type="date"
               aria-label="Attendance report to date"
               value={localTo}
               min={localFrom}
-              onChange={(event) => setLocalTo(event.target.value)}
+              onChange={(event) => {
+                setPage(1);
+                setLocalTo(event.target.value);
+              }}
             />
             {canExport && onExport && (
               <>
@@ -6835,7 +6943,7 @@
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {visibleRows.map((row) => (
                 <tr key={row.employeeId}>
                   <td>
                     <strong>{row.employeeName}</strong>
@@ -6967,6 +7075,18 @@
             <Empty>No employee attendance records match this period.</Empty>
           )}
         </div>
+        {paginate && rows.length > 0 && (
+          <TablePagination
+            page={currentPage}
+            pageSize={pageSize}
+            total={rows.length}
+            onPageChange={setPage}
+            onPageSizeChange={(nextPageSize) => {
+              setPageSize(nextPageSize);
+              setPage(1);
+            }}
+          />
+        )}
       </section>
     );
   }

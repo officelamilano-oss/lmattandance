@@ -777,6 +777,32 @@ td strong {
     color: #454741
 }
 
+.table-pagination-controls {
+    gap: 10px
+}
+
+.table-page-size {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #898c85;
+    white-space: nowrap
+}
+
+.table-page-size select {
+    min-height: 30px;
+    padding: 0 7px;
+    border: 1px solid #e9eae6;
+    border-radius: 5px;
+    background: #fff;
+    color: #454741;
+    font-size: 10px
+}
+
+.dashboard-table-pagination {
+    gap: 12px
+}
+
 .empty-state {
     min-height: 144px;
     display: flex;

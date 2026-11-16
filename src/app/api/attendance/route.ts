@@ -485,7 +485,7 @@ export async function PUT(request: Request) {
         _id: new ObjectId(),
         outletId,
         date: input.date,
-        corrections: [],
+        ...(!correctionEvents.length ? { corrections: [] } : {}),
       },
       ...(correctionEvents.length
         ? {
