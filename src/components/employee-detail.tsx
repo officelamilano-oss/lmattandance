@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { ArrowDownToLine, ArrowLeft, Check, Eye, EyeOff, FileText, LoaderCircle, Trash2, Upload } from "lucide-react";
+import { createPortal } from "react-dom";
+import { useEffect, useRef, useState, useSyncExternalStore, type ChangeEvent, type DragEvent, type FormEvent } from "react";
+import { ArrowDownToLine, ArrowLeft, Check, Eye, EyeOff, FileText, LoaderCircle, Share2, Trash2, Upload, X } from "lucide-react";
 import type { EmployeeView } from "@/lib/ui-types";
 import { AutoDismissNotice } from "@/components/auto-dismiss-notice";
 import {
@@ -12,6 +13,8 @@ import {
   isDeliveryRiderDesignation,
 } from "@/lib/employee-designations";
 import { getEmployeeCodePrefix } from "@/lib/employee-code";
+import { UniformDetailsFields } from "@/components/uniform-details-fields";
+import { uniformEntriesFromForm } from "@/lib/uniform-deductions";
 import {
   EMPLOYEE_DOCUMENT_MAX_BYTES,
   EMPLOYEE_DOCUMENT_MIME_TYPES,
@@ -21,11 +24,12 @@ import {
 
 type EmployeeFileView = {
   id: string;
+  fileName: string;
   documentType: EmployeeDocumentType;
+  fileType: string;
   mimeType: string;
   size: number;
   uploadedAt: string;
-  url: string;
 };
 
 type PendingFile = {
@@ -34,16 +38,148 @@ type PendingFile = {
   preview?: string;
 };
 
+type EmployeeDetailData = {
+  employee: EmployeeView;
+  outlets: Array<{ _id: string; code: string; name: string }>;
+  documents: EmployeeFileView[];
+};
+
+const subscribeToNothing = () => () => {};
+const getClientSnapshot = () => true;
+const getServerSnapshot = () => false;
+
+const employeeDetailCache = new Map<
+  string,
+  { data: EmployeeDetailData; expiresAt: number }
+>();
+const employeeDetailRequests = new Map<string, Promise<EmployeeDetailData>>();
+const employeeDetailEmployeeRequests = new Map<
+  string,
+  Promise<EmployeeView>
+>();
+
+async function readResponse<T>(response: Response, fallback: string): Promise<T> {
+  const body = await response.json();
+  if (!response.ok)
+    throw new Error(body.error ?? fallback);
+  return body as T;
+}
+
+async function loadEmployeeDetailData(
+  id: string,
+  includeDocuments: boolean,
+  cacheScope: string,
+  onEmployeeLoaded?: (employee: EmployeeView) => void,
+): Promise<EmployeeDetailData> {
+  const cacheKey = `${cacheScope}:${id}:${includeDocuments}`;
+  const cached = employeeDetailCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    onEmployeeLoaded?.(cached.data.employee);
+    return cached.data;
+  }
+  const pending = employeeDetailRequests.get(cacheKey);
+  if (pending) {
+    const employeeRequest = employeeDetailEmployeeRequests.get(cacheKey);
+    if (onEmployeeLoaded) {
+      if (employeeRequest)
+        void employeeRequest.then(onEmployeeLoaded, () => undefined);
+      else
+        void pending.then(
+          (data) => onEmployeeLoaded(data.employee),
+          () => undefined,
+        );
+    }
+    return pending;
+  }
+
+  const employeeRequest = fetch(`/api/employees/${id}`, {
+    cache: "no-store",
+  }).then((response) =>
+    readResponse<{ employee: EmployeeView }>(
+      response,
+      "Unable to load employee.",
+    ).then(({ employee }) => {
+      onEmployeeLoaded?.(employee);
+      return employee;
+    }),
+  );
+  employeeDetailEmployeeRequests.set(cacheKey, employeeRequest);
+  const request = Promise.all([
+    employeeRequest,
+    fetch("/api/outlets", { cache: "no-store" }).then((response) =>
+      readResponse<{ outlets: EmployeeDetailData["outlets"] }>(
+        response,
+        "Unable to load outlets.",
+      ),
+    ),
+    includeDocuments
+      ? fetch(`/api/employees/${id}/documents`, { cache: "no-store" }).then(
+          (response) =>
+            readResponse<{ documents: EmployeeFileView[] }>(
+              response,
+              "Unable to load employee documents.",
+            ),
+        )
+      : Promise.resolve({ documents: [] as EmployeeFileView[] }),
+  ]).then(([employeeResult, outletResult, documentResult]) => {
+    const data = {
+      employee: employeeResult,
+      outlets: outletResult.outlets,
+      documents: documentResult.documents,
+    };
+    employeeDetailCache.set(cacheKey, {
+      data,
+      expiresAt: Date.now() + 30_000,
+    });
+    return data;
+  });
+  employeeDetailRequests.set(cacheKey, request);
+  try {
+    return await request;
+  } finally {
+    if (employeeDetailRequests.get(cacheKey) === request)
+      employeeDetailRequests.delete(cacheKey);
+    if (employeeDetailEmployeeRequests.get(cacheKey) === employeeRequest)
+      employeeDetailEmployeeRequests.delete(cacheKey);
+  }
+}
+
+export function prefetchEmployeeDetail(
+  id: string,
+  includeDocuments: boolean,
+  cacheScope: string,
+) {
+  void loadEmployeeDetailData(id, includeDocuments, cacheScope).catch(
+    () => undefined,
+  );
+}
+
+function clearEmployeeDetailPrefetch(id: string, cacheScope: string) {
+  for (const key of employeeDetailCache.keys())
+    if (key.startsWith(`${cacheScope}:${id}:`)) employeeDetailCache.delete(key);
+  for (const key of employeeDetailEmployeeRequests.keys())
+    if (key.startsWith(`${cacheScope}:${id}:`))
+      employeeDetailEmployeeRequests.delete(key);
+}
+
 export function EmployeeDetail({
   id,
+  cacheScope,
   canEdit,
   mainAdmin,
   canViewSensitive,
+  canManageUniforms,
+  modal = false,
+  onSaved,
 }: {
   id: string;
+  cacheScope: string;
   canEdit: boolean;
   mainAdmin: boolean;
   canViewSensitive: boolean;
+  canManageUniforms: boolean;
+  modal?: boolean;
+  onSaved?: (documentStorageWarning?: string) => void;
 }) {
   const [employee, setEmployee] = useState<EmployeeView | null>(null);
   const [outlets, setOutlets] = useState<
@@ -60,7 +196,25 @@ export function EmployeeDetail({
   const [documents, setDocuments] = useState<EmployeeFileView[]>([]);
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [documentsBusy, setDocumentsBusy] = useState(false);
+  const [uploadingDocuments, setUploadingDocuments] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadValidationError, setUploadValidationError] = useState("");
+  const [dropActive, setDropActive] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<EmployeeFileView | null>(
+    null,
+  );
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewContentUrl, setPreviewContentUrl] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [shareMessage, setShareMessage] = useState("");
+  const portalReady = useSyncExternalStore(
+    subscribeToNothing,
+    getClientSnapshot,
+    getServerSnapshot,
+  );
   const formRef = useRef<HTMLFormElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const selectedOutlet = outlets.find((outlet) => outlet._id === outletId);
   const designationGroup = getEmployeeDesignationGroup(selectedOutlet?.code ?? "");
   const availableDesignations = EMPLOYEE_DESIGNATIONS.filter(
@@ -68,41 +222,91 @@ export function EmployeeDetail({
   );
 
   useEffect(() => {
-    void Promise.all([
-      fetch(`/api/employees/${id}`).then(async (response) => {
-        const body = await response.json();
-        if (!response.ok)
-          throw new Error(body.error ?? "Unable to load employee.");
-        setEmployee(body.employee);
-        setOutletId(body.employee.outletId);
-        setDesignationKey(
-          EMPLOYEE_DESIGNATIONS.some(
-            (item) => item.key === body.employee.designationKey,
-          )
-            ? body.employee.designationKey
-            : "LEGACY",
-        );
-        setDesignationLabel(body.employee.designation);
-      }),
-      fetch("/api/outlets").then(async (response) => {
-        if (response.ok) setOutlets((await response.json()).outlets);
-      }),
-      ...(canViewSensitive
-        ? [
-            fetch(`/api/employees/${id}/documents`).then(async (response) => {
-              const body = await response.json();
-              if (!response.ok)
-                throw new Error(body.error ?? "Unable to load employee documents.");
-              setDocuments(body.documents);
-            }),
-          ]
-        : []),
-    ]).catch((caught) =>
-      setError(
-        caught instanceof Error ? caught.message : "Unable to load employee.",
-      ),
+    let active = true;
+    void loadEmployeeDetailData(id, canViewSensitive, cacheScope, (loaded) => {
+      if (!active) return;
+      setEmployee(loaded);
+      setOutletId(loaded.outletId);
+      setDesignationKey(
+        EMPLOYEE_DESIGNATIONS.some((item) => item.key === loaded.designationKey)
+          ? loaded.designationKey ?? "LEGACY"
+          : "LEGACY",
+      );
+      setDesignationLabel(loaded.designation ?? "");
+    })
+      .then((data) => {
+        if (!active) return;
+        setOutlets(data.outlets);
+        setDocuments(data.documents);
+      })
+      .catch((caught) => {
+        if (active)
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "Unable to load employee.",
+          );
+      });
+    return () => {
+      active = false;
+    };
+  }, [id, canViewSensitive, cacheScope]);
+
+  function openPreview(file: EmployeeFileView) {
+    setPreviewUrl("");
+    setPreviewContentUrl(`/api/employee-documents/${file.id}?preview=1`);
+    setPreviewError("");
+    setShareMessage("");
+    setPreviewLoading(
+      file.fileType.startsWith("image/") ||
+        file.fileType === "application/pdf",
     );
-  }, [id, canViewSensitive]);
+    setPreviewDocument(file);
+  }
+
+  useEffect(() => {
+    if (!previewDocument) return;
+    const controller = new AbortController();
+    void fetch(`/api/employee-documents/${previewDocument.id}?signed=1`, {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((response) =>
+        readResponse<{ url: string }>(
+          response,
+          "Unable to prepare the document preview.",
+        ),
+      )
+      .then(({ url }) => {
+        if (!url) throw new Error("The document preview link is unavailable.");
+        if (controller.signal.aborted) return;
+        setPreviewUrl(url);
+        if (
+          !previewDocument.fileType.startsWith("image/") &&
+          previewDocument.fileType !== "application/pdf"
+        )
+          setPreviewLoading(false);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) {
+          setShareMessage(
+            caught instanceof Error
+              ? caught.message
+              : "Unable to prepare the secure share link.",
+          );
+        }
+      });
+    return () => controller.abort();
+  }, [previewDocument]);
+
+  useEffect(() => {
+    if (!previewDocument) return;
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setPreviewDocument(null);
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [previewDocument]);
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -146,6 +350,8 @@ export function EmployeeDetail({
         esiPercent: Number(values.get("esiPercent")),
         notes: values.get("notes"),
       });
+    if (canManageUniforms)
+      input.uniformDeductions = uniformEntriesFromForm(values);
     setBusy(true);
     setError("");
     setFieldErrors({});
@@ -182,7 +388,14 @@ export function EmployeeDetail({
           }));
         throw new Error(result.error ?? "Unable to save employee.");
       }
-      setSuccess("Employee details saved.");
+      const documentStorageWarning =
+        typeof result.documentStorageWarning === "string"
+          ? result.documentStorageWarning
+          : undefined;
+      clearEmployeeDetailPrefetch(id, cacheScope);
+      setSuccess(
+        documentStorageWarning ?? "Employee details saved.",
+      );
       setEmployee((current) =>
         current
           ? ({
@@ -200,6 +413,7 @@ export function EmployeeDetail({
             } as EmployeeView)
           : current,
       );
+      onSaved?.(documentStorageWarning);
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Unable to save employee.",
@@ -233,9 +447,10 @@ export function EmployeeDetail({
     }
   }
 
-  function selectFiles(event: ChangeEvent<HTMLInputElement>) {
+  function addFiles(files: FileList | File[]) {
     const additions: PendingFile[] = [];
-    for (const file of Array.from(event.target.files ?? [])) {
+    setUploadValidationError("");
+    for (const file of Array.from(files)) {
       const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
       if (
         !(extension in EMPLOYEE_DOCUMENT_MIME_TYPES) ||
@@ -244,11 +459,15 @@ export function EmployeeDetail({
             extension as keyof typeof EMPLOYEE_DOCUMENT_MIME_TYPES
           ]
       ) {
-        setError(`${file.name}: only JPG, PNG, WEBP, and PDF files are allowed.`);
+        setUploadValidationError(
+          `${file.name}: only JPG, JPEG, PNG, WEBP, PDF, and DOCX files are allowed.`,
+        );
         continue;
       }
       if (!file.size || file.size > EMPLOYEE_DOCUMENT_MAX_BYTES) {
-        setError(`${file.name}: file must be between 1 byte and 5 MB.`);
+        setUploadValidationError(
+          `${file.name}: file must be between 1 byte and ${Math.floor(EMPLOYEE_DOCUMENT_MAX_BYTES / (1024 * 1024))} MB.`,
+        );
         continue;
       }
       const pending: PendingFile = { file, documentType: "OTHER" };
@@ -267,34 +486,83 @@ export function EmployeeDetail({
       additions.push(pending);
     }
     setPendingFiles((current) => [...current, ...additions]);
+  }
+
+  function selectFiles(event: ChangeEvent<HTMLInputElement>) {
+    addFiles(event.target.files ?? []);
     event.target.value = "";
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDropActive(false);
+    addFiles(event.dataTransfer.files);
   }
 
   async function uploadDocuments() {
     if (!pendingFiles.length) return;
     setDocumentsBusy(true);
+    setUploadingDocuments(true);
+    setUploadProgress(0);
     setError("");
+    setUploadValidationError("");
     try {
       const form = new FormData();
       for (const item of pendingFiles) {
         form.append("files", item.file);
         form.append("documentTypes", item.documentType);
       }
-      const response = await fetch(`/api/employees/${id}/documents`, {
-        method: "POST",
-        body: form,
-      });
-      const result = await response.json();
-      if (!response.ok)
-        throw new Error(result.error ?? "Unable to upload employee documents.");
+      const result = await new Promise<{ documents: EmployeeFileView[] }>(
+        (resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("POST", `/api/employees/${id}/documents`);
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable)
+              setUploadProgress(
+                Math.round((event.loaded / event.total) * 100),
+              );
+          };
+          xhr.onload = () => {
+            let payload: {
+              error?: string;
+              documents?: EmployeeFileView[];
+            };
+            try {
+              payload = JSON.parse(xhr.responseText);
+            } catch {
+              reject(new Error("The server returned an invalid upload response."));
+              return;
+            }
+            if (xhr.status < 200 || xhr.status >= 300 || !payload.documents) {
+              reject(
+                new Error(
+                  payload.error ?? "Unable to upload employee documents.",
+                ),
+              );
+              return;
+            }
+            setUploadProgress(100);
+            resolve({ documents: payload.documents });
+          };
+          xhr.onerror = () =>
+            reject(new Error("Network error while uploading documents."));
+          xhr.onabort = () =>
+            reject(new Error("The document upload was interrupted."));
+          xhr.send(form);
+        },
+      );
       setDocuments((current) => [...result.documents, ...current]);
       setPendingFiles([]);
+      clearEmployeeDetailPrefetch(id, cacheScope);
       setSuccess("Employee documents uploaded.");
     } catch (caught) {
       setError(
-        caught instanceof Error ? caught.message : "Unable to upload employee documents.",
+        caught instanceof Error
+          ? caught.message
+          : "Unable to upload employee documents.",
       );
     } finally {
+      setUploadingDocuments(false);
       setDocumentsBusy(false);
     }
   }
@@ -312,6 +580,7 @@ export function EmployeeDetail({
       if (!response.ok)
         throw new Error(result.error ?? "Unable to delete employee document.");
       setDocuments((current) => current.filter((item) => item.id !== document.id));
+      clearEmployeeDetailPrefetch(id, cacheScope);
       setSuccess("Employee document deleted.");
     } catch (caught) {
       setError(
@@ -322,12 +591,68 @@ export function EmployeeDetail({
     }
   }
 
+  async function downloadDocument(file: EmployeeFileView) {
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/employee-documents/${file.id}?download=1`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.error ?? "Unable to download employee document.");
+      }
+      const blob = await response.blob();
+      if (!blob.size) throw new Error("The downloaded document is empty.");
+      const link = document.createElement("a");
+      const objectUrl = URL.createObjectURL(blob);
+      link.href = objectUrl;
+      link.download = file.fileName;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      setShareMessage("Download started.");
+    } catch (caught) {
+      setShareMessage(
+        caught instanceof Error
+          ? caught.message
+          : "Unable to download employee document.",
+      );
+    }
+  }
+
+  async function sharePreview() {
+    if (!previewDocument || !previewUrl) return;
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: previewDocument.fileName,
+          url: previewUrl,
+        });
+      } else {
+        await navigator.clipboard.writeText(previewUrl);
+        setShareMessage("Link copied.");
+      }
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError")
+        return;
+      setShareMessage(
+        caught instanceof Error ? caught.message : "Unable to share this link.",
+      );
+    }
+  }
+
   if (!employee)
     return (
-      <main className="content-area">
-        <Link className="back-link" href="/employees">
-          <ArrowLeft size={16} /> Employees
-        </Link>
+      <main
+        className={`content-area${modal ? " employee-detail-modal-content" : ""}`}
+      >
+        {!modal && (
+          <Link className="back-link" href="/employees">
+            <ArrowLeft size={16} /> Employees
+          </Link>
+        )}
         {error ? (
           <AutoDismissNotice
             key={`error:${error}`}
@@ -335,9 +660,21 @@ export function EmployeeDetail({
             variant="error"
           />
         ) : (
-          <div className="loading-state">
-            <LoaderCircle className="spin" size={20} />
-            Loading employee
+          <div
+            className="employee-edit-skeleton"
+            role="status"
+            aria-label="Loading employee details"
+            aria-busy="true"
+          >
+            <div className="employee-edit-skeleton-message">
+              <LoaderCircle className="spin" size={18} />
+              Loading employee details…
+            </div>
+            <div className="employee-edit-skeleton-grid" aria-hidden="true">
+              {Array.from({ length: 8 }, (_, index) => (
+                <i className="workspace-skeleton-block" key={index} />
+              ))}
+            </div>
           </div>
         )}
       </main>
@@ -363,31 +700,37 @@ export function EmployeeDetail({
   ];
 
   return (
-    <main className="content-area employee-detail-page">
-      <Link className="back-link" href="/employees">
-        <ArrowLeft size={16} /> Employees
-      </Link>
-      <div className="page-head">
-        <div>
-          <div className="eyebrow">
-            EMPLOYEE RECORD / {employee.employeeCode}
+    <main
+      className={`content-area employee-detail-page${modal ? " employee-detail-modal-content" : ""}`}
+    >
+      {!modal && (
+        <>
+          <Link className="back-link" href="/employees">
+            <ArrowLeft size={16} /> Employees
+          </Link>
+          <div className="page-head">
+            <div>
+              <div className="eyebrow">
+                EMPLOYEE RECORD / {employee.employeeCode}
+              </div>
+              <h1>{employee.fullName}</h1>
+              <p>
+                {employee.designation} · {employee.active ? "Active" : "Inactive"}
+              </p>
+            </div>
+            <span
+              className={`badge ${employee.active ? "badge-green" : "badge-muted"}`}
+            >
+              {employee.active ? "Active employee" : "Historical record"}
+            </span>
+            {(employee.licencePending ??
+              (isDeliveryRiderDesignation(employee) &&
+                !employee.drivingLicenceNumber)) && (
+              <span className="badge badge-amber">Licence pending</span>
+            )}
           </div>
-          <h1>{employee.fullName}</h1>
-          <p>
-            {employee.designation} · {employee.active ? "Active" : "Inactive"}
-          </p>
-        </div>
-        <span
-          className={`badge ${employee.active ? "badge-green" : "badge-muted"}`}
-        >
-          {employee.active ? "Active employee" : "Historical record"}
-        </span>
-        {(employee.licencePending ??
-          (isDeliveryRiderDesignation(employee) &&
-            !employee.drivingLicenceNumber)) && (
-          <span className="badge badge-amber">Licence pending</span>
-        )}
-      </div>
+        </>
+      )}
       {error && (
         <AutoDismissNotice
           key={`error:${error}`}
@@ -725,6 +1068,9 @@ export function EmployeeDetail({
               </label>
             </>
           )}
+          {canManageUniforms && (
+            <UniformDetailsFields disabled={!canEdit} />
+          )}
           {canEdit && (
             <div className="form-actions">
               <button className="button button-primary" disabled={busy}>
@@ -749,15 +1095,54 @@ export function EmployeeDetail({
           </div>
           {canEdit && (
             <div className="employee-documents-upload">
-              <label className="field">
-                <span>Upload JPG, PNG, WEBP or PDF files (up to 5 MB each)</span>
+              <div
+                className={`employee-document-dropzone${dropActive ? " is-active" : ""}`}
+                role="button"
+                tabIndex={0}
+                aria-label="Choose employee documents"
+                onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    fileInputRef.current?.click();
+                  }
+                }}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  setDropActive(true);
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setDropActive(true);
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault();
+                  if (
+                    !event.currentTarget.contains(
+                      event.relatedTarget as Node | null,
+                    )
+                  )
+                    setDropActive(false);
+                }}
+                onDrop={handleDrop}
+              >
                 <input
+                  ref={fileInputRef}
+                  className="employee-document-input"
                   type="file"
-                  accept=".jpg,.jpeg,.png,.webp,.pdf"
+                  accept=".jpg,.jpeg,.png,.webp,.pdf,.docx"
                   multiple
                   onChange={selectFiles}
                 />
-              </label>
+                <Upload size={23} aria-hidden="true" />
+                <strong>Drag &amp; drop files here or click to browse</strong>
+                <span>JPG, PNG, WEBP, PDF, DOCX · up to 10 MB per file</span>
+              </div>
+              {uploadValidationError && (
+                <p className="employee-upload-error" role="alert">
+                  {uploadValidationError}
+                </p>
+              )}
               {pendingFiles.map((item, index) => (
                 <div className="employee-upload-item" key={`${item.file.name}-${item.file.size}-${index}`}>
                   {item.preview ? (
@@ -772,7 +1157,9 @@ export function EmployeeDetail({
                   ) : (
                     <FileText size={17} />
                   )}
-                  <span>{item.file.name}</span>
+                  <span>
+                    {item.file.name} · {formatFileSize(item.file.size)}
+                  </span>
                   <select
                     aria-label={`Document type for ${item.file.name}`}
                     value={item.documentType}
@@ -793,6 +1180,7 @@ export function EmployeeDetail({
                   <button
                     type="button"
                     className="icon-button"
+                    disabled={documentsBusy}
                     aria-label={`Remove ${item.file.name}`}
                     onClick={() =>
                       setPendingFiles((current) =>
@@ -800,10 +1188,25 @@ export function EmployeeDetail({
                       )
                     }
                   >
-                    <Trash2 size={15} />
+                    <X size={15} />
                   </button>
                 </div>
               ))}
+              {uploadingDocuments && (
+                <div className="employee-upload-progress">
+                  <div
+                    className="employee-upload-progress-track"
+                    role="progressbar"
+                    aria-label="Document upload progress"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={uploadProgress}
+                  >
+                    <span style={{ width: `${uploadProgress}%` }} />
+                  </div>
+                  <small>{uploadProgress}% uploaded</small>
+                </div>
+              )}
               {pendingFiles.length > 0 && (
                 <button
                   className="button button-primary"
@@ -812,7 +1215,9 @@ export function EmployeeDetail({
                   onClick={() => void uploadDocuments()}
                 >
                   {documentsBusy ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}
-                  Upload selected documents
+                  {uploadingDocuments
+                    ? `Uploading ${uploadProgress}%`
+                    : "Upload selected documents"}
                 </button>
               )}
             </div>
@@ -821,21 +1226,35 @@ export function EmployeeDetail({
             <div className="employee-document-list">
               {documents.map((document) => (
                 <article className="employee-document-row" key={document.id}>
-                  <FileText size={17} />
+                  <button
+                    type="button"
+                    className="employee-document-open-icon"
+                    aria-label={`Preview ${document.fileName}`}
+                    onClick={() => openPreview(document)}
+                  >
+                    <FileText size={17} />
+                  </button>
                   <div>
-                    <strong>{documentTypeLabel(document.documentType)}</strong>
+                    <button
+                      type="button"
+                      className="employee-document-name"
+                      onClick={() => openPreview(document)}
+                    >
+                      {document.fileName}
+                    </button>
                     <small>
-                      {formatFileSize(document.size)} · {new Date(document.uploadedAt).toLocaleDateString()}
+                      {documentTypeLabel(document.documentType)} · {document.fileType} ·{" "}
+                      {formatFileSize(document.size)} ·{" "}
+                      {new Date(document.uploadedAt).toLocaleDateString()}
                     </small>
                   </div>
-                  <a
+                  <button
+                    type="button"
                     className="button button-secondary button-small"
-                    href={document.url}
-                    target="_blank"
-                    rel="noreferrer"
+                    onClick={() => openPreview(document)}
                   >
-                    <ArrowDownToLine size={14} /> Open
-                  </a>
+                    Preview
+                  </button>
                   {canEdit && (
                     <button
                       type="button"
@@ -855,7 +1274,108 @@ export function EmployeeDetail({
           )}
         </section>
       )}
-      {mainAdmin && employee.monthlyBaseSalary !== undefined && (
+      {previewDocument &&
+        portalReady &&
+        createPortal(
+          <div
+            className="employee-document-preview-backdrop"
+            onClick={(event) => {
+              if (event.target === event.currentTarget)
+                setPreviewDocument(null);
+            }}
+          >
+            <section
+              className="employee-document-preview"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="employee-document-preview-title"
+            >
+              <header className="employee-document-preview-header">
+                <div>
+                  <h2 id="employee-document-preview-title">
+                    {previewDocument.fileName}
+                  </h2>
+                  <p>
+                    {previewDocument.fileType} · {formatFileSize(previewDocument.size)} ·{" "}
+                    {new Date(previewDocument.uploadedAt).toLocaleDateString()}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Close document preview"
+                  onClick={() => setPreviewDocument(null)}
+                >
+                  <X size={18} />
+                </button>
+              </header>
+              <div className="employee-document-preview-body">
+                {previewLoading && (
+                  <div className="employee-document-preview-message" role="status">
+                    <LoaderCircle className="spin" size={20} />
+                    Preparing secure preview…
+                  </div>
+                )}
+                {previewError ? (
+                  <div className="employee-document-preview-message" role="alert">
+                    <FileText size={30} />
+                    <span>{previewError}</span>
+                  </div>
+                ) : previewContentUrl &&
+                  previewDocument.fileType.startsWith("image/") ? (
+                  <Image
+                    className="employee-document-preview-image"
+                    src={previewContentUrl}
+                    alt={previewDocument.fileName}
+                    width={1600}
+                    height={1200}
+                    unoptimized
+                    onLoad={() => setPreviewLoading(false)}
+                    onError={() => {
+                      setPreviewLoading(false);
+                      setPreviewError("This image could not be displayed.");
+                    }}
+                  />
+                ) : previewContentUrl &&
+                  previewDocument.fileType === "application/pdf" ? (
+                  <iframe
+                    className="employee-document-preview-pdf"
+                    src={previewContentUrl}
+                    title={`Preview of ${previewDocument.fileName}`}
+                    onLoad={() => setPreviewLoading(false)}
+                  />
+                ) : (
+                  <div className="employee-document-preview-message">
+                    <FileText size={38} />
+                    <strong>{previewDocument.fileName}</strong>
+                    <span>{previewDocument.fileType}</span>
+                    <span>Download this file to view it.</span>
+                  </div>
+                )}
+              </div>
+              <footer className="employee-document-preview-footer">
+                <span role="status">{shareMessage}</span>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => void sharePreview()}
+                  disabled={!previewUrl}
+                >
+                  <Share2 size={15} /> Share
+                </button>
+                <button
+                  type="button"
+                  className="button button-primary"
+                  onClick={() => void downloadDocument(previewDocument)}
+                >
+                  <ArrowDownToLine size={15} /> Download
+                </button>
+              </footer>
+            </section>
+          </div>,
+          document.body,
+        )}
+      {!modal && mainAdmin && employee.monthlyBaseSalary !== undefined && (
         <section className="panel detail-salary">
           <span>Monthly base salary</span>
           <strong>

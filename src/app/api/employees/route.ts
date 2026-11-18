@@ -1,12 +1,16 @@
 import { ObjectId, type Collection } from "mongodb";
 import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
-import { getDb } from "@/lib/mongodb";
+import { getDb, getMongoClient } from "@/lib/mongodb";
 import { employeeSchema } from "@/lib/validation/business";
 import { paginationSchema } from "@/lib/validation/common";
 import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
-import type { EmployeeDocument, OutletDocument } from "@/lib/models";
+import type {
+  EmployeeDocument,
+  OutletDocument,
+  UniformDeductionDocument,
+} from "@/lib/models";
 import { z } from "zod";
 import {
   EMPLOYEE_DESIGNATIONS,
@@ -14,6 +18,12 @@ import {
   isEmployeeDesignationAllowed,
 } from "@/lib/employee-designations";
 import { EMPLOYEE_TERMS_VERSION } from "@/lib/employee-terms";
+import {
+  hasPastUniformMonth,
+  normalizeUniformEntries,
+  uniformEntriesSchema,
+} from "@/lib/uniform-deductions";
+import { getIndiaMonth } from "@/lib/payroll/dates";
 
 const employeeCreateSchema = employeeSchema.safeExtend({
   employeeCode: z
@@ -38,7 +48,8 @@ export async function GET(request: Request) {
       (!wantsNextCode &&
         !actor.permissions.includes("employees.read") &&
       !actor.permissions.includes("attendance.read") &&
-        !actor.permissions.includes("advances.read"))
+        !actor.permissions.includes("advances.read") &&
+        !actor.permissions.includes("uniforms.manage"))
     )
       return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     if (wantsNextCode) {
@@ -135,6 +146,7 @@ export async function GET(request: Request) {
             $or: [
               { fullName: { $regex: escapeRegex(page.q), $options: "i" } },
               { employeeCode: { $regex: escapeRegex(page.q), $options: "i" } },
+              { mobile: { $regex: escapeRegex(page.q), $options: "i" } },
             ],
           }
         : {}),
@@ -184,6 +196,21 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     const payload = body as Record<string, unknown>;
+    let uniformEntries: ReturnType<typeof normalizeUniformEntries> = [];
+    if ("uniformDeductions" in payload) {
+      if (!actor.permissions.includes("uniforms.manage"))
+        return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+      const currentMonth = getIndiaMonth();
+      uniformEntries = normalizeUniformEntries(
+        uniformEntriesSchema.parse(payload.uniformDeductions),
+        currentMonth,
+      );
+      if (hasPastUniformMonth(uniformEntries, currentMonth))
+        return NextResponse.json(
+          { error: "Uniform deductions cannot be scheduled for a past month." },
+          { status: 400 },
+        );
+    }
     if (payload.termsAccepted !== true)
       return NextResponse.json(
         { error: "Employee terms must be accepted before creating this record." },
@@ -367,8 +394,40 @@ export async function POST(request: Request) {
       createdAt: now,
       updatedAt: now,
     };
+    const uniformDocuments: UniformDeductionDocument[] = uniformEntries.map(
+      (entry) => ({
+        _id: new ObjectId(),
+        employeeId: document._id,
+        outletId,
+        item: entry.item,
+        amount: entry.amount,
+        deductionMonth: entry.deductionMonth,
+        status: "SCHEDULED",
+        ...(entry.remark ? { remark: entry.remark } : {}),
+        createdBy: actor.id,
+        updatedBy: actor.id,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
     try {
-      await db.collection<EmployeeDocument>("employees").insertOne(document);
+      if (uniformDocuments.length) {
+        const session = (await getMongoClient()).startSession();
+        try {
+          await session.withTransaction(async () => {
+            await db
+              .collection<EmployeeDocument>("employees")
+              .insertOne(document, { session });
+            await db
+              .collection<UniformDeductionDocument>("employee_uniform_deductions")
+              .insertMany(uniformDocuments, { session });
+          });
+        } finally {
+          await session.endSession();
+        }
+      } else {
+        await db.collection<EmployeeDocument>("employees").insertOne(document);
+      }
     } catch (error) {
       if (
         typeof error === "object" &&
@@ -390,6 +449,23 @@ export async function POST(request: Request) {
       entityId: document._id.toHexString(),
       outletId,
     });
+    await Promise.all(
+      uniformDocuments.map((deduction) =>
+        writeAudit({
+          actorId: actor.id,
+          actorEmail: actor.email,
+          action: "UNIFORM_DEDUCTION_CREATED",
+          entityType: "employee_uniform_deduction",
+          entityId: deduction._id.toHexString(),
+          outletId,
+          changes: {
+            item: { before: "", after: deduction.item },
+            amount: { before: 0, after: deduction.amount },
+            deductionMonth: { before: "", after: deduction.deductionMonth },
+          },
+        }),
+      ),
+    );
     const employee = employeeResponse(
       document,
       actor.role === "MAIN_ADMIN",

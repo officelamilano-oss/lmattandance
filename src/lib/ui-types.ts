@@ -4,9 +4,11 @@ import type {
   Permission,
   SalaryMethod,
   SalarySettings,
+  UniformItemKey,
   UserRole,
 } from "@/lib/models";
 import type { PayrollCalculation } from "@/lib/payroll/calculate";
+import type { UniformReportItem } from "@/lib/uniform-deductions";
 
 export type AttendanceCounts = Record<AttendanceStatus, number>;
 
@@ -172,6 +174,13 @@ export interface SalaryView {
       status: string;
       payrollMonth?: string;
     }>;
+    uniformDeductions?: Array<{
+      id?: string;
+      item: UniformItemKey;
+      amount: number;
+      deductionMonth: string;
+      remark?: string;
+    }>;
   };
   calculation: PayrollCalculation;
   paidAt?: string;
@@ -186,12 +195,15 @@ export interface PayrollEmployeeView {
   fullName: string;
   employeeCode: string;
   designation: string;
+  mobile?: string | null;
   monthlyBaseSalary: number;
   attendance: AttendanceCounts;
   payrollRecordId?: string;
   latestPayrollRecordId?: string;
   nextPeriodStart?: string;
   suggestedPeriodEnd?: string;
+  estimatedNetPayable?: number;
+  estimatedUniformDeduction?: number;
   approvedAdvanceTotal: number;
   outstandingLoanTotal: number;
   hasLegacyPayroll: boolean;
@@ -246,6 +258,9 @@ export interface EmployeeAttendanceReportRow {
   originalLoanAmount?: number;
   remainingLoanBalance?: number;
   monthlyLoanDeduction?: number;
+  uniformDeductionsByItem?: Record<string, number>;
+  totalUniformDeduction?: number;
+  remainingUniformBalance?: number;
   presentDays: number;
   absentDays: number;
   halfDays: number;
@@ -270,6 +285,7 @@ export interface EmployeeAttendanceReport {
     outletId: string;
   }>;
   rows: EmployeeAttendanceReportRow[];
+  uniformItems: UniformReportItem[];
   canReadSalary: boolean;
 }
 

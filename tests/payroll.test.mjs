@@ -21,6 +21,13 @@ import {
   expectedCompletionMonth,
   loanScheduleSummary,
 } from "../src/lib/payroll/loans.ts";
+import {
+  getUniformReportItems,
+  hasPastUniformMonth,
+  normalizeUniformEntries,
+  summarizeUniformDeductions,
+  uniformEntriesSchema,
+} from "../src/lib/uniform-deductions.ts";
 
 const base = {
   monthlyBaseSalary: 30000,
@@ -600,4 +607,73 @@ test("password hashes accept long passwords and preserve existing bcrypt hashes"
   const legacyPassword = "Existing-Admin-Pass-2026";
   const legacyHash = await bcrypt.hash(legacyPassword, 12);
   assert.equal(await verifyPassword(legacyPassword, legacyHash), true);
+});
+
+test("uniform deductions reduce net payroll and remain separately itemized", () => {
+  const result = calculatePayroll({
+    ...base,
+    daysInMonth: 30,
+    presentDays: 30,
+    absentDays: 0,
+    halfDays: 0,
+    weekOffs: 0,
+    uniformDeductions: 500,
+  });
+  assert.equal(result.grossEarnings, 30000);
+  assert.equal(result.uniformDeductions, 500);
+  assert.equal(result.netPayable, 29500);
+});
+
+test("uniform entries allow optional fields and default blank months", () => {
+  const entries = uniformEntriesSchema.parse([
+    { item: "shirt", selected: true, amount: "", deductionMonth: "", remark: "" },
+    { item: "pant", selected: false, amount: "250", deductionMonth: "2027-01" },
+    { item: "cap", selected: false, amount: "", remark: "not selected" },
+  ]);
+  const normalized = normalizeUniformEntries(entries, "2026-12");
+  assert.deepEqual(normalized, [
+    { item: "shirt", amount: 0, deductionMonth: "2026-12", remark: "" },
+    { item: "pant", amount: 250, deductionMonth: "2027-01", remark: "" },
+  ]);
+  assert.equal(hasPastUniformMonth(normalized, "2026-12"), false);
+  assert.equal(
+    hasPastUniformMonth([{ deductionMonth: "2026-11" }], "2026-12"),
+    true,
+  );
+});
+
+test("uniform report sums only due installments and tracks future scheduled balance", () => {
+  const summary = summarizeUniformDeductions(
+    [
+      { item: "cap", amount: 100, deductionMonth: "2026-11", status: "SCHEDULED" },
+      { item: "shirt", amount: 300, deductionMonth: "2026-11", status: "APPLIED" },
+      { item: "pant", amount: 400, deductionMonth: "2026-11", status: "SCHEDULED" },
+      { item: "pant", amount: 200, deductionMonth: "2026-12", status: "SCHEDULED" },
+      { item: "cap", amount: 50, deductionMonth: "2026-11", status: "CANCELLED" },
+    ],
+    "2026-11",
+    "2026-11",
+  );
+  assert.deepEqual(summary, {
+    byItem: { cap: 100, shirt: 300, pant: 400 },
+    total: 800,
+    remaining: 200,
+  });
+});
+
+test("uniform report columns follow configured items and include items found in records", () => {
+  assert.deepEqual(
+    getUniformReportItems(
+      [
+        { key: "cap", label: "Uniform Cap" },
+        { key: "jacket", label: "Jacket" },
+      ],
+      ["belt"],
+    ),
+    [
+      { key: "cap", label: "Uniform Cap" },
+      { key: "jacket", label: "Jacket" },
+      { key: "belt", label: "Belt" },
+    ],
+  );
 });

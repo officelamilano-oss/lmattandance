@@ -6,7 +6,7 @@ export type Permission =
   | "employees.deactivate" | "attendance.read" | "attendance.write" | "attendance.submit"
   | "attendance.unlock" | "advances.read" | "advances.write" | "salary.read" | "salary.generate"
   | "advances.approve" | "salary.adjust" | "salary.approve" | "salary.pay" | "settings.manage" | "access.manage"
-  | "reports.export" | "audit.read";
+  | "reports.export" | "audit.read" | "uniforms.manage";
 
 export interface UserDocument {
   _id: ObjectId;
@@ -109,12 +109,19 @@ export type EmployeeDocumentType =
 export interface EmployeeFileDocument {
   _id: ObjectId;
   employeeId: ObjectId;
+  outletId?: ObjectId;
+  provider?: "imagekit" | "cloudinary" | "s3" | "local" | "mongodb";
+  fileId?: string;
+  filePath?: string;
+  fileName?: string;
+  fileType?: string;
   documentType: EmployeeDocumentType;
-  storageKey: string;
-  mimeType: string;
+  storageKey?: string;
+  mimeType?: string;
   size: number;
   uploadedBy: ObjectId;
-  uploadedAt: Date;
+  uploadedAt?: Date;
+  createdAt?: Date;
 }
 
 export type AttendanceStatus = "P" | "A" | "WO" | "HD";
@@ -150,6 +157,40 @@ export interface AdvanceDocument {
   payrollRecordId?: ObjectId;
   createdBy: ObjectId;
   updatedBy: ObjectId;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export type UniformItemKey =
+  | "shirt"
+  | "pant"
+  | "shoes"
+  | "cap"
+  | "costume";
+
+export type UniformDeductionStatus = "SCHEDULED" | "APPLIED" | "CANCELLED";
+
+export interface UniformDeductionDocument {
+  _id: ObjectId;
+  employeeId: ObjectId;
+  outletId: ObjectId;
+  item: UniformItemKey;
+  amount: number;
+  deductionMonth: string;
+  status: UniformDeductionStatus;
+  remark?: string;
+  payrollRecordId?: ObjectId;
+  createdBy: ObjectId;
+  updatedBy: ObjectId;
+  appliedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface UniformItemDocument {
+  _id: UniformItemKey;
+  label: string;
+  defaultAmount: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -264,7 +305,21 @@ export interface SalaryRecordDocument {
   periodStart?: string;
   periodEnd?: string;
   status: "DRAFT" | "APPROVED" | "PAID";
-  inputSnapshot: Record<string, unknown>;
+  inputSnapshot: Record<string, unknown> & {
+    employee: {
+      [key: string]: unknown;
+      fullName: string;
+      employeeCode: string;
+      monthlyBaseSalary?: number;
+    };
+    uniformDeductions?: Array<{
+      id?: ObjectId;
+      item: UniformItemKey;
+      amount: number;
+      deductionMonth: string;
+      remark?: string;
+    }>;
+  };
   calculation: Record<string, number | string>;
   adjustments: Array<{ label: string; amount: number; reason: string; actorId: ObjectId; at: Date }>;
   approvedBy?: ObjectId;

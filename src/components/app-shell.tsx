@@ -5,7 +5,7 @@ import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useCallback, useEffect, useState } from "react";
-import { Activity, ArrowRight, Banknote, Bell, BookOpen, Building2, CalendarDays, ClipboardList, FileSpreadsheet, LayoutDashboard, LogOut, Menu, Moon, Settings2, ShieldCheck, Sun, Users, Wallet, X, HandCoins } from "lucide-react";
+import { Activity, ArrowRight, Banknote, Bell, BookOpen, Building2, CalendarDays, ClipboardList, FileSpreadsheet, LayoutDashboard, LogOut, Menu, Moon, Settings2, ShieldCheck, Sun, Users, Wallet, X, HandCoins, Shirt } from "lucide-react";
 import type { Permission, UserRole } from "@/lib/models";
 import type { AdvanceView, WorkspaceData } from "@/lib/ui-types";
 
@@ -23,6 +23,7 @@ const navigation: Array<{ href: string; label: string; icon: typeof LayoutDashbo
   { href: "/", label: "Dashboard", icon: LayoutDashboard, permission: "dashboard.read" },
   { href: "/attendance", label: "Attendance", icon: CalendarDays, permission: "attendance.read" },
   { href: "/salary", label: "Monthly salary", icon: Banknote, permission: "salary.read" },
+  { href: "/uniform-deductions", label: "Uniform deduction", icon: Shirt, permission: "uniforms.manage" },
   { href: "/employees", label: "Employees", icon: Users, permission: "employees.read" },
   { href: "/advances", label: "Advances", icon: Wallet, permission: "advances.read" },
   { href: "/loans", label: "Loans", icon: HandCoins, permission: "salary.read", mainAdminOnly: true },

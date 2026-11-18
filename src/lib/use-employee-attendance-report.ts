@@ -22,6 +22,8 @@ export function useEmployeeAttendanceReport({
   const [rows, setRows] = useState<EmployeeAttendanceReportRow[]>([]);
   const [employees, setEmployees] =
     useState<EmployeeAttendanceReport["employees"]>([]);
+  const [uniformItems, setUniformItems] =
+    useState<EmployeeAttendanceReport["uniformItems"]>([]);
   const [canReadSalary, setCanReadSalary] = useState(false);
   const [settledKey, setSettledKey] = useState("");
   const [requestError, setRequestError] = useState<{
@@ -56,6 +58,7 @@ export function useEmployeeAttendanceReport({
             throw new Error(result.error || "Unable to load attendance report.");
           setRows(result.rows);
           setEmployees(result.employees);
+          setUniformItems(result.uniformItems);
           setCanReadSalary(result.canReadSalary);
           setSettledKey(key);
         })
@@ -81,6 +84,7 @@ export function useEmployeeAttendanceReport({
   return {
     rows,
     employees,
+    uniformItems,
     canReadSalary,
     isFetching:
       enabled && !validationError && Boolean(from && to) && settledKey !== key,

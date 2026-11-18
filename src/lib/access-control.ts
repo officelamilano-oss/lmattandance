@@ -45,6 +45,12 @@ export const designationPermissionGroups: Array<{
     ],
   },
   {
+    title: "Uniform deductions",
+    permissions: [
+      { value: "uniforms.manage", label: "Manage uniform deductions" },
+    ],
+  },
+  {
     title: "Reports",
     permissions: [{ value: "reports.export", label: "View and export reports" }],
   },

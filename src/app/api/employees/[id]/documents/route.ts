@@ -3,13 +3,29 @@ import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError, assertSameOrigin } from "@/lib/http";
-import type { EmployeeDocument, EmployeeFileDocument } from "@/lib/models";
+import type {
+  EmployeeDocument,
+  EmployeeFileDocument,
+  OutletDocument,
+} from "@/lib/models";
 import {
-  EMPLOYEE_DOCUMENT_MAX_BYTES,
   EMPLOYEE_DOCUMENT_MIME_TYPES,
   EMPLOYEE_DOCUMENT_TYPES,
 } from "@/lib/employee-documents-config";
-import { employeeDocumentStorage } from "@/lib/employee-document-storage";
+import {
+  buildEmployeeDocumentPath,
+  createStoredEmployeeFileName,
+} from "@/lib/employee-document-path";
+import {
+  getEmployeeFileId,
+  getEmployeeFilePath,
+  getEmployeeFileProvider,
+  getStorageAdapter,
+  type StorageProviderName,
+} from "@/lib/storage";
+import {
+  getStorageMaxFileSizeBytes,
+} from "@/lib/storage/config";
 
 export async function GET(
   _request: Request,
@@ -39,18 +55,9 @@ export async function GET(
     const documents = await db
       .collection<EmployeeFileDocument>("employeeFiles")
       .find({ employeeId: employee._id })
-      .sort({ uploadedAt: -1 })
+      .sort({ createdAt: -1, uploadedAt: -1 })
       .toArray();
-    return NextResponse.json({
-      documents: documents.map((document) => ({
-        id: document._id.toHexString(),
-        documentType: document.documentType,
-        mimeType: document.mimeType,
-        size: document.size,
-        uploadedAt: document.uploadedAt,
-        url: employeeDocumentStorage.getFileUrl(document._id.toHexString()),
-      })),
-    });
+    return NextResponse.json({ documents: documents.map(serializeDocument) });
   } catch (error) {
     return apiError(error);
   }
@@ -60,7 +67,8 @@ export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const createdKeys: string[] = [];
+  const createdFiles: Array<{ provider: StorageProviderName; fileId: string }> =
+    [];
   const createdDocumentIds: ObjectId[] = [];
   try {
     assertSameOrigin(request);
@@ -81,6 +89,10 @@ export async function POST(
       .findOne({ _id: new ObjectId(id) });
     if (!employee) throw new Error("NOT_FOUND");
     assertOutletAccess(actor, employee.outletId);
+    const outlet = await db
+      .collection<OutletDocument>("outlets")
+      .findOne({ _id: employee.outletId });
+    if (!outlet) throw new Error("NOT_FOUND");
 
     const form = await request.formData();
     const files = form.getAll("files");
@@ -98,9 +110,11 @@ export async function POST(
     const uploadPlans: Array<{
       bytes: Uint8Array;
       documentType: EmployeeFileDocument["documentType"];
-      extension: string;
       mimeType: string;
+      originalFileName: string;
+      storedFileName: string;
     }> = [];
+    const maxFileSizeBytes = getStorageMaxFileSizeBytes();
     for (let index = 0; index < files.length; index += 1) {
       const file = files[index] as File;
       const documentType = types[index];
@@ -112,9 +126,11 @@ export async function POST(
           { error: "Choose a valid document type." },
           { status: 400 },
         );
-      if (file.size <= 0 || file.size > EMPLOYEE_DOCUMENT_MAX_BYTES)
+      if (file.size <= 0 || file.size > maxFileSizeBytes)
         return NextResponse.json(
-          { error: "Each document must be between 1 byte and 5 MB." },
+          {
+            error: `Each document must be between 1 byte and ${Math.floor(maxFileSizeBytes / (1024 * 1024))} MB.`,
+          },
           { status: 400 },
         );
       const extension = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
@@ -124,7 +140,10 @@ export async function POST(
         ];
       if (!expectedMime || file.type !== expectedMime)
         return NextResponse.json(
-          { error: "Only JPG, PNG, WEBP, and PDF documents are allowed." },
+          {
+            error:
+              "Only JPG, JPEG, PNG, WEBP, PDF, and DOCX documents are allowed.",
+          },
           { status: 400 },
         );
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -136,41 +155,52 @@ export async function POST(
       uploadPlans.push({
         bytes,
         documentType: documentType as EmployeeFileDocument["documentType"],
-        extension,
         mimeType: expectedMime,
+        originalFileName: file.name,
+        storedFileName: createStoredEmployeeFileName(
+          documentType as EmployeeFileDocument["documentType"],
+          file.name,
+        ),
       });
     }
 
+    const storage = await getStorageAdapter();
     const documents: EmployeeFileDocument[] = [];
     for (const plan of uploadPlans) {
-      const stored = await employeeDocumentStorage.uploadFile(plan.bytes, {
-        mimeType: plan.mimeType,
-        extension: plan.extension,
+      const filePath = buildEmployeeDocumentPath({
+        outletCode: outlet.code,
+        outletName: outlet.name,
+        employeeName: employee.fullName,
+        employeeCode: employee.employeeCode,
+        fileName: plan.storedFileName,
       });
-      createdKeys.push(stored.key);
+      const stored = await storage.upload(plan.bytes, filePath, {
+        fileName: plan.storedFileName,
+        mimeType: plan.mimeType,
+      });
+      createdFiles.push({ provider: stored.provider, fileId: stored.fileId });
+      const createdAt = new Date();
       const document = {
         _id: new ObjectId(),
         employeeId: employee._id,
+        outletId: employee.outletId,
+        provider: stored.provider,
+        fileId: stored.fileId,
+        filePath: stored.filePath,
+        fileName: plan.originalFileName,
+        fileType: plan.mimeType,
         documentType: plan.documentType,
-        storageKey: stored.key,
-        mimeType: stored.mimeType,
-        size: stored.size,
+        size: plan.bytes.byteLength,
         uploadedBy: actor.id,
-        uploadedAt: new Date(),
+        uploadedAt: createdAt,
+        createdAt,
       } satisfies EmployeeFileDocument;
       documents.push(document);
       createdDocumentIds.push(document._id);
     }
     await db.collection<EmployeeFileDocument>("employeeFiles").insertMany(documents);
     return NextResponse.json({
-      documents: documents.map((document) => ({
-        id: document._id.toHexString(),
-        documentType: document.documentType,
-        mimeType: document.mimeType,
-        size: document.size,
-        uploadedAt: document.uploadedAt,
-        url: employeeDocumentStorage.getFileUrl(document._id.toHexString()),
-      })),
+      documents: documents.map(serializeDocument),
     });
   } catch (error) {
     const cleanupErrors: unknown[] = [];
@@ -184,7 +214,9 @@ export async function POST(
       }
     }
     const cleanupResults = await Promise.allSettled(
-      createdKeys.map((key) => employeeDocumentStorage.deleteFile(key)),
+      createdFiles.map(async ({ provider, fileId }) =>
+        (await getStorageAdapter(provider)).delete(fileId),
+      ),
     );
     cleanupErrors.push(
       ...cleanupResults.flatMap((result) =>
@@ -235,7 +267,9 @@ export async function DELETE(
       .deleteOne({ _id: document._id });
     if (deletion.deletedCount !== 1) throw new Error("NOT_FOUND");
     try {
-      await employeeDocumentStorage.deleteFile(document.storageKey);
+      await (
+        await getStorageAdapter(getEmployeeFileProvider(document))
+      ).delete(getEmployeeFileId(document));
     } catch (error) {
       await db
         .collection<EmployeeFileDocument>("employeeFiles")
@@ -246,6 +280,21 @@ export async function DELETE(
   } catch (error) {
     return apiError(error);
   }
+}
+
+function serializeDocument(document: EmployeeFileDocument) {
+  const fileType = document.fileType ?? document.mimeType;
+  if (!fileType) throw new Error("Employee document has no file type metadata.");
+  const filePath = getEmployeeFilePath(document);
+  return {
+    id: document._id.toHexString(),
+    documentType: document.documentType,
+    fileName: document.fileName ?? filePath.split("/").pop() ?? "document",
+    fileType,
+    mimeType: fileType,
+    size: document.size,
+    uploadedAt: document.createdAt ?? document.uploadedAt ?? new Date(0),
+  };
 }
 
 function hasValidFileSignature(bytes: Uint8Array, mimeType: string) {
@@ -271,5 +320,32 @@ function hasValidFileSignature(bytes: Uint8Array, mimeType: string) {
     );
   if (mimeType === "application/pdf")
     return new TextDecoder().decode(bytes.slice(0, 5)) === "%PDF-";
+  if (
+    mimeType ===
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  )
+    return hasZipEntry(bytes, "[Content_Types].xml") &&
+      hasZipEntry(bytes, "word/document.xml");
+  return false;
+}
+
+function hasZipEntry(bytes: Uint8Array, expectedName: string) {
+  for (let offset = 0; offset + 30 <= bytes.length; offset += 1) {
+    if (
+      bytes[offset] !== 0x50 ||
+      bytes[offset + 1] !== 0x4b ||
+      bytes[offset + 2] !== 0x03 ||
+      bytes[offset + 3] !== 0x04
+    )
+      continue;
+    const nameLength = bytes[offset + 26] | (bytes[offset + 27] << 8);
+    const extraLength = bytes[offset + 28] | (bytes[offset + 29] << 8);
+    const nameStart = offset + 30;
+    const nameEnd = nameStart + nameLength;
+    if (nameEnd > bytes.length || nameEnd + extraLength > bytes.length) continue;
+    if (new TextDecoder().decode(bytes.slice(nameStart, nameEnd)) === expectedName)
+      return true;
+    offset = nameEnd + extraLength - 1;
+  }
   return false;
 }

@@ -26,6 +26,20 @@ ADMIN_PASSWORD=<unique-password-at-least-10-characters>
 BOOTSTRAP_ADMIN_EMAIL=<admin-email-used-by-the-app>
 BOOTSTRAP_ADMIN_NAME=<admin-display-name>
 BUSINESS_TIMEZONE=Asia/Kolkata
+STORAGE_PROVIDER=imagekit
+IMAGEKIT_PUBLIC_KEY=
+IMAGEKIT_PRIVATE_KEY=
+IMAGEKIT_URL_ENDPOINT=
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+S3_ENDPOINT=
+S3_REGION=
+S3_BUCKET=
+S3_ACCESS_KEY=
+S3_SECRET_KEY=
+STORAGE_SIGNED_URL_EXPIRY=600
+MAX_FILE_SIZE_MB=10
 ```
 
 Replace every MongoDB URI placeholder with your Atlas values, and keep its database name consistent with `MONGODB_DB`. Encode special characters in the MongoDB username and password for use in a URI. Set `NEXTAUTH_URL` to the local URL for development and to the canonical site URL in the deployment environment. Keep it server-side; do not expose it or database settings through `next.config.ts`'s `env` option or `NEXT_PUBLIC_` variables. Generate an Auth.js secret with:
@@ -33,6 +47,19 @@ Replace every MongoDB URI placeholder with your Atlas values, and keep its datab
 ```powershell
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
+
+### Private Employee Documents
+
+Employee documents are stored privately through the server-side storage service. Choose one provider with `STORAGE_PROVIDER`; provider credentials must never use `NEXT_PUBLIC_` names:
+
+- **ImageKit (default):** set `IMAGEKIT_PUBLIC_KEY`, `IMAGEKIT_PRIVATE_KEY`, and `IMAGEKIT_URL_ENDPOINT`.
+- **Cloudinary:** get the cloud name and API credentials from Cloudinary Console → Settings → API Keys. Set `STORAGE_PROVIDER=cloudinary`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET`. Assets use Cloudinary's authenticated delivery type and expiring signed download URLs.
+- **S3-compatible:** set `STORAGE_PROVIDER=s3`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, and `S3_SECRET_KEY`. Leave `S3_ENDPOINT` blank for AWS S3; set it to the provider endpoint for Cloudflare R2 or Backblaze B2.
+- **Local development:** set `STORAGE_PROVIDER=local` and keep `AUTH_SECRET` configured. Files are stored outside the public directory in `.storage/employee-documents/`.
+
+The selected provider's required configuration is validated when the Node.js server starts. `STORAGE_SIGNED_URL_EXPIRY` defaults to 600 seconds (maximum 3600); `MAX_FILE_SIZE_MB` defaults to 10 (allowed range 1–10). Private employee documents accept JPG, JPEG, PNG, WEBP, PDF, and DOCX files; the API validates file type and size, authorizes each view/download, and returns temporary links. Existing GridFS files continue to use their original storage and can still be viewed.
+
+Switching providers changes where **new** uploads go; previously uploaded documents retain their recorded provider and continue to be served from it. To manually switch to Cloudinary during an outage, add its credentials to the server environment, set `STORAGE_PROVIDER=cloudinary`, then restart or redeploy. Keep the old provider credentials available while old files still depend on that provider. Changing providers does not copy existing files or automatically fail over reads/uploads. Verify a configured provider with `npm run storage:smoke`; this uploads a temporary PDF, checks its signed URL and downloaded bytes, then deletes it. The command performs a real upload/delete against the selected provider.
 
 The app uses a local username/email and password sign-in backed by MongoDB. Admin usernames may be any non-empty text, including an email address, up to 254 characters. Admin passwords must be at least 10 and at most 1024 characters; they are SHA-256 pre-hashed and then bcrypt-hashed before storage so passwords longer than bcrypt's 72-byte input limit work. Existing bcrypt password hashes remain verifiable. The `ADMIN_PASSWORD` value is used only to initialize an admin without existing credentials. Keep `.env.local` private and choose a unique password.
 

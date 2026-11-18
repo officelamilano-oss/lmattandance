@@ -8,6 +8,10 @@
     calculatePayroll,
   } from "@/lib/payroll/calculate";
   import { dateAfter, getMonthDates } from "@/lib/payroll/dates";
+  import {
+    getUniformReportItems,
+    summarizeUniformDeductions,
+  } from "@/lib/uniform-deductions";
   import { dateOnlySchema, objectIdSchema } from "@/lib/validation/common";
   import type {
     AdvanceDocument,
@@ -20,6 +24,8 @@
     OutletDocument,
     SalaryRecordDocument,
     SalarySettings,
+    UniformDeductionDocument,
+    UniformItemDocument,
   } from "@/lib/models";
   import { z } from "zod";
 
@@ -153,8 +159,17 @@
         ]),
       );
       const employeeIds = employees.map((employee) => employee._id);
-      const [advances, salaryRecords, loans, loanInstallments, loanTransactions] = await Promise.all([
-        actor.permissions.includes("salary.read") && employeeIds.length
+      const canReadSalary = actor.permissions.includes("salary.read");
+      const [
+        advances,
+        salaryRecords,
+        loans,
+        loanInstallments,
+        loanTransactions,
+        uniformDeductions,
+        configuredUniformItems,
+      ] = await Promise.all([
+        canReadSalary && employeeIds.length
           ? db
               .collection<AdvanceDocument>("advances")
               .find({
@@ -164,7 +179,7 @@
               })
               .toArray()
           : Promise.resolve([]),
-        actor.permissions.includes("salary.read") && employeeIds.length
+        canReadSalary && employeeIds.length
           ? db
               .collection<SalaryRecordDocument>("salaryRecords")
               .find({
@@ -176,7 +191,7 @@
               })
               .toArray()
           : Promise.resolve([]),
-        actor.permissions.includes("salary.read") && employeeIds.length
+        canReadSalary && employeeIds.length
           ? db
               .collection<LoanDocument>("loans")
               .find({
@@ -185,7 +200,7 @@
               })
               .toArray()
           : Promise.resolve([]),
-        actor.permissions.includes("salary.read") && employeeIds.length
+        canReadSalary && employeeIds.length
           ? db
               .collection<LoanInstallmentDocument>("loanInstallments")
               .find({
@@ -194,7 +209,7 @@
               })
               .toArray()
           : Promise.resolve([]),
-        actor.permissions.includes("salary.read") && employeeIds.length
+        canReadSalary && employeeIds.length
           ? db
               .collection<LoanTransactionDocument>("loanTransactions")
               .find({
@@ -202,6 +217,29 @@
                 transactionDate: { $lte: query.to },
               })
               .toArray()
+          : Promise.resolve([]),
+        canReadSalary && employeeIds.length
+          ? db
+              .collection<UniformDeductionDocument>(
+                "employee_uniform_deductions",
+              )
+              .find({
+                employeeId: { $in: employeeIds },
+                outletId: { $in: outletIds },
+                status: { $in: ["SCHEDULED", "APPLIED"] },
+                deductionMonth: { $gte: query.from.slice(0, 7) },
+              })
+              .toArray()
+          : Promise.resolve([]),
+        canReadSalary
+          ? db
+              .collection<UniformItemDocument>("uniform_items")
+              .find({})
+              .sort({ _id: 1 })
+              .toArray()
+              .then((items) =>
+                items.map((item) => ({ key: item._id, label: item.label })),
+              )
           : Promise.resolve([]),
       ]);
       const advancesByEmployee = groupBy(advances, (advance) =>
@@ -222,6 +260,15 @@
       const transactionsByLoan = groupBy(loanTransactions, (entry) =>
         entry.loanId.toHexString(),
       );
+      const uniformDeductionsByEmployee = groupBy(uniformDeductions, (entry) =>
+        entry.employeeId.toHexString(),
+      );
+      const uniformItems = canReadSalary
+        ? getUniformReportItems(
+            configuredUniformItems,
+            uniformDeductions.map((entry) => entry.item),
+          )
+        : [];
       const skippedLoanIdsByEmployeeAndMonth = new Map<string, Set<string>>();
       for (const installment of loanInstallments) {
         const key = `${installment.employeeId.toHexString()}:${installment.payrollMonth}`;
@@ -299,6 +346,17 @@
           const employeeLoans = (
             loansByEmployee.get(employee._id.toHexString()) ?? []
           ).filter((loan) => loan.createdAt <= reportCutoff);
+          const uniformSummary = summarizeUniformDeductions(
+            uniformDeductionsByEmployee.get(employee._id.toHexString()) ?? [],
+            query.from.slice(0, 7),
+            query.to.slice(0, 7),
+          );
+          const uniformDeductionsByItem = Object.fromEntries(
+            uniformItems.map((item) => [
+              item.key,
+              uniformSummary.byItem[item.key] ?? 0,
+            ]),
+          );
           const originalLoanAmount = employeeLoans.reduce(
             (sum, loan) => sum + loan.totalAmount,
             0,
@@ -344,7 +402,14 @@
               const completeMonthSelected =
                 query.from <= monthStart && query.to >= monthEnd;
               if (saved && completeMonthSelected) {
-                payableAmount += Number(saved.calculation.netPayable ?? 0);
+                const uniformIncludedInPayroll = (
+                  saved.inputSnapshot.uniformDeductions ?? []
+                )
+                  .filter((entry) => entry.deductionMonth === month)
+                  .reduce((sum, entry) => sum + entry.amount, 0);
+                payableAmount +=
+                  Number(saved.calculation.netPayable ?? 0) +
+                  uniformIncludedInPayroll;
                 salaryDeductions.advances += Number(saved.calculation.advances ?? 0);
                 salaryDeductions.esi += Number(saved.calculation.esi ?? 0);
                 salaryDeductions.employeePf += Number(saved.calculation.employeePf ?? 0);
@@ -430,6 +495,9 @@
               salaryDeductions.employerPf += calculation.employerPf;
               salaryDeductions.loanDeduction += calculation.loanDeduction;
             }
+            payableAmount = Math.round(
+              (payableAmount - uniformSummary.total) * 100,
+            ) / 100;
             payableLabel = hasLiveCalculation
               ? "Live accrued · submitted days"
               : hasSavedPayroll
@@ -453,6 +521,9 @@
                   remainingLoanBalance,
                   monthlyLoanDeduction,
                   ...salaryDeductions,
+                  uniformDeductionsByItem,
+                  totalUniformDeduction: uniformSummary.total,
+                  remainingUniformBalance: uniformSummary.remaining,
                 }
               : {}),
             presentDays: dates.P.length,
@@ -479,7 +550,8 @@
         to: query.to,
         employees: employeeOptions,
         rows,
-        canReadSalary: actor.permissions.includes("salary.read"),
+        uniformItems,
+        canReadSalary,
       });
     } catch (error) {
       return apiError(error);

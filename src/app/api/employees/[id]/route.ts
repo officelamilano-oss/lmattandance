@@ -1,16 +1,25 @@
 import { ObjectId } from "mongodb";
+import path from "node:path";
 import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
-import { getDb } from "@/lib/mongodb";
+import { getDb, getMongoClient } from "@/lib/mongodb";
 import { apiError, assertSameOrigin, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
 import type {
   EmployeeDocument,
   EmployeeFileDocument,
   OutletDocument,
+  UniformDeductionDocument,
 } from "@/lib/models";
 import { employeeSchema } from "@/lib/validation/business";
-import { employeeDocumentStorage } from "@/lib/employee-document-storage";
+import { buildEmployeeDocumentPath } from "@/lib/employee-document-path";
+import {
+  getEmployeeFileId,
+  getEmployeeFilePath,
+  getEmployeeFileProvider,
+  getStorageAdapter,
+  StorageMoveUnsupportedError,
+} from "@/lib/storage";
 import {
   getEmployeeCodePrefix,
 } from "@/lib/employee-code";
@@ -19,6 +28,12 @@ import {
   isDeliveryRiderDesignation,
   isEmployeeDesignationAllowed,
 } from "@/lib/employee-designations";
+import {
+  hasPastUniformMonth,
+  normalizeUniformEntries,
+  uniformEntriesSchema,
+} from "@/lib/uniform-deductions";
+import { getIndiaMonth } from "@/lib/payroll/dates";
 
 export async function GET(
   _request: Request,
@@ -43,7 +58,41 @@ export async function GET(
       await getDb()
     )
       .collection<EmployeeDocument>("employees")
-      .findOne({ _id: new ObjectId(id) });
+      .findOne(
+        { _id: new ObjectId(id) },
+        {
+          projection: {
+            _id: 1,
+            employeeCode: 1,
+            fullName: 1,
+            dateOfJoining: 1,
+            dateOfBirth: 1,
+            gender: 1,
+            designation: 1,
+            designationKey: 1,
+            designationGroup: 1,
+            employmentType: 1,
+            mobile: 1,
+            outletId: 1,
+            monthlyBaseSalary: 1,
+            pfEnabled: 1,
+            employeePfPercent: 1,
+            employerPfPercent: 1,
+            esiEnabled: 1,
+            esiPercent: 1,
+            beneficiaryName: 1,
+            bankName: 1,
+            branchName: 1,
+            accountNumber: 1,
+            ifscCode: 1,
+            panNumber: 1,
+            aadhaarNumber: 1,
+            drivingLicenceNumber: 1,
+            active: 1,
+            notes: 1,
+          },
+        },
+      );
     if (!employee) throw new Error("NOT_FOUND");
     assertOutletAccess(actor, employee.outletId);
     const visible = {
@@ -120,8 +169,10 @@ export async function DELETE(
       .collection<EmployeeFileDocument>("employeeFiles")
       .find({ employeeId: employee._id })
       .toArray();
-    for (const document of documents)
-      await employeeDocumentStorage.deleteFile(document.storageKey);
+    for (const document of documents) {
+      const storage = await getStorageAdapter(getEmployeeFileProvider(document));
+      await storage.delete(getEmployeeFileId(document));
+    }
     await db
       .collection<EmployeeFileDocument>("employeeFiles")
       .deleteMany({ employeeId: employee._id });
@@ -167,6 +218,22 @@ export async function PATCH(
     if (!current) throw new Error("NOT_FOUND");
     assertOutletAccess(actor, current.outletId);
     const raw = await readJson<Record<string, unknown>>(request);
+    let uniformEntries: ReturnType<typeof normalizeUniformEntries> = [];
+    if ("uniformDeductions" in raw) {
+      if (!actor.permissions.includes("uniforms.manage"))
+        return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+      const currentMonth = getIndiaMonth();
+      uniformEntries = normalizeUniformEntries(
+        uniformEntriesSchema.parse(raw.uniformDeductions),
+        currentMonth,
+      );
+      if (hasPastUniformMonth(uniformEntries, currentMonth))
+        return NextResponse.json(
+          { error: "Uniform deductions cannot be scheduled for a past month." },
+          { status: 400 },
+        );
+      delete raw.uniformDeductions;
+    }
     if (typeof raw.active === "boolean") {
       if (
         actor.role !== "MAIN_ADMIN" ||
@@ -321,6 +388,7 @@ export async function PATCH(
         { error: "Choose a designation that matches the selected outlet." },
         { status: 400 },
       );
+    const outletChanged = input.outletId !== current.outletId.toHexString();
     const designationDefinition = EMPLOYEE_DESIGNATIONS.find(
       (item) => item.key === input.designationKey,
     );
@@ -355,9 +423,25 @@ export async function PATCH(
         { error: "This employee code is already in use. Generate another code." },
         { status: 409 },
       );
-    await db
-      .collection<EmployeeDocument>("employees")
-      .updateOne(
+    const now = new Date();
+    const uniformDocuments: UniformDeductionDocument[] = uniformEntries.map(
+      (entry) => ({
+        _id: new ObjectId(),
+        employeeId: current._id,
+        outletId: new ObjectId(input.outletId),
+        item: entry.item,
+        amount: entry.amount,
+        deductionMonth: entry.deductionMonth,
+        status: "SCHEDULED",
+        ...(entry.remark ? { remark: entry.remark } : {}),
+        createdBy: actor.id,
+        updatedBy: actor.id,
+        createdAt: now,
+        updatedAt: now,
+      }),
+    );
+    const updateEmployee = async (session?: import("mongodb").ClientSession) =>
+      db.collection<EmployeeDocument>("employees").updateOne(
         { _id: current._id },
         {
           $set: {
@@ -370,10 +454,65 @@ export async function PATCH(
               : {}),
             employeeCodeNormalized: input.employeeCode.toUpperCase(),
             outletId: new ObjectId(input.outletId),
-            updatedAt: new Date(),
+            updatedAt: now,
           },
         },
+        session ? { session } : undefined,
       );
+    if (uniformDocuments.length) {
+      const session = (await getMongoClient()).startSession();
+      try {
+        await session.withTransaction(async () => {
+          await updateEmployee(session);
+          await db
+            .collection<UniformDeductionDocument>("employee_uniform_deductions")
+            .insertMany(uniformDocuments, { session });
+        });
+      } finally {
+        await session.endSession();
+      }
+    } else {
+      await updateEmployee();
+    }
+    let documentStorageWarning: string | undefined;
+    if (outletChanged) {
+      const employeeFiles = await db
+        .collection<EmployeeFileDocument>("employeeFiles")
+        .find({ employeeId: current._id })
+        .toArray();
+      for (const document of employeeFiles) {
+        const provider = getEmployeeFileProvider(document);
+        const storage = await getStorageAdapter(provider);
+        const oldPath = getEmployeeFilePath(document);
+        const newPath = buildEmployeeDocumentPath({
+          outletCode: outlet.code,
+          outletName: outlet.name,
+          employeeName: input.fullName,
+          employeeCode: input.employeeCode,
+          fileName: path.posix.basename(oldPath),
+        });
+        const updatedFile: {
+          outletId: ObjectId;
+          fileId?: string;
+          filePath?: string;
+        } = { outletId: new ObjectId(input.outletId) };
+        try {
+          const moved = await storage.move(
+            getEmployeeFileId(document),
+            newPath,
+          );
+          updatedFile.fileId = moved.fileId;
+          updatedFile.filePath = moved.filePath;
+        } catch (moveError) {
+          if (!(moveError instanceof StorageMoveUnsupportedError))
+            documentStorageWarning =
+              "Employee details were saved, but one or more private documents could not be moved. Those files remain at their previous storage paths.";
+        }
+        await db
+          .collection<EmployeeFileDocument>("employeeFiles")
+          .updateOne({ _id: document._id }, { $set: updatedFile });
+      }
+    }
     const changes = Object.fromEntries(
       Object.entries({
         employeeCode: input.employeeCode,
@@ -412,7 +551,24 @@ export async function PATCH(
       outletId: current.outletId,
       changes,
     });
-    return NextResponse.json({ ok: true });
+    await Promise.all(
+      uniformDocuments.map((deduction) =>
+        writeAudit({
+          actorId: actor.id,
+          actorEmail: actor.email,
+          action: "UNIFORM_DEDUCTION_CREATED",
+          entityType: "employee_uniform_deduction",
+          entityId: deduction._id.toHexString(),
+          outletId: deduction.outletId,
+          changes: {
+            item: { before: "", after: deduction.item },
+            amount: { before: 0, after: deduction.amount },
+            deductionMonth: { before: "", after: deduction.deductionMonth },
+          },
+        }),
+      ),
+    );
+    return NextResponse.json({ ok: true, documentStorageWarning });
   } catch (error) {
     return apiError(error);
   }

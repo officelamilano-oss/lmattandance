@@ -19,6 +19,7 @@ export interface PayrollInputs {
   overtime: number;
   allowances: number;
   otherDeductions: number;
+  uniformDeductions?: number;
   pfEnabled: boolean;
   employeePfPercent: number;
   employerPfPercent: number;
@@ -41,6 +42,7 @@ export interface PayrollCalculation {
   advances: number;
   loanDeduction: number;
   otherDeductions: number;
+  uniformDeductions: number;
   employeePf: number;
   employerPf: number;
   esi: number;
@@ -128,12 +130,13 @@ export function calculatePayroll(input: PayrollInputs): PayrollCalculation {
   const advances = new Decimal(input.advances);
   const loanDeduction = new Decimal(input.loanDeduction ?? 0);
   const otherDeductions = new Decimal(input.otherDeductions);
+  const uniformDeductions = new Decimal(input.uniformDeductions ?? 0);
   const employeePf = input.pfEnabled ? grossEarnings.mul(input.employeePfPercent).div(100) : new Decimal(0);
   const employerPf = input.pfEnabled ? grossEarnings.mul(input.employerPfPercent).div(100) : new Decimal(0);
   const esi = input.esiEnabled
     ? grossEarnings.mul(input.esiPercent ?? 0).div(100)
     : new Decimal(0);
-  const netPayable = grossEarnings.plus(overtime).plus(allowances).minus(advances).minus(loanDeduction).minus(otherDeductions).minus(employeePf).minus(esi);
+  const netPayable = grossEarnings.plus(overtime).plus(allowances).minus(advances).minus(loanDeduction).minus(otherDeductions).minus(uniformDeductions).minus(employeePf).minus(esi);
 
   return {
     dailyRate: money(dailyRate), halfDayDeduction: money(halfDayDeduction),
@@ -141,7 +144,7 @@ export function calculatePayroll(input: PayrollInputs): PayrollCalculation {
     paidAbsenceDays, halfDays: input.halfDays, weekOffs: input.weekOffs,
     grossEarnings: money(grossEarnings),
     overtime: money(overtime), allowances: money(allowances), advances: money(advances),
-    loanDeduction: money(loanDeduction), otherDeductions: money(otherDeductions), employeePf: money(employeePf), employerPf: money(employerPf), esi: money(esi),
+    loanDeduction: money(loanDeduction), otherDeductions: money(otherDeductions), uniformDeductions: money(uniformDeductions), employeePf: money(employeePf), employerPf: money(employerPf), esi: money(esi),
     netPayable: money(netPayable),
   };
 }

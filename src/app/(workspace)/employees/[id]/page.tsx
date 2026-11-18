@@ -14,9 +14,11 @@ export default async function EmployeeDetailPage({
   return (
     <EmployeeDetail
       id={id}
+      cacheScope={actor.id.toHexString()}
       canEdit={actor.permissions.includes("employees.update")}
       mainAdmin={actor.role === "MAIN_ADMIN"}
       canViewSensitive={actor.role !== "OUTLET_USER"}
+      canManageUniforms={actor.permissions.includes("uniforms.manage")}
     />
   );
 }

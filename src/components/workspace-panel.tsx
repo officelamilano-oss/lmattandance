@@ -35,6 +35,7 @@
     HandCoins,
     LoaderCircle,
     Plus,
+    Printer,
     RefreshCw,
     Search,
     Send,
@@ -47,6 +48,7 @@
     AttendanceStatus,
     Permission,
     SalarySettings,
+    UniformItemKey,
     UserRole,
   } from "@/lib/models";
   import type {
@@ -70,12 +72,17 @@
   import { useEmployeeAttendanceReport } from "@/lib/use-employee-attendance-report";
   import { EmployeeImportPanel } from "@/components/employee-import-panel";
   import { EmployeeCreatePanel } from "@/components/employee-create-panel";
+  import {
+    EmployeeDetail,
+    prefetchEmployeeDetail,
+  } from "@/components/employee-detail";
   import { AutoDismissNotice } from "@/components/auto-dismiss-notice";
   import { LazySection } from "@/components/lazy-section";
   import { DashboardPartLoader } from "@/components/dashboard-part-loader";
   import { getIndiaDate, getIndiaMonth } from "@/lib/payroll/dates";
   import { isAttendanceEntryLocked } from "@/lib/attendance";
   import { calculateLoanInstallment } from "@/lib/payroll/calculate";
+  import { UNIFORM_ITEM_LABELS } from "@/lib/uniform-deductions";
   import {
     expectedCompletionMonth,
     loanScheduleSummary,
@@ -319,6 +326,7 @@
     const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(
       null,
     );
+    const [employeeToEdit, setEmployeeToEdit] = useState<Employee | null>(null);
     const [data, setData] = useState<WorkspaceData>({});
     const [date, setDate] = useState(() => getIndiaDate());
     const [month, setMonth] = useState(() => getIndiaMonth());
@@ -339,6 +347,9 @@
     const [search, setSearch] = useState("");
     const [debouncedSearch, setDebouncedSearch] = useState("");
     const [page, setPage] = useState(1);
+    const [salaryPage, setSalaryPage] = useState(1);
+    const [salaryPageSize, setSalaryPageSize] = useState<number | "all">(20);
+    const [salarySearch, setSalarySearch] = useState("");
     const [advanceStatus, setAdvanceStatus] = useState<
       "ALL" | "PENDING" | "APPROVED" | "REJECTED"
     >("ALL");
@@ -775,6 +786,7 @@
         value={selectedOutlet}
         onChange={(event) => {
           setSelectedOutlet(event.target.value);
+          setSalaryPage(1);
         }}
         aria-label="Select outlet"
       >
@@ -1996,6 +2008,7 @@
               outlets={employeeOutlets}
               initialOutletId={selectedOutlet}
               canManageDocuments={user.permissions.includes("employees.update")}
+              canManageUniforms={user.permissions.includes("uniforms.manage")}
               onCreated={reload}
             />
           )}
@@ -2050,28 +2063,63 @@
                   </span>,
                 );
                 cells.push(
-                  user.role === "MAIN_ADMIN" ? (
+                  user.role === "MAIN_ADMIN" ||
+                    user.permissions.includes("employees.update") ? (
                     <span key="actions" className="employee-row-actions">
-                      <button
-                        type="button"
-                        className="button button-small"
-                        disabled={busy}
-                        onClick={() =>
-                          void setEmployeeActive(employee, !employee.active)
-                        }
-                      >
-                        {employee.active ? "Deactivate" : "Activate"}
-                      </button>
-                      <button
-                        type="button"
-                        className="button button-small button-danger"
-                        disabled={busy}
-                        onClick={() => setEmployeeToDelete(employee)}
-                        aria-label={`Permanently delete ${employee.fullName}`}
-                      >
-                        <Trash2 size={13} />
-                        Delete
-                      </button>
+                      {user.permissions.includes("employees.update") && (
+                        <button
+                          type="button"
+                          className="button button-small"
+                          onMouseEnter={() =>
+                            prefetchEmployeeDetail(
+                              employee._id,
+                              user.role !== "OUTLET_USER",
+                              user.email,
+                            )
+                          }
+                          onFocus={() =>
+                            prefetchEmployeeDetail(
+                              employee._id,
+                              user.role !== "OUTLET_USER",
+                              user.email,
+                            )
+                          }
+                          onClick={() => {
+                            prefetchEmployeeDetail(
+                              employee._id,
+                              user.role !== "OUTLET_USER",
+                              user.email,
+                            );
+                            setEmployeeToEdit(employee);
+                          }}
+                        >
+                          Edit
+                        </button>
+                      )}
+                      {user.role === "MAIN_ADMIN" && (
+                        <>
+                          <button
+                            type="button"
+                            className="button button-small"
+                            disabled={busy}
+                            onClick={() =>
+                              void setEmployeeActive(employee, !employee.active)
+                            }
+                          >
+                            {employee.active ? "Deactivate" : "Activate"}
+                          </button>
+                          <button
+                            type="button"
+                            className="button button-small button-danger"
+                            disabled={busy}
+                            onClick={() => setEmployeeToDelete(employee)}
+                            aria-label={`Permanently delete ${employee.fullName}`}
+                          >
+                            <Trash2 size={13} />
+                            Delete
+                          </button>
+                        </>
+                      )}
                     </span>
                   ) : (
                     "—"
@@ -2085,6 +2133,58 @@
               total={data.total ?? 0}
               onPageChange={setPage}
             />
+          )}
+          {employeeToEdit && (
+            <ModalPortal>
+              <div
+                className="access-modal-backdrop"
+                onClick={(event) => {
+                  if (event.target === event.currentTarget)
+                    setEmployeeToEdit(null);
+                }}
+              >
+                <section
+                  className="access-modal employee-edit-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="employee-edit-title"
+                >
+                  <div className="access-modal-heading">
+                    <div>
+                      <h2 id="employee-edit-title">
+                        Edit {employeeToEdit.fullName}
+                      </h2>
+                      <p>Update the employee record and save your changes.</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label="Close employee editor"
+                      onClick={() => setEmployeeToEdit(null)}
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                  <EmployeeDetail
+                    key={employeeToEdit._id}
+                    id={employeeToEdit._id}
+                    cacheScope={user.email}
+                    canEdit={user.permissions.includes("employees.update")}
+                    mainAdmin={user.role === "MAIN_ADMIN"}
+                    canViewSensitive={user.role !== "OUTLET_USER"}
+                    canManageUniforms={user.permissions.includes("uniforms.manage")}
+                    modal
+                    onSaved={(documentStorageWarning) => {
+                      setEmployeeToEdit(null);
+                      void reload();
+                      if (documentStorageWarning)
+                        setError(documentStorageWarning);
+                      else setSuccess("Employee details saved.");
+                    }}
+                  />
+                </section>
+              </div>
+            </ModalPortal>
           )}
           {employeeToDelete && (
             <ModalPortal>
@@ -3112,6 +3212,36 @@
 
     if (section === "salary") {
       const payrollEmployees = data.payrollEmployees ?? [];
+      const normalizedSalarySearch = salarySearch.trim().toLowerCase();
+      const matchesSalarySearch = (...values: Array<string | null | undefined>) =>
+        !normalizedSalarySearch ||
+        values.some((value) =>
+          value?.toLowerCase().includes(normalizedSalarySearch),
+        );
+      const salaryRecords = (data.records ?? []).filter((record) =>
+        matchesSalarySearch(
+          record.inputSnapshot.employee.fullName,
+          record.inputSnapshot.employee.employeeCode,
+        ),
+      );
+      const ungeneratedPayrollEmployees = payrollEmployees.filter(
+        (employee) =>
+          !employee.payrollRecordId &&
+          matchesSalarySearch(
+            employee.fullName,
+            employee.employeeCode,
+            employee.designation,
+            employee.outletCode,
+            employee.mobile,
+          ),
+      );
+      const salaryTotal =
+        salaryRecords.length + ungeneratedPayrollEmployees.length;
+      const salaryPageCount =
+        salaryPageSize === "all"
+          ? 1
+          : Math.max(1, Math.ceil(salaryTotal / salaryPageSize));
+      const currentSalaryPage = Math.min(salaryPage, salaryPageCount);
       return (
         <div className="content-area">
           <PageHead
@@ -3119,11 +3249,24 @@
             description="Generate, review, adjust, approve and record payroll payments."
             action={
               <div className="toolbar">
+                <label className="search-field">
+                  <Search size={16} />
+                  <input
+                    value={salarySearch}
+                    onChange={(event) => {
+                      setSalaryPage(1);
+                      setSalarySearch(event.target.value);
+                    }}
+                    placeholder="Search employees"
+                    aria-label="Search monthly salary"
+                  />
+                </label>
                 <input
                   type="month"
                   value={month}
                   onChange={(event) => {
                     setSalaryGenerateEmployee(null);
+                    setSalaryPage(1);
                     setMonth(event.target.value);
                   }}
                   aria-label="Payroll month"
@@ -3180,16 +3323,19 @@
           ) : (
             <>
             <DataTable
+              className="salary-table"
               headers={[
                 "Employee",
+                "Monthly salary",
                 "Period",
                 "Days P / A / HD / WO",
                 "Days filled",
                 "Gross",
                 "Advances",
-                "Employee ESI",
-                "Employee PF (deduction)",
-                "Employer PF (tracked)",
+                "Uniform deduction",
+                "ESI (deduction)",
+                "PF (tracked)",
+                "PF (deduction)",
                 "Original loan",
                 "Remaining loan",
                 "Scheduled deduction",
@@ -3199,8 +3345,9 @@
                 "Actions",
               ]}
               rows={[
-                ...(data.records ?? []).map((record: SalaryView) => {
+                ...salaryRecords.map((record: SalaryView) => {
                 const loanSnapshot = record.inputSnapshot.loans ?? [];
+                const uniformSnapshot = record.inputSnapshot.uniformDeductions ?? [];
                 const loanTotal = (key: "originalAmount" | "closingBalance" | "scheduledDeduction" | "actualDeduction") =>
                   loanSnapshot.reduce((sum, loan) => sum + loan[key], 0);
                 return [
@@ -3209,15 +3356,6 @@
                   <span className="sub-cell">
                     {record.inputSnapshot.employee.employeeCode}
                   </span>
-                  {record.inputSnapshot.employee.monthlyBaseSalary !==
-                    undefined && (
-                    <span className="sub-cell">
-                      Monthly base:{" "}
-                      {currency(
-                        record.inputSnapshot.employee.monthlyBaseSalary,
-                      )}
-                    </span>
-                  )}
                   <details className="salary-breakdown">
                     <summary>Calculation breakdown</summary>
                     <dl>
@@ -3245,6 +3383,15 @@
                       </dd>
                       <dt>Other deductions</dt>
                       <dd>{currency(record.calculation.otherDeductions)}</dd>
+                      <dt>Uniform deductions</dt>
+                      <dd>
+                        {currency(record.calculation.uniformDeductions ?? 0)}
+                        {uniformSnapshot.map((deduction, index) => (
+                          <span className="sub-cell" key={`${deduction.item}-${index}`}>
+                            {UNIFORM_ITEM_LABELS[deduction.item]} · {currency(deduction.amount)}
+                          </span>
+                        ))}
+                      </dd>
                       <dt>Payroll state</dt>
                       <dd>
                         {record.status}
@@ -3269,6 +3416,9 @@
                     </dl>
                   </details>
                 </div>,
+                record.inputSnapshot.employee.monthlyBaseSalary !== undefined
+                  ? currency(record.inputSnapshot.employee.monthlyBaseSalary)
+                  : "-",
                 record.periodStart && record.periodEnd
                   ? `${formatDate(record.periodStart)} – ${formatDate(record.periodEnd)}`
                   : "Full month (legacy)",
@@ -3279,13 +3429,14 @@
                   record.calculation.weekOffs,
                 currency(record.calculation.grossEarnings),
                 currency(record.calculation.advances),
+                currency(record.calculation.uniformDeductions ?? 0),
                 currency(record.calculation.esi ?? 0),
-                currency(record.calculation.employeePf),
                 currency(record.calculation.employerPf ?? 0),
-                loanSnapshot.length ? currency(loanTotal("originalAmount")) : "—",
-                loanSnapshot.length ? currency(loanTotal("closingBalance")) : "—",
-                loanSnapshot.length ? currency(loanTotal("scheduledDeduction")) : "—",
-                loanSnapshot.length ? currency(loanTotal("actualDeduction")) : "—",
+                currency(record.calculation.employeePf),
+                loanSnapshot.length ? currency(loanTotal("originalAmount")) : "-",
+                loanSnapshot.length ? currency(loanTotal("closingBalance")) : "-",
+                loanSnapshot.length ? currency(loanTotal("scheduledDeduction")) : "-",
+                loanSnapshot.length ? currency(loanTotal("actualDeduction")) : "-",
                 <strong key="net">
                   {currency(record.calculation.netPayable)}
                 </strong>,
@@ -3316,9 +3467,7 @@
                 />,
                 ];
                 }),
-                ...payrollEmployees
-                  .filter((employee) => !employee.payrollRecordId)
-                  .map((employee) => [
+                ...ungeneratedPayrollEmployees.map((employee) => [
                     <div key={employee._id}>
                       <strong>{employee.fullName}</strong>
                       <span className="sub-cell">
@@ -3326,37 +3475,35 @@
                         {employee.outletCode}
                       </span>
                       <span className="sub-cell">
-                        Monthly base: {currency(employee.monthlyBaseSalary)}
+                        {employee.mobile || "-"}
                       </span>
-                      {employee.suggestedPeriodEnd ? (
+                      {employee.suggestedPeriodEnd && (
                         <span className="sub-cell">
                           Ready through {employee.suggestedPeriodEnd}
                         </span>
-                      ) : (
-                        <span className="sub-cell">
-                          Submit attendance for the next uncovered dates to generate payroll.
-                        </span>
                       )}
-                      {employee.outstandingLoanTotal > 0 && (
-                        <span className="sub-cell">
-                          Outstanding loan:{" "}
-                          {currency(employee.outstandingLoanTotal)}
-                        </span>
-                      )}
+
                     </div>,
-                    "—",
+                    currency(employee.monthlyBaseSalary),
+                    "-",
                     `${employee.attendance.P} / ${employee.attendance.A} / ${employee.attendance.HD} / ${employee.attendance.WO}`,
                     employee.attendance.P +
                       employee.attendance.A +
                       employee.attendance.HD +
                       employee.attendance.WO,
-                    "—",
+                    "-",
                     currency(employee.approvedAdvanceTotal),
+                    currency(employee.estimatedUniformDeduction ?? 0),
+                    "-",
+                    "-",
+                    "-",
+                    "-",
+                    employee.outstandingLoanTotal > 0
+                      ? currency(employee.outstandingLoanTotal)
+                      : "-",
+                    "-",
                     currency(0),
-                    currency(0),
-                    currency(0),
-                    currency(0),
-                    "—",
+                    currency(employee.estimatedNetPayable ?? 0),
                     <span key="status" className="badge badge-muted">
                       Not generated
                     </span>,
@@ -3375,8 +3522,18 @@
                       "—"
                     ),
                   ]),
-              ]}
+              ]}                                                                                                        
               empty="No eligible employees or payroll records for this month."
+              page={currentSalaryPage}
+              pageSize={salaryPageSize}
+              pageSizeOptions={[20, 25, 50, 100]}
+              total={salaryTotal}
+              onPageChange={setSalaryPage}
+              onPageSizeChange={(nextPageSize) => {
+                setSalaryPageSize(nextPageSize);
+                setSalaryPage(1);
+              }}
+              paginateRows
             />
             {salaryGenerateEmployee && (
               <SalaryGenerateModal
@@ -3817,6 +3974,14 @@
   }) {
     return (
       <div className="salary-actions">
+        <Link
+          className="button button-small"
+          href={`/salary/slips/${record._id}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Payslip
+        </Link>
         <button
           className="button button-small"
           disabled={busy}
@@ -3878,7 +4043,8 @@
       Number(amounts.esi) -
       Number(amounts.employeePf) -
       Number(amounts.loanDeduction) -
-      Number(record.calculation.otherDeductions ?? 0);
+      Number(record.calculation.otherDeductions ?? 0) -
+      Number(record.calculation.uniformDeductions ?? 0);
 
     async function submitPaidCorrection(event: FormEvent<HTMLFormElement>) {
       event.preventDefault();
@@ -4151,6 +4317,7 @@
     type Amounts = {
       grossEarnings: number;
       advances: number;
+      uniformDeductions: number;
       esi: number;
       employeePf: number;
       employerPf: number;
@@ -4165,6 +4332,13 @@
         date: string;
         amount: number;
         reference: string;
+      }>;
+      uniformDeductions: Array<{
+        _id: string;
+        item: UniformItemKey;
+        amount: number;
+        deductionMonth: string;
+        remark: string;
       }>;
     };
     const [periodStart, setPeriodStart] = useState(
@@ -4214,6 +4388,7 @@
     const netPayable = amounts
       ? amounts.grossEarnings -
         amounts.advances -
+      amounts.uniformDeductions -
         amounts.esi -
         amounts.employeePf -
         amounts.loanDeduction
@@ -4320,6 +4495,17 @@
                     onChange={() => {}}
                     help="Select which approved advances to deduct below."
                   />
+                  <AmountField
+                    label="Uniform deduction (INR)"
+                    value={amounts?.uniformDeductions ?? 0}
+                    disabled
+                    onChange={() => {}}
+                    help={preview.uniformDeductions.length
+                      ? preview.uniformDeductions
+                          .map((item) => `${UNIFORM_ITEM_LABELS[item.item]}: ${currency(item.amount)}`)
+                          .join(" · ")
+                      : "No uniform deductions scheduled for this month."}
+                  />
                   {preview.advances.map((advance) => (
                     <label className="field" key={advance._id}>
                       <span>
@@ -4395,21 +4581,25 @@
                     <strong>{currency(netPayable)}</strong>
                   </div>
                   {canApprove && (
-                    <label className="field">
+                    <label className="salary-approve-option">
+                      <input
+                        type="checkbox"
+                        checked={approveNow}
+                        onChange={(event) =>
+                          setApproveNow(event.target.checked)
+                        }
+                      />
                       <span>
-                        <input
-                          type="checkbox"
-                          checked={approveNow}
-                          onChange={(event) =>
-                            setApproveNow(event.target.checked)
-                          }
-                        />{" "}
-                        Generate and approve this payroll
+                        Check to approve this payroll immediately. Leave unchecked to save it as a draft.
                       </span>
                     </label>
                   )}
                   <button
-                    className="button button-primary"
+                    className={`button ${
+                      approveNow
+                        ? "button-primary"
+                        : "button-secondary salary-generate-draft"
+                    }`}
                     disabled={busy || loadingPreview || !amounts}
                   >
                     {approveNow ? "Generate & approve" : "Generate draft"}
@@ -5525,8 +5715,11 @@
     empty,
     page = 1,
     pageSize = 25,
+    pageSizeOptions,
     total,
     onPageChange,
+    onPageSizeChange,
+    paginateRows = false,
   }: {
     className?: string;
     headers: string[];
@@ -5534,12 +5727,21 @@
     rowClassNames?: string[];
     empty: string;
     page?: number;
-    pageSize?: number;
+    pageSize?: number | "all";
+    pageSizeOptions?: readonly number[];
     total?: number;
     onPageChange?: (page: number) => void;
+    onPageSizeChange?: (pageSize: number | "all") => void;
+    paginateRows?: boolean;
   }) {
     const pageCount =
-      total === undefined ? 1 : Math.max(1, Math.ceil(total / pageSize));
+      total === undefined || pageSize === "all"
+        ? 1
+        : Math.max(1, Math.ceil(total / pageSize));
+    const visibleRows =
+      paginateRows && pageSize !== "all"
+        ? rows.slice((page - 1) * pageSize, page * pageSize)
+        : rows;
     return (
       <section className={`panel ${className ?? ""}`}>
         <div className="table-wrap">
@@ -5552,7 +5754,7 @@
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, index) => (
+              {visibleRows.map((row, index) => (
                 <tr key={index} className={rowClassNames?.[index]}>
                   {row.map((cell, cellIndex) => (
                     <td key={cellIndex}>{cell}</td>
@@ -5561,13 +5763,36 @@
               ))}
             </tbody>
           </table>
-          {rows.length === 0 && <Empty>{empty}</Empty>}
+          {visibleRows.length === 0 && <Empty>{empty}</Empty>}
         </div>
         <div className="panel-footer">
           <span>
             {total ?? rows.length} records · page {page} of {pageCount}
           </span>
           <div className="pagination">
+            {onPageSizeChange && (
+              <label className="table-page-size">
+                Rows per page
+                <select
+                  aria-label="Rows per page"
+                  value={pageSize}
+                  onChange={(event) =>
+                    onPageSizeChange(
+                      event.target.value === "all"
+                        ? "all"
+                        : Number(event.target.value),
+                    )
+                  }
+                >
+                  {pageSizeOptions?.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                  <option value="all">All</option>
+                </select>
+              </label>
+            )}
             <button
               className="icon-button"
               aria-label="Previous page"
@@ -6737,6 +6962,7 @@
 
   function EmployeeAttendanceTable({
     rows: providedRows,
+    uniformItems: providedUniformItems,
     canReadSalary,
     paginate = false,
     globalFrom,
@@ -6750,6 +6976,7 @@
     description,
   }: {
     rows?: EmployeeAttendanceReportRow[];
+    uniformItems?: Array<{ key: string; label: string }>;
     canReadSalary: boolean;
     paginate?: boolean;
     globalFrom?: string;
@@ -6789,6 +7016,7 @@
       });
     const rows = providedRows ?? report.rows;
     const employees = report.employees;
+    const uniformItems = providedUniformItems ?? report.uniformItems;
     const isFetching = hasLocalFilters && report.isFetching;
     const error = hasLocalFilters ? report.error : "";
     const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
@@ -6796,9 +7024,11 @@
     const visibleRows = paginate
       ? rows.slice((currentPage - 1) * pageSize, currentPage * pageSize)
       : rows;
+    const sum = (getValue: (row: EmployeeAttendanceReportRow) => number) =>
+      rows.reduce((total, row) => total + getValue(row), 0);
 
     return (
-      <section className="panel">
+      <section className="panel employee-attendance-report">
         <div className="panel-heading">
           <div>
             <h2>{title}</h2>
@@ -6923,24 +7153,48 @@
           <div className="table-wrap">
             <table className="dashboard-employee-attendance">
             <thead>
-              <tr>
-                <th>Employee</th>
-                <th>Present</th>
-                <th>Absent</th>
-                <th>Half day</th>
-                <th>Week off</th>
-                <th>Filled days</th>
-                <th>Not marked</th>
-                {canReadSalary && <th>Fixed salary</th>}
-                {canReadSalary && <th>Advances</th>}
-                {canReadSalary && <th>Employee ESI</th>}
-                {canReadSalary && <th>Employee PF</th>}
-                {canReadSalary && <th>Employer PF</th>}
-                {canReadSalary && <th>Original loan</th>}
-                {canReadSalary && <th>Remaining balance</th>}
-                {canReadSalary && <th>Monthly deduction</th>}
-                {canReadSalary && <th>Payable</th>}
-              </tr>
+              {canReadSalary ? (
+                <>
+                  <tr>
+                    <th rowSpan={2}>Employee</th>
+                    <th rowSpan={2}>Present</th>
+                    <th rowSpan={2}>Absent</th>
+                    <th rowSpan={2}>Half day</th>
+                    <th rowSpan={2}>Week off</th>
+                    <th rowSpan={2}>Filled days</th>
+                    <th rowSpan={2}>Not marked</th>
+                    <th rowSpan={2}>Fixed salary</th>
+                    <th rowSpan={2}>Advances</th>
+                    <th rowSpan={2}>Employee ESI</th>
+                    <th rowSpan={2}>Employee PF</th>
+                    <th rowSpan={2}>Employer PF</th>
+                    <th rowSpan={2}>Original loan</th>
+                    <th rowSpan={2}>Remaining balance</th>
+                    <th rowSpan={2}>Monthly deduction</th>
+                    <th colSpan={uniformItems.length + 2}>
+                      Uniform Deduction
+                    </th>
+                    <th rowSpan={2}>Payable</th>
+                  </tr>
+                  <tr>
+                    {uniformItems.map((item) => (
+                      <th key={item.key}>{item.label}</th>
+                    ))}
+                    <th>Total Uniform Deduction</th>
+                    <th>Remaining Uniform Balance</th>
+                  </tr>
+                </>
+              ) : (
+                <tr>
+                  <th>Employee</th>
+                  <th>Present</th>
+                  <th>Absent</th>
+                  <th>Half day</th>
+                  <th>Week off</th>
+                  <th>Filled days</th>
+                  <th>Not marked</th>
+                </tr>
+              )}
             </thead>
             <tbody>
               {visibleRows.map((row) => (
@@ -7049,6 +7303,18 @@
                   {canReadSalary && (
                     <td>{currency(row.monthlyLoanDeduction ?? 0)}</td>
                   )}
+                  {canReadSalary &&
+                    uniformItems.map((item) => (
+                      <td key={item.key}>
+                        {currency(row.uniformDeductionsByItem?.[item.key] ?? 0)}
+                      </td>
+                    ))}
+                  {canReadSalary && (
+                    <td>{currency(row.totalUniformDeduction ?? 0)}</td>
+                  )}
+                  {canReadSalary && (
+                    <td>{currency(row.remainingUniformBalance ?? 0)}</td>
+                  )}
                   {canReadSalary && (
                     <td>
                       {currency(row.payableAmount ?? 0)}
@@ -7058,6 +7324,46 @@
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr>
+                <th>Total</th>
+                <td>{sum((row) => row.presentDays)}</td>
+                <td>{sum((row) => row.absentDays)}</td>
+                <td>{sum((row) => row.halfDays)}</td>
+                <td>{sum((row) => row.weekOffs)}</td>
+                <td>{sum((row) => row.filledDays)}</td>
+                <td>{sum((row) => row.missingDays)}</td>
+                {canReadSalary && (
+                  <>
+                    <td>{currency(sum((row) => row.monthlyBaseSalary ?? 0))}</td>
+                    <td>{currency(sum((row) => row.advances ?? 0))}</td>
+                    <td>{currency(sum((row) => row.esi ?? 0))}</td>
+                    <td>{currency(sum((row) => row.employeePf ?? 0))}</td>
+                    <td>{currency(sum((row) => row.employerPf ?? 0))}</td>
+                    <td>{currency(sum((row) => row.originalLoanAmount ?? 0))}</td>
+                    <td>{currency(sum((row) => row.remainingLoanBalance ?? 0))}</td>
+                    <td>{currency(sum((row) => row.monthlyLoanDeduction ?? 0))}</td>
+                    {uniformItems.map((item) => (
+                      <td key={item.key}>
+                        {currency(
+                          sum(
+                            (row) =>
+                              row.uniformDeductionsByItem?.[item.key] ?? 0,
+                          ),
+                        )}
+                      </td>
+                    ))}
+                    <td>
+                      {currency(sum((row) => row.totalUniformDeduction ?? 0))}
+                    </td>
+                    <td>
+                      {currency(sum((row) => row.remainingUniformBalance ?? 0))}
+                    </td>
+                    <td>{currency(sum((row) => row.payableAmount ?? 0))}</td>
+                  </>
+                )}
+              </tr>
+            </tfoot>
             </table>
           </div>
           {isFetching && (
@@ -7154,10 +7460,10 @@
       }
     }
     return (
-      <div className="content-area">
+      <div className="content-area reports-export-page">
         <PageHead
           title="Reports & exports"
-          description="Download permission-checked Excel and CSV reports from live records."
+          description="Export permission-checked reports to Excel, CSV, or PDF."
         />
         <Notice
           error={error || (kind === "attendance" ? employeeReport.error : "")}
@@ -7296,6 +7602,18 @@
               )}
               CSV
             </button>
+            {kind === "attendance" && (
+              <button
+                className="button button-secondary"
+                type="button"
+                aria-label="Print attendance report or save as PDF"
+                disabled={from > to || employeeReport.isFetching}
+                onClick={() => window.print()}
+              >
+                <Printer size={16} />
+                Print / PDF
+              </button>
+            )}
           </div>
         </section>
         {kind === "attendance" && (
@@ -7317,6 +7635,7 @@
               />
               <EmployeeAttendanceTable
                 rows={employeeReport.rows}
+                uniformItems={employeeReport.uniformItems}
                 canReadSalary={employeeReport.canReadSalary}
                 title="Employee-wise attendance"
                 description={`${formatDate(from)} to ${formatDate(to)} · Counts, status dates, and salary details when permitted.`}

@@ -24,6 +24,7 @@ import type {
   OutletDocument,
   SalaryRecordDocument,
   SalarySettings,
+  UniformDeductionDocument,
 } from "@/lib/models";
 import { z } from "zod";
 
@@ -162,12 +163,19 @@ export async function GET(request: Request) {
       ]);
     }
     const monthStart = `${month}-01`;
-    const monthEnd = `${month}-${String(getMonthDates(month).daysInMonth).padStart(2, "0")}`;
+    const { daysInMonth, dates } = getMonthDates(month);
+    const monthEnd = `${month}-${String(daysInMonth).padStart(2, "0")}`;
     const today = new Intl.DateTimeFormat("en-CA", {
       timeZone: process.env.BUSINESS_TIMEZONE || "Asia/Kolkata",
     }).format(new Date());
     const lastAvailableDate = today < monthEnd ? today : monthEnd;
-    const [approvedAdvances, loans] = await Promise.all([
+    const [
+      approvedAdvances,
+      loans,
+      skippedInstallments,
+      scheduledUniformDeductions,
+      payrollSettings,
+    ] = await Promise.all([
       employeeIds.length
         ? db
             .collection<AdvanceDocument>("advances")
@@ -194,22 +202,74 @@ export async function GET(request: Request) {
             })
             .toArray()
         : Promise.resolve([]),
+      actor.role === "MAIN_ADMIN" && employeeIds.length
+        ? db
+            .collection<LoanInstallmentDocument>("loanInstallments")
+            .find({
+              employeeId: { $in: employeeIds },
+              ...(outletIds ? { outletId: { $in: outletIds } } : {}),
+              payrollMonth: month,
+              status: "SKIPPED",
+            })
+            .project<{ employeeId: ObjectId; loanId: ObjectId }>({
+              employeeId: 1,
+              loanId: 1,
+            })
+            .toArray()
+        : Promise.resolve([]),
+      employeeIds.length
+        ? db
+            .collection<UniformDeductionDocument>("employee_uniform_deductions")
+            .find({
+              employeeId: { $in: employeeIds },
+              ...(outletIds ? { outletId: { $in: outletIds } } : {}),
+              deductionMonth: month,
+              status: "SCHEDULED",
+              payrollRecordId: { $exists: false },
+            })
+            .toArray()
+        : Promise.resolve([]),
+      db
+        .collection<SalarySettings & { _id: string }>("settings")
+        .findOne({ _id: "payroll" }),
     ]);
     const advanceByEmployee = new Map<string, number>();
+    const advancesByEmployee = new Map<string, AdvanceDocument[]>();
     for (const advance of approvedAdvances) {
       const employeeId = advance.employeeId.toHexString();
       advanceByEmployee.set(
         employeeId,
         (advanceByEmployee.get(employeeId) ?? 0) + advance.amount,
       );
+      const employeeAdvances = advancesByEmployee.get(employeeId) ?? [];
+      employeeAdvances.push(advance);
+      advancesByEmployee.set(employeeId, employeeAdvances);
+    }
+    const uniformByEmployee = new Map<string, UniformDeductionDocument[]>();
+    for (const deduction of scheduledUniformDeductions) {
+      const employeeId = deduction.employeeId.toHexString();
+      const employeeDeductions = uniformByEmployee.get(employeeId) ?? [];
+      employeeDeductions.push(deduction);
+      uniformByEmployee.set(employeeId, employeeDeductions);
     }
     const loanByEmployee = new Map<string, number>();
+    const loansByEmployee = new Map<string, LoanDocument[]>();
     for (const loan of loans) {
       const employeeId = loan.employeeId.toHexString();
       loanByEmployee.set(
         employeeId,
         (loanByEmployee.get(employeeId) ?? 0) + loan.outstandingAmount,
       );
+      const employeeLoans = loansByEmployee.get(employeeId) ?? [];
+      employeeLoans.push(loan);
+      loansByEmployee.set(employeeId, employeeLoans);
+    }
+    const skippedLoanIdsByEmployee = new Map<string, Set<string>>();
+    for (const installment of skippedInstallments) {
+      const employeeId = installment.employeeId.toHexString();
+      const loanIds = skippedLoanIdsByEmployee.get(employeeId) ?? new Set<string>();
+      loanIds.add(installment.loanId.toHexString());
+      skippedLoanIdsByEmployee.set(employeeId, loanIds);
     }
     const submittedByDate = new Map(
       attendanceDays.map((day) => [
@@ -222,88 +282,143 @@ export async function GET(request: Request) {
       next.setUTCDate(next.getUTCDate() + 1);
       return next.toISOString().slice(0, 10);
     };
-    const payrollEmployees = salaryEmployees.map((employee) => ({
-      _id: employee._id.toHexString(),
-      outletId: employee.outletId.toHexString(),
-      outletCode:
-        outletById.get(employee.outletId.toHexString())?.code ?? "",
-      fullName: employee.fullName,
-      employeeCode: employee.employeeCode,
-      designation: employee.designation,
-      monthlyBaseSalary: employee.monthlyBaseSalary,
-      attendance: attendanceByEmployee.get(employee._id.toHexString()) ?? {
-        P: 0,
-        A: 0,
-        HD: 0,
-        WO: 0,
-      },
-      payrollRecordId: recordsByEmployee
-        .get(employee._id.toHexString())
-        ?.at(-1)
-        ?._id.toHexString(),
-      latestPayrollRecordId: recordsByEmployee
-        .get(employee._id.toHexString())
-        ?.at(-1)
-        ?._id.toHexString(),
-      nextPeriodStart: (() => {
-        const employeeRecords =
-          recordsByEmployee.get(employee._id.toHexString()) ?? [];
-        if (employeeRecords.some((record) => !record.periodStart))
-          return undefined;
-        const latestEnd = employeeRecords.reduce(
-          (latest, record) =>
-            record.periodEnd && record.periodEnd > latest
-              ? record.periodEnd
-              : latest,
-          "",
+    const getEmployeePeriod = (employee: EmployeeDocument) => {
+      const employeeId = employee._id.toHexString();
+      const employeeRecords = recordsByEmployee.get(employeeId) ?? [];
+      if (employeeRecords.some((record) => !record.periodStart))
+        return { start: undefined, end: undefined };
+      const latestEnd = employeeRecords.reduce(
+        (latest, record) =>
+          record.periodEnd && record.periodEnd > latest
+            ? record.periodEnd
+            : latest,
+        "",
+      );
+      const start = latestEnd
+        ? dateAfter(latestEnd)
+        : employee.dateOfJoining > monthStart
+          ? employee.dateOfJoining
+          : monthStart;
+      if (start > lastAvailableDate)
+        return { start: undefined, end: undefined };
+      let cursor = start;
+      let end: string | undefined;
+      while (cursor <= lastAvailableDate) {
+        const day = submittedByDate.get(
+          `${employee.outletId.toHexString()}:${cursor}`,
         );
-        const start = latestEnd
-          ? dateAfter(latestEnd)
-          : employee.dateOfJoining > monthStart
-            ? employee.dateOfJoining
-            : monthStart;
-        return start <= lastAvailableDate ? start : undefined;
-      })(),
-      suggestedPeriodEnd: (() => {
-        const employeeRecords =
-          recordsByEmployee.get(employee._id.toHexString()) ?? [];
-        if (employeeRecords.some((record) => !record.periodStart))
-          return undefined;
-        const latestEnd = employeeRecords.reduce(
-          (latest, record) =>
-            record.periodEnd && record.periodEnd > latest
-              ? record.periodEnd
-              : latest,
-          "",
-        );
-        let cursor = latestEnd
-          ? dateAfter(latestEnd)
-          : employee.dateOfJoining > monthStart
-            ? employee.dateOfJoining
-            : monthStart;
-        let completeEnd: string | undefined;
-        while (cursor <= lastAvailableDate) {
-          const day = submittedByDate.get(
-            `${employee.outletId.toHexString()}:${cursor}`,
-          );
-          if (
-            !day?.entries.some((entry) =>
-              entry.employeeId.equals(employee._id),
-            )
-          )
-            break;
-          completeEnd = cursor;
-          cursor = dateAfter(cursor);
-        }
-        return completeEnd;
-      })(),
-      approvedAdvanceTotal:
-        advanceByEmployee.get(employee._id.toHexString()) ?? 0,
-      outstandingLoanTotal:
-        loanByEmployee.get(employee._id.toHexString()) ?? 0,
-      hasLegacyPayroll: (recordsByEmployee.get(employee._id.toHexString()) ?? [])
-        .some((record) => !record.periodStart),
-    }));
+        if (
+          !day?.entries.some((entry) => entry.employeeId.equals(employee._id))
+        )
+          break;
+        end = cursor;
+        cursor = dateAfter(cursor);
+      }
+      return { start, end };
+    };
+    const estimateNetPayable = (
+      employee: EmployeeDocument,
+      periodStart: string,
+      periodEnd: string,
+    ) => {
+      const applicableDates = dates.filter(
+        (date) =>
+          date >= periodStart &&
+          date <= periodEnd &&
+          date >= employee.dateOfJoining &&
+          (!employee.deactivatedAt || date <= employee.deactivatedAt),
+      );
+      if (!applicableDates.length) return undefined;
+      const counts = { P: 0, A: 0, HD: 0, WO: 0 };
+      for (const date of applicableDates) {
+        const entry = submittedByDate
+          .get(`${employee.outletId.toHexString()}:${date}`)
+          ?.entries.find((item) => item.employeeId.equals(employee._id));
+        if (entry) counts[entry.status] += 1;
+      }
+      const employeeId = employee._id.toHexString();
+      const advances = (advancesByEmployee.get(employeeId) ?? [])
+        .filter((advance) => advance.date <= periodEnd)
+        .reduce((sum, advance) => sum.plus(advance.amount), new Decimal(0))
+        .toNumber();
+      const skippedLoanIds =
+        skippedLoanIdsByEmployee.get(employeeId) ?? new Set<string>();
+      const loanDeduction = calculateLoanInstallment(
+        (loansByEmployee.get(employeeId) ?? []).filter(
+          (loan) => !skippedLoanIds.has(loan._id.toHexString()),
+        ),
+        month,
+      );
+      const uniformDeductions = (uniformByEmployee.get(employeeId) ?? [])
+        .reduce((sum, deduction) => sum + deduction.amount, 0);
+      const calculation = calculatePayroll({
+        monthlyBaseSalary: employee.monthlyBaseSalary,
+        salaryMethod: "FIXED_30_DAYS",
+        daysInMonth,
+        workingDaysDivisor: 30,
+        presentDays: counts.P,
+        absentDays: counts.A,
+        halfDays: counts.HD,
+        weekOffs: counts.WO,
+        paidAbsences: payrollSettings?.paidAbsences ?? 0,
+        settleMonthlySalary: true,
+        salaryEntitlementDays:
+          periodStart === monthStart &&
+          periodEnd === monthEnd &&
+          employee.dateOfJoining <= monthStart &&
+          (!employee.deactivatedAt || employee.deactivatedAt >= monthEnd)
+            ? 30
+            : applicableDates.length,
+        advances,
+        loanDeduction,
+        overtime: 0,
+        allowances: 0,
+        otherDeductions: 0,
+        uniformDeductions,
+        pfEnabled: employee.pfEnabled,
+        employeePfPercent: employee.employeePfPercent,
+        employerPfPercent: employee.employerPfPercent,
+        esiEnabled: employee.esiEnabled ?? false,
+        esiPercent: employee.esiPercent ?? 0.75,
+      });
+      return calculation.netPayable;
+    };
+    const payrollEmployees = salaryEmployees.map((employee) => {
+      const employeeId = employee._id.toHexString();
+      const employeeRecords = recordsByEmployee.get(employeeId) ?? [];
+      const period = getEmployeePeriod(employee);
+      return {
+        _id: employeeId,
+        outletId: employee.outletId.toHexString(),
+        outletCode: outletById.get(employee.outletId.toHexString())?.code ?? "",
+        fullName: employee.fullName,
+        employeeCode: employee.employeeCode,
+        designation: employee.designation,
+        mobile: employee.mobile ?? null,
+        monthlyBaseSalary: employee.monthlyBaseSalary,
+        attendance: attendanceByEmployee.get(employeeId) ?? {
+          P: 0,
+          A: 0,
+          HD: 0,
+          WO: 0,
+        },
+        payrollRecordId: employeeRecords.at(-1)?._id.toHexString(),
+        latestPayrollRecordId: employeeRecords.at(-1)?._id.toHexString(),
+        nextPeriodStart: period.start,
+        suggestedPeriodEnd: period.end,
+        estimatedNetPayable:
+          !employeeRecords.length && period.start && period.end
+            ? estimateNetPayable(employee, period.start, period.end)
+            : undefined,
+        estimatedUniformDeduction: (uniformByEmployee.get(employeeId) ?? [])
+          .reduce((sum, deduction) => sum + deduction.amount, 0),
+        approvedAdvanceTotal: advanceByEmployee.get(employeeId) ?? 0,
+        outstandingLoanTotal: loanByEmployee.get(employeeId) ?? 0,
+        hasLegacyPayroll: employeeRecords.some(
+          (record) => !record.periodStart,
+        ),
+      };
+    });
     return NextResponse.json({ records, payrollEmployees });
   } catch (error) {
     return apiError(error);
@@ -498,6 +613,23 @@ export async function POST(request: Request) {
                   { session },
                 )
                 .toArray();
+          const uniformDeductions = await db
+            .collection<UniformDeductionDocument>("employee_uniform_deductions")
+            .find(
+              {
+                employeeId: employee._id,
+                outletId,
+                deductionMonth: input.month,
+                status: "SCHEDULED",
+                payrollRecordId: { $exists: false },
+              },
+              { session },
+            )
+            .toArray();
+          const uniformTotal = uniformDeductions.reduce(
+            (sum, deduction) => sum + deduction.amount,
+            0,
+          );
           if (input.advanceIds && advances.length !== input.advanceIds.length)
             throw new Error(`ADVANCE_SELECTION_CHANGED:${employee.employeeCode}`);
           const advanceTotal = advances
@@ -570,6 +702,7 @@ export async function POST(request: Request) {
             overtime: 0,
             allowances: 0,
             otherDeductions: 0,
+            uniformDeductions: uniformTotal,
             pfEnabled: employee.pfEnabled,
             employeePfPercent: employee.employeePfPercent,
             employerPfPercent: employee.employerPfPercent,
@@ -723,6 +856,7 @@ export async function POST(request: Request) {
               .minus(amounts.employeePf)
               .minus(amounts.loanDeduction)
               .minus(computed.otherDeductions)
+              .minus(computed.uniformDeductions)
               .toDecimalPlaces(2)
               .toNumber(),
           };
@@ -754,6 +888,13 @@ export async function POST(request: Request) {
                 id: advance._id,
                 amount: advance.amount,
                 reference: advance.reference,
+              })),
+              uniformDeductions: uniformDeductions.map((deduction) => ({
+                id: deduction._id,
+                item: deduction.item,
+                amount: deduction.amount,
+                deductionMonth: deduction.deductionMonth,
+                remark: deduction.remark ?? "",
               })),
               loans: loans.map((loan) => {
                 const installment = postedLoanInstallments.find((entry) =>
@@ -790,6 +931,29 @@ export async function POST(request: Request) {
           await db
             .collection<SalaryRecordDocument>("salaryRecords")
             .insertOne(record, { session });
+          if (uniformDeductions.length) {
+            const applied = await db
+              .collection<UniformDeductionDocument>("employee_uniform_deductions")
+              .updateMany(
+                {
+                  _id: { $in: uniformDeductions.map((deduction) => deduction._id) },
+                  status: "SCHEDULED",
+                  payrollRecordId: { $exists: false },
+                },
+                {
+                  $set: {
+                    status: "APPLIED",
+                    payrollRecordId: record._id,
+                    appliedAt: now,
+                    updatedBy: actor.id,
+                    updatedAt: now,
+                  },
+                },
+                { session },
+              );
+            if (applied.modifiedCount !== uniformDeductions.length)
+              throw new Error("UNIFORM_DEDUCTION_CLAIM_CONFLICT");
+          }
           if (postedLoanInstallments.length)
             await db
               .collection<LoanInstallmentDocument>("loanInstallments")

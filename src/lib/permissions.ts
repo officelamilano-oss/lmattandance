@@ -1,6 +1,8 @@
 import { ObjectId } from "mongodb";
 import { getServerSession } from "next-auth";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
+import { cache } from "react";
 import { authOptions } from "@/lib/auth";
 import { getDb } from "@/lib/mongodb";
 import type { Permission, UserDocument, UserRole } from "@/lib/models";
@@ -8,7 +10,8 @@ import { legacyOutletDefaultPermissions } from "@/lib/access-control";
 
 export interface Actor { id: ObjectId; email: string; name: string; role: UserRole; outletIds: ObjectId[]; permissions: Permission[] }
 
-export async function getActor(): Promise<Actor | null> {
+export const getActor = cache(async (): Promise<Actor | null> => {
+  await connection();
   const session = await getServerSession(authOptions);
   const email = session?.user?.email?.trim().toLowerCase();
   if (!email) return null;
@@ -16,14 +19,14 @@ export async function getActor(): Promise<Actor | null> {
   const user = await db.collection<UserDocument>("users").findOne({ emailNormalized: email, active: true });
   if (!user) return null;
   const permissions = user.role === "MAIN_ADMIN"
-    ? ["dashboard.read", "outlets.manage", "employees.read", "employees.create", "employees.update", "employees.deactivate", "attendance.read", "attendance.write", "attendance.submit", "attendance.unlock", "advances.read", "advances.write", "advances.approve", "salary.read", "salary.generate", "salary.adjust", "salary.approve", "salary.pay", "settings.manage", "access.manage", "reports.export", "audit.read"] as Permission[]
+    ? ["dashboard.read", "outlets.manage", "employees.read", "employees.create", "employees.update", "employees.deactivate", "attendance.read", "attendance.write", "attendance.submit", "attendance.unlock", "advances.read", "advances.write", "advances.approve", "salary.read", "salary.generate", "salary.adjust", "salary.approve", "salary.pay", "settings.manage", "access.manage", "reports.export", "audit.read", "uniforms.manage"] as Permission[]
     : user.designationId || user.permissionsCustomized
       ? user.permissions ?? []
       : user.role === "OUTLET_USER"
         ? legacyOutletDefaultPermissions
         : user.permissions ?? [];
   return { id: user._id, email, name: user.name, role: user.role, outletIds: user.outletIds, permissions };
-}
+});
 
 export async function requireActor(permission?: Permission): Promise<Actor> {
   const actor = await getActor();

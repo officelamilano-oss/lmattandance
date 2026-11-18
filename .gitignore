@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/.storage
 
 # next.js
 /.next/

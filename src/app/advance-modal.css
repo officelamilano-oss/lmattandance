@@ -15,6 +15,12 @@
 .salary-preview-net{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px;border-radius:8px;background:#f1f2ee;font-size:13px}
 .salary-preview-net strong{font-size:16px;color:#242520}
 .advance-edit-form .field small{color:#777a73;font-size:11px}
+.salary-approve-option{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface);cursor:pointer}
+.salary-approve-option input{flex:0 0 18px;width:18px;height:18px;margin:1px 0 0;accent-color:var(--red);cursor:pointer}
+.salary-approve-option input:focus-visible{outline:3px solid var(--red);outline-offset:3px}
+.salary-approve-option span{color:var(--ink);font-size:12px;font-weight:500;line-height:1.45}
+.advance-modal .salary-generate-draft{background:var(--surface);border-color:var(--line);color:var(--muted);box-shadow:none}
+.advance-modal .salary-generate-draft:hover:not(:disabled){background:var(--line);color:var(--ink)}
 .salary-manage-content{display:grid;gap:16px}
 .salary-manage-actions{display:grid;gap:10px;padding-top:14px;border-top:1px solid var(--line)}
 .badge-red{background:#fae9e7;color:#a4362a}

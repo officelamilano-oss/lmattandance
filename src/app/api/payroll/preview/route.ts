@@ -16,6 +16,7 @@ import type {
   LoanDocument,
   LoanInstallmentDocument,
   SalarySettings,
+  UniformDeductionDocument,
 } from "@/lib/models";
 import {
   dateOnlySchema,
@@ -168,6 +169,20 @@ export async function GET(request: Request) {
         payrollRecordId: { $exists: false },
       })
       .toArray();
+    const uniformDeductions = await db
+      .collection<UniformDeductionDocument>("employee_uniform_deductions")
+      .find({
+        employeeId: employee._id,
+        outletId,
+        deductionMonth: input.month,
+        status: "SCHEDULED",
+        payrollRecordId: { $exists: false },
+      })
+      .toArray();
+    const uniformTotal = uniformDeductions.reduce(
+      (sum, deduction) => sum + deduction.amount,
+      0,
+    );
     const advanceTotal = advances
       .reduce((sum, advance) => sum.plus(advance.amount), new Decimal(0))
       .toNumber();
@@ -234,6 +249,7 @@ export async function GET(request: Request) {
       overtime: 0,
       allowances: 0,
       otherDeductions: 0,
+      uniformDeductions: uniformTotal,
       pfEnabled: employee.pfEnabled,
       employeePfPercent: employee.employeePfPercent,
       employerPfPercent: employee.employerPfPercent,
@@ -256,12 +272,20 @@ export async function GET(request: Request) {
         employeePf: calculation.employeePf,
         employerPf: calculation.employerPf,
         loanDeduction,
+        uniformDeductions: uniformTotal,
       },
       advances: advances.map((advance) => ({
         _id: advance._id.toHexString(),
         date: advance.date,
         amount: advance.amount,
         reference: advance.reference,
+      })),
+      uniformDeductions: uniformDeductions.map((deduction) => ({
+        _id: deduction._id.toHexString(),
+        item: deduction.item,
+        amount: deduction.amount,
+        deductionMonth: deduction.deductionMonth,
+        remark: deduction.remark ?? "",
       })),
       outstandingLoanTotal: loanBalance,
       calculation,

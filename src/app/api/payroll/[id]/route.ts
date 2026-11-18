@@ -560,6 +560,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       .minus(Number(calculation.advances ?? 0))
       .minus(Number(calculation.loanDeduction ?? 0))
       .minus(Number(calculation.otherDeductions ?? 0))
+      .minus(Number(calculation.uniformDeductions ?? 0))
       .minus(Number(calculation.employeePf ?? 0))
       .minus(Number(calculation.esi ?? 0))
       .toDecimalPlaces(2)

@@ -6,6 +6,11 @@ import { getDb } from "@/lib/mongodb";
 import { apiError } from "@/lib/http";
 import { calculateLoanInstallment, calculatePayroll } from "@/lib/payroll/calculate";
 import { expectedCompletionMonth } from "@/lib/payroll/loans";
+import {
+  getUniformReportItems,
+  summarizeUniformDeductions,
+  type UniformReportItem,
+} from "@/lib/uniform-deductions";
 import { formatExportDates } from "@/lib/reports/export-dates";
 import { dateAfter, getIndiaMonth, getMonthDates } from "@/lib/payroll/dates";
 import { dateOnlySchema, objectIdSchema } from "@/lib/validation/common";
@@ -21,6 +26,8 @@ import type {
   OutletDocument,
   SalaryRecordDocument,
   SalarySettings,
+  UniformDeductionDocument,
+  UniformItemDocument,
 } from "@/lib/models";
 import { z } from "zod";
 
@@ -102,6 +109,18 @@ export async function GET(request: Request) {
       );
     if (query.outletId) assertOutletAccess(actor, query.outletId);
     const db = await getDb();
+    const canReadSalary = actor.permissions.includes("salary.read");
+    const uniformItems =
+      query.type === "attendance" && canReadSalary
+        ? getUniformReportItems(
+            (await db
+              .collection<UniformItemDocument>("uniform_items")
+              .find({})
+              .sort({ _id: 1 })
+              .toArray()
+            ).map((item) => ({ key: item._id, label: item.label })),
+          )
+        : [];
     const outlets = await db
       .collection<OutletDocument>("outlets")
       .find({
@@ -129,7 +148,8 @@ export async function GET(request: Request) {
           outlet,
           db,
           query.employeeId,
-          actor.permissions.includes("salary.read"),
+          canReadSalary,
+          uniformItems,
         ),
       });
     const globalAuditRows: ExportRow[] =
@@ -160,6 +180,8 @@ export async function GET(request: Request) {
       const rows: ExportRow[] = byOutlet.flatMap(({ outlet, rows }) =>
         rows.map((row) => ({ "Outlet Name": outlet.name, ...row })),
       );
+      if (query.type === "attendance" && rows.length)
+        rows.push({ "Outlet Name": "TOTAL", ...sumExportRows(rows) });
       if (globalAuditRows.length)
         rows.push(
           ...globalAuditRows.map((row) => ({
@@ -169,7 +191,9 @@ export async function GET(request: Request) {
         );
       const headers = rows.length
         ? [...new Set(rows.flatMap((row) => Object.keys(row)))]
-        : emptyHeaders(query.type, actor.permissions.includes("salary.read"));
+        : query.type === "attendance"
+          ? ["Outlet Name", ...emptyHeaders(query.type, canReadSalary, uniformItems)]
+          : emptyHeaders(query.type, canReadSalary, uniformItems);
       const csv = [
         headers.map(csvCell).join(","),
         ...rows.map((row) => headers.map((header) => csvCell(row[header])).join(",")),
@@ -184,7 +208,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const salaryAllowed = actor.permissions.includes("salary.read");
+    const salaryAllowed = canReadSalary;
     // Sirf data wale outlets ke sheets banao (warna pehli sheet khali dikhti hai).
     // Agar kisi outlet me data nahi hai to sab khali hone par sirf ek sheet banegi.
     const outletsWithData = byOutlet.filter((item) => item.rows.length > 0);
@@ -197,10 +221,24 @@ export async function GET(request: Request) {
       );
       const headers = item.rows.length
         ? [...new Set(item.rows.flatMap((row) => Object.keys(row)))]
-        : emptyHeaders(query.type, salaryAllowed);
+        : emptyHeaders(query.type, salaryAllowed, uniformItems);
       sheet.addRow(headers);
       for (const row of item.rows)
         sheet.addRow(headers.map((header) => safeCell(row[header])));
+      if (query.type === "attendance" && item.rows.length) {
+        const totals = sumExportRows(item.rows);
+        const totalRow = sheet.addRow(
+          headers.map((header) => safeCell(totals[header])),
+        );
+        totalRow.font = { bold: true };
+        totalRow.eachCell((cell) => {
+          cell.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: { argb: "FFE8EDE8" },
+          };
+        });
+      }
       styleSheet(sheet, item.rows.length === 0);
     }
     if (globalAuditRows.length) {
@@ -214,7 +252,7 @@ export async function GET(request: Request) {
     // Zero worksheets wali workbook Excel me corrupt/blank khulti hai.
     if (workbook.worksheets.length === 0) {
       const sheet = workbook.addWorksheet("No data");
-      const headers = emptyHeaders(query.type, salaryAllowed);
+      const headers = emptyHeaders(query.type, salaryAllowed, uniformItems);
       sheet.addRow(headers);
       styleSheet(sheet, true);
     }
@@ -243,6 +281,7 @@ async function getRows(
   db: Awaited<ReturnType<typeof getDb>>,
   employeeId?: string,
   canReadSalary = false,
+  configuredUniformItems: UniformReportItem[] = [],
 ): Promise<ExportRow[]> {
   const employees = await db
     .collection<EmployeeDocument>("employees")
@@ -423,7 +462,13 @@ async function getRows(
         .findOne({ _id: "payroll" })),
     };
     const employeeIds = employees.map((employee) => employee._id);
-    const [advances, salaryRecords, loans, loanInstallments] = canReadSalary
+    const [
+      advances,
+      salaryRecords,
+      loans,
+      loanInstallments,
+      uniformDeductions,
+    ] = canReadSalary
       ? await Promise.all([
           db
             .collection<AdvanceDocument>("advances")
@@ -463,8 +508,19 @@ async function getRows(
               },
             })
             .toArray(),
+          db
+            .collection<UniformDeductionDocument>(
+              "employee_uniform_deductions",
+            )
+            .find({
+              employeeId: { $in: employeeIds },
+              outletId: outlet._id,
+              status: { $in: ["SCHEDULED", "APPLIED"] },
+              deductionMonth: { $gte: from.slice(0, 7) },
+            })
+            .toArray(),
         ])
-      : [[], [], [], []];
+      : [[], [], [], [], []];
     const advancesByEmployee = new Map<string, AdvanceDocument[]>();
     for (const advance of advances) {
       const key = advance.employeeId.toHexString();
@@ -498,6 +554,21 @@ async function getRows(
         installment,
       ]);
     }
+    const uniformDeductionsByEmployee = new Map<
+      string,
+      UniformDeductionDocument[]
+    >();
+    for (const deduction of uniformDeductions) {
+      const key = deduction.employeeId.toHexString();
+      uniformDeductionsByEmployee.set(key, [
+        ...(uniformDeductionsByEmployee.get(key) ?? []),
+        deduction,
+      ]);
+    }
+    const uniformItems = getUniformReportItems(
+      configuredUniformItems,
+      uniformDeductions.map((entry) => entry.item),
+    );
     return employees.map((employee) => {
       const start =
         employee.dateOfJoining > from ? employee.dateOfJoining : from;
@@ -577,6 +648,11 @@ async function getRows(
         "Unsubmitted Dates": unsubmittedDates.join(", "),
       };
       if (canReadSalary) {
+        const uniformSummary = summarizeUniformDeductions(
+          uniformDeductionsByEmployee.get(employee._id.toHexString()) ?? [],
+          from.slice(0, 7),
+          to.slice(0, 7),
+        );
         let dailyRate = 0;
         let payableDayUnits = 0;
         let grossEarnings = 0;
@@ -611,7 +687,14 @@ async function getRows(
             otherDeductions += Number(
               saved.calculation.otherDeductions ?? 0,
             );
-            netPayable += Number(saved.calculation.netPayable ?? 0);
+            const uniformIncludedInPayroll = (
+              saved.inputSnapshot.uniformDeductions ?? []
+            )
+              .filter((entry) => entry.deductionMonth === month)
+              .reduce((sum, entry) => sum + entry.amount, 0);
+            netPayable +=
+              Number(saved.calculation.netPayable ?? 0) +
+              uniformIncludedInPayroll;
             hasSavedPayroll = true;
             continue;
           }
@@ -705,7 +788,13 @@ async function getRows(
         result["Employer PF INR"] = employerPf;
         result["Loan Deduction INR"] = loanDeduction;
         result["Other Deductions INR"] = otherDeductions;
-        result["Net Payable INR"] = netPayable;
+        for (const item of uniformItems)
+          result[uniformColumnName(item)] =
+            uniformSummary.byItem[item.key] ?? 0;
+        result["Total Uniform Deduction INR"] = uniformSummary.total;
+        result["Remaining Uniform Balance INR"] = uniformSummary.remaining;
+        result["Net Payable INR"] =
+          Math.round((netPayable - uniformSummary.total) * 100) / 100;
         result["Payable Type"] = hasLiveCalculation
           ? "Live accrued · submitted days"
           : hasSavedPayroll
@@ -1025,7 +1114,24 @@ function sheetName(value: string, workbook: ExcelJS.Workbook) {
   return name;
 }
 
-function emptyHeaders(type: string, canReadSalary = false): string[] {
+function uniformColumnName(item: UniformReportItem) {
+  return `${item.label} Uniform Deduction INR`;
+}
+
+function sumExportRows(rows: ExportRow[]): ExportRow {
+  const totals: ExportRow = { Employee: "TOTAL" };
+  for (const row of rows)
+    for (const [header, value] of Object.entries(row))
+      if (typeof value === "number")
+        totals[header] = Number(totals[header] ?? 0) + value;
+  return totals;
+}
+
+function emptyHeaders(
+  type: string,
+  canReadSalary = false,
+  uniformItems: UniformReportItem[] = [],
+): string[] {
   if (type === "loans")
     return [
       "Employee Code",
@@ -1074,6 +1180,9 @@ function emptyHeaders(type: string, canReadSalary = false): string[] {
         "Employer PF INR",
         "Loan Deduction INR",
         "Other Deductions INR",
+        ...uniformItems.map(uniformColumnName),
+        "Total Uniform Deduction INR",
+        "Remaining Uniform Balance INR",
         "Net Payable INR",
         "Payable Type",
       );

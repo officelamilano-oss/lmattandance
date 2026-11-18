@@ -4,10 +4,16 @@ import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError } from "@/lib/http";
 import type { EmployeeDocument, EmployeeFileDocument } from "@/lib/models";
-import { employeeDocumentStorage } from "@/lib/employee-document-storage";
+import {
+  getEmployeeFileId,
+  getEmployeeFilePath,
+  getEmployeeFileProvider,
+  getStorageAdapter,
+} from "@/lib/storage";
+import { getStorageSignedUrlExpirySeconds } from "@/lib/storage/config";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ key: string }> },
 ) {
   try {
@@ -35,16 +41,44 @@ export async function GET(
       .findOne({ _id: document.employeeId });
     if (!employee) throw new Error("NOT_FOUND");
     assertOutletAccess(actor, employee.outletId);
-    const bytes = await employeeDocumentStorage.readFile(document.storageKey);
-    return new NextResponse(new Uint8Array(bytes), {
-      headers: {
-        "Content-Type": document.mimeType,
-        "Content-Length": String(document.size),
-        "Content-Disposition": "inline",
-        "Cache-Control": "private, no-store",
-        "X-Content-Type-Options": "nosniff",
-        "Content-Security-Policy": "default-src 'none'; sandbox",
-      },
+    const filePath = getEmployeeFilePath(document);
+    const provider = getEmployeeFileProvider(document);
+    const storage = await getStorageAdapter(provider);
+    const mode = new URL(request.url).searchParams;
+    if (mode.get("download") === "1" || mode.get("preview") === "1") {
+      const fileType = document.fileType ?? document.mimeType;
+      if (!fileType)
+        throw new Error("Employee document has no file type metadata.");
+      const fileIdentifier =
+        provider === "imagekit" ? filePath : getEmployeeFileId(document);
+      const bytes = await storage.download(fileIdentifier);
+      const fileName =
+        document.fileName ?? filePath.split("/").pop() ?? "document";
+      const asciiFileName = fileName
+        .replace(/[\r\n"]/g, "_")
+        .replace(/[^\x20-\x7E]/g, "_");
+      const disposition =
+        mode.get("preview") === "1" ? "inline" : "attachment";
+      return new NextResponse(new Uint8Array(bytes), {
+        headers: {
+          "Content-Type": fileType,
+          "Content-Length": String(bytes.byteLength),
+          "Content-Disposition": `${disposition}; filename="${asciiFileName}"; filename*=UTF-8''${encodeURIComponent(fileName)}`,
+          "Cache-Control": "private, no-store",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    }
+    const expiresIn = getStorageSignedUrlExpirySeconds();
+    const signedUrl = await storage.getSignedUrl(filePath, expiresIn);
+    const absoluteSignedUrl = new URL(signedUrl, request.url).toString();
+    if (mode.get("signed") === "1")
+      return NextResponse.json(
+        { url: absoluteSignedUrl, expiresIn },
+        { headers: { "Cache-Control": "private, no-store" } },
+      );
+    return NextResponse.redirect(absoluteSignedUrl, {
+      headers: { "Cache-Control": "private, no-store" },
     });
   } catch (error) {
     return apiError(error);

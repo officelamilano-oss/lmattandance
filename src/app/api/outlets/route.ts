@@ -34,6 +34,7 @@ export async function GET(request: Request) {
       "salary.read",
       "reports.export",
       "outlets.manage",
+      "uniforms.manage",
     ]);
     if (
       !actor.permissions.some((permission) =>
