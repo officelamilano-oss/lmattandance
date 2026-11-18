@@ -79,7 +79,7 @@
   import { AutoDismissNotice } from "@/components/auto-dismiss-notice";
   import { LazySection } from "@/components/lazy-section";
   import { DashboardPartLoader } from "@/components/dashboard-part-loader";
-  import { getIndiaDate, getIndiaMonth } from "@/lib/payroll/dates";
+  import { dateAfter, getIndiaDate, getIndiaMonth } from "@/lib/payroll/dates";
   import { isAttendanceEntryLocked } from "@/lib/attendance";
   import { calculateLoanInstallment } from "@/lib/payroll/calculate";
   import { UNIFORM_ITEM_LABELS } from "@/lib/uniform-deductions";
@@ -113,6 +113,12 @@
     | "reports"
     | "activeLogs"
     | "settings";
+  type AttendanceSearchSuggestion = {
+    kind: "employee" | "outlet" | "designation";
+    id: string;
+    label: string;
+    detail: string;
+  };
   type Outlet = DashboardOutlet;
   type Employee = EmployeeView;
   type LoanActionName =
@@ -321,6 +327,13 @@
     const [dashboardFetching, setDashboardFetching] = useState(false);
     const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
     const attendanceReloadId = useRef(0);
+    const [
+      attendanceAllPresentSnapshot,
+      setAttendanceAllPresentSnapshot,
+    ] = useState<{
+      scope: string;
+      previousStatuses: Map<string, AttendanceStatus | null>;
+    } | null>(null);
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
     const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(
@@ -346,6 +359,10 @@
     const [awayTo, setAwayTo] = useState(() => getIndiaDate());
     const [search, setSearch] = useState("");
     const [debouncedSearch, setDebouncedSearch] = useState("");
+    const [attendanceSearch, setAttendanceSearch] = useState("");
+    const [attendanceSearchSelection, setAttendanceSearchSelection] =
+      useState<AttendanceSearchSuggestion | null>(null);
+    const [attendanceSearchOpen, setAttendanceSearchOpen] = useState(false);
     const [page, setPage] = useState(1);
     const [salaryPage, setSalaryPage] = useState(1);
     const [salaryPageSize, setSalaryPageSize] = useState<number | "all">(20);
@@ -1200,6 +1217,93 @@
       );
 
     const attendanceEmployees = data.employees ?? [];
+    const normalizedAttendanceSearch = attendanceSearch.trim().toLowerCase();
+    const matchesAttendanceSearch = (employee: Employee) =>
+      [
+        employee.fullName,
+        employee.employeeCode,
+        employee.outletCode,
+        employee.outletName,
+        employee.designation,
+      ].some((value) => value?.toLowerCase().includes(normalizedAttendanceSearch));
+    const matchingAttendanceEmployees = normalizedAttendanceSearch
+      ? attendanceEmployees.filter(matchesAttendanceSearch)
+      : [];
+    const attendanceOutletsForSearch = [
+      ...new Map(
+        attendanceEmployees.map((employee) => [
+          employee.outletId,
+          {
+            id: employee.outletId,
+            code: employee.outletCode ?? "",
+            name: employee.outletName ?? "",
+          },
+        ]),
+      ).values(),
+    ];
+    const attendanceDesignations = [
+      ...new Set(
+        attendanceEmployees
+          .map((employee) => employee.designation)
+          .filter(Boolean),
+      ),
+    ];
+    const attendanceSearchSuggestions: AttendanceSearchSuggestion[] =
+      normalizedAttendanceSearch
+        ? [
+            ...matchingAttendanceEmployees.slice(0, 5).map((employee) => ({
+              kind: "employee" as const,
+              id: employee._id,
+              label: employee.fullName,
+              detail: [
+                employee.employeeCode,
+                employee.outletCode,
+                employee.outletName,
+                employee.designation,
+              ]
+                .filter(Boolean)
+                .join(" · "),
+            })),
+            ...attendanceOutletsForSearch
+              .filter((outlet) =>
+                [outlet.code, outlet.name].some((value) =>
+                  value.toLowerCase().includes(normalizedAttendanceSearch),
+                ),
+              )
+              .slice(0, 2)
+              .map((outlet) => ({
+                kind: "outlet" as const,
+                id: outlet.id,
+                label: `${outlet.code} · ${outlet.name}`,
+                detail: "Filter this outlet",
+              })),
+            ...attendanceDesignations
+              .filter((designation) =>
+                designation.toLowerCase().includes(normalizedAttendanceSearch),
+              )
+              .slice(0, 2)
+              .map((designation) => ({
+                kind: "designation" as const,
+                id: designation,
+                label: designation,
+                detail: "Filter this designation",
+              })),
+          ].slice(0, 8)
+        : [];
+    const visibleAttendanceEmployees = attendanceSearchSelection
+      ? attendanceEmployees.filter((employee) => {
+          if (attendanceSearchSelection.kind === "employee")
+            return employee._id === attendanceSearchSelection.id;
+          if (attendanceSearchSelection.kind === "outlet")
+            return employee.outletId === attendanceSearchSelection.id;
+          return employee.designation === attendanceSearchSelection.id;
+        })
+      : normalizedAttendanceSearch
+        ? matchingAttendanceEmployees
+        : attendanceEmployees;
+    const attendanceAllPresentScope = `${date}:${attendanceOutletId || "all"}:${visibleAttendanceEmployees.map((employee) => employee._id).join(",")}`;
+    const canUndoAttendanceAllPresent =
+      attendanceAllPresentSnapshot?.scope === attendanceAllPresentScope;
     const attendanceCounts = attendanceEmployees.reduce(
       (counts, employee) => {
         if (employee.attendanceStatus)
@@ -1250,6 +1354,77 @@
             description="Review all outlets or choose one outlet to record attendance. Submit locks marked employees; blank employees remain editable."
             action={
               <div className="toolbar attendance-toolbar">
+                <div className="attendance-search-control">
+                  <label className="attendance-search-field">
+                    <Search size={16} aria-hidden="true" />
+                    <input
+                      type="text"
+                      role="combobox"
+                      aria-autocomplete="list"
+                      value={attendanceSearch}
+                      placeholder="Search name, code, outlet, designation…"
+                      aria-label="Search attendance employees"
+                      aria-expanded={
+                        attendanceSearchOpen && normalizedAttendanceSearch.length > 0
+                      }
+                      aria-controls="attendance-search-suggestions"
+                      onFocus={() => setAttendanceSearchOpen(true)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape")
+                          setAttendanceSearchOpen(false);
+                      }}
+                      onChange={(event) => {
+                        setAttendanceSearch(event.target.value);
+                        setAttendanceSearchSelection(null);
+                        setAttendanceSearchOpen(true);
+                      }}
+                    />
+                    {!!attendanceSearch && (
+                      <button
+                        type="button"
+                        aria-label="Clear attendance search"
+                        onClick={() => {
+                          setAttendanceSearch("");
+                          setAttendanceSearchSelection(null);
+                          setAttendanceSearchOpen(false);
+                        }}
+                      >
+                        <X size={15} aria-hidden="true" />
+                      </button>
+                    )}
+                  </label>
+                  {attendanceSearchOpen && normalizedAttendanceSearch && (
+                    <div
+                      id="attendance-search-suggestions"
+                      className="attendance-search-suggestions"
+                      role="listbox"
+                      aria-label="Attendance search suggestions"
+                    >
+                      {attendanceSearchSuggestions.length ? (
+                        attendanceSearchSuggestions.map((suggestion) => (
+                          <button
+                            key={`${suggestion.kind}:${suggestion.id}`}
+                            type="button"
+                            role="option"
+                            aria-selected={false}
+                            onClick={() => {
+                              setAttendanceSearchSelection(suggestion);
+                              setAttendanceSearch(suggestion.label);
+                              setAttendanceSearchOpen(false);
+                            }}
+                          >
+                            <strong>{suggestion.label}</strong>
+                            <span>{suggestion.detail}</span>
+                          </button>
+                        ))
+                      ) : (
+                        <span className="attendance-search-empty">
+                          No matching employees
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
                 {user.role === "MAIN_ADMIN" && (
                   <label className="attendance-confirmation-toggle">
                     <input
@@ -1267,39 +1442,62 @@
                     <span>Alert</span>
                   </label>
                 )}
-                <label className="attendance-date-picker">
-                  <span>{formatDate(date)}</span>
-                  <CalendarDays size={16} aria-hidden="true" />
-                  <input
-                    type="date"
-                    value={date}
-                    max={today}
-                    onChange={(event) => {
-                      if (event.target.value && event.target.value <= today)
-                        setDate(event.target.value);
-                    }}
-                    aria-label="Attendance date"
-                  />
-                </label>
+                <div className="attendance-date-controls">
+                  <button
+                    type="button"
+                    className="attendance-date-nav"
+                    aria-label="Previous day"
+                    title="Previous day"
+                    onClick={() => setDate(dateAfter(date, -1))}
+                  >
+                    <ChevronLeft size={17} aria-hidden="true" />
+                  </button>
+                  <label className="attendance-date-picker">
+                    <span>{formatDate(date)}</span>
+                    <CalendarDays size={16} aria-hidden="true" />
+                    <input
+                      type="date"
+                      value={date}
+                      max={today}
+                      onChange={(event) => {
+                        if (event.target.value && event.target.value <= today)
+                          setDate(event.target.value);
+                      }}
+                      aria-label="Attendance date"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="attendance-date-nav"
+                    aria-label="Next day"
+                    title="Next day"
+                    disabled={dateAfter(date, 1) > today}
+                    onClick={() => setDate(dateAfter(date, 1))}
+                  >
+                    <ChevronRight size={17} aria-hidden="true" />
+                  </button>
+                </div>
                 {attendanceOutlets.length === 1 ? (
                   <span className="attendance-single-outlet">
                     {attendanceOutlets[0].name}
                   </span>
                 ) : attendanceOutlets.length > 1 ? (
-                  <select
-                    value={selectedOutlet}
-                    onChange={(event) => setSelectedOutlet(event.target.value)}
-                    aria-label="Select outlet"
-                  >
-                    {attendanceOutlets.length !== 1 && (
-                      <option value="">All accessible outlets</option>
-                    )}
-                    {attendanceOutlets.map((outlet) => (
-                      <option key={outlet._id} value={outlet._id}>
-                        {outlet.code} · {outlet.name}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="attendance-outlet-select">
+                    <select
+                      value={selectedOutlet}
+                      onChange={(event) => setSelectedOutlet(event.target.value)}
+                      aria-label="Select outlet"
+                    >
+                      {attendanceOutlets.length !== 1 && (
+                        <option value="">All accessible outlets</option>
+                      )}
+                      {attendanceOutlets.map((outlet) => (
+                        <option key={outlet._id} value={outlet._id}>
+                          {outlet.code} · {outlet.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 ) : (
                   <span className="attendance-single-outlet">
                     No active outlets available
@@ -1367,12 +1565,97 @@
                       {attendanceAllOutlets && <th>Outlet</th>}
                       <th>Employee</th>
                       <th>Designation</th>
-                      <th>Status</th>
+                      <th>
+                        <div className="attendance-status-heading">
+                          <span>Status</span>
+                          <button
+                            type="button"
+                            className="attendance-all-present"
+                            aria-pressed={canUndoAttendanceAllPresent}
+                            disabled={
+                              !user.permissions.includes("attendance.write") ||
+                              !visibleAttendanceEmployees.some(
+                                (employee) =>
+                                  !isAttendanceEntryLocked(
+                                    !!employee.attendanceSubmitted,
+                                    user.role,
+                                  ),
+                              )
+                            }
+                            onClick={() => {
+                              const snapshot = attendanceAllPresentSnapshot;
+                              if (snapshot?.scope === attendanceAllPresentScope) {
+                                setData((old) => ({
+                                  ...old,
+                                  employees: (old.employees ?? []).map(
+                                    (employee) => {
+                                      const previousStatus =
+                                        snapshot.previousStatuses.get(
+                                          employee._id,
+                                        );
+                                      if (
+                                        previousStatus === undefined &&
+                                        !snapshot.previousStatuses.has(
+                                          employee._id,
+                                        )
+                                      )
+                                        return employee;
+                                      if (
+                                        isAttendanceEntryLocked(
+                                          !!employee.attendanceSubmitted,
+                                          user.role,
+                                        )
+                                      )
+                                        return employee;
+                                      return {
+                                        ...employee,
+                                        attendanceStatus: previousStatus ?? null,
+                                      };
+                                    },
+                                  ),
+                                }));
+                                setAttendanceAllPresentSnapshot(null);
+                                return;
+                              }
+                              const editableEmployees =
+                                visibleAttendanceEmployees.filter(
+                                  (employee) =>
+                                    !isAttendanceEntryLocked(
+                                      !!employee.attendanceSubmitted,
+                                      user.role,
+                                    ),
+                                );
+                              setAttendanceAllPresentSnapshot({
+                                scope: attendanceAllPresentScope,
+                                previousStatuses: new Map(
+                                  editableEmployees.map((employee) => [
+                                    employee._id,
+                                    employee.attendanceStatus ?? null,
+                                  ]),
+                                ),
+                              });
+                              const editableEmployeeIds = new Set(
+                                editableEmployees.map((employee) => employee._id),
+                              );
+                              setData((old) => ({
+                                ...old,
+                                employees: (old.employees ?? []).map((employee) =>
+                                  editableEmployeeIds.has(employee._id)
+                                    ? { ...employee, attendanceStatus: "P" }
+                                    : employee,
+                                ),
+                              }));
+                            }}
+                          >
+                            {canUndoAttendanceAllPresent ? "Undo P" : "All P"}
+                          </button>
+                        </div>
+                      </th>
                       <th>Submission Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {(data.employees ?? []).map((employee: Employee) => (
+                    {visibleAttendanceEmployees.map((employee: Employee) => (
                       <tr key={employee._id}>
                         {attendanceAllOutlets && (
                           <td>
@@ -1459,6 +1742,10 @@
                         : "No active outlets available."}
                   </Empty>
                 )}
+                {!!data.employees?.length &&
+                  !visibleAttendanceEmployees.length && (
+                    <Empty>No employees match this search.</Empty>
+                  )}
               </div>
               <div className="panel-footer">
                 <span>

@@ -8608,6 +8608,296 @@ select option:disabled {
     background: rgba(255, 255, 255, .13);
 }
 
+.attendance-search-control {
+    position: relative;
+    z-index: 4;
+    flex: 1 1 270px;
+    min-width: 220px;
+}
+
+.attendance-search-field {
+    display: flex;
+    min-width: 0;
+    height: 40px;
+    align-items: center;
+    gap: 8px;
+    padding: 0 11px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    box-shadow: 0 1px 2px rgba(32, 33, 31, .04);
+}
+
+.attendance-search-field > svg {
+    flex: 0 0 auto;
+}
+
+.attendance-search-field:focus-within {
+    border-color: var(--red);
+    box-shadow: 0 0 0 3px rgba(201, 71, 55, .12);
+}
+
+.attendance-search-field input,
+.attendance-search-field input:focus {
+    flex: 1;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--ink);
+    box-shadow: none;
+    font-size: 12px;
+}
+
+.attendance-search-field input::placeholder {
+    color: var(--muted);
+    opacity: 1;
+}
+
+.attendance-search-field button {
+    display: inline-flex;
+    width: 26px;
+    height: 26px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.attendance-search-field button:hover {
+    background: var(--line);
+    color: var(--ink);
+}
+
+.attendance-search-suggestions {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    left: 0;
+    z-index: 20;
+    max-height: min(320px, 55vh);
+    overflow-y: auto;
+    padding: 5px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 12px 28px rgba(20, 30, 22, .16);
+}
+
+.attendance-search-suggestions button {
+    display: grid;
+    width: 100%;
+    gap: 3px;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+}
+
+.attendance-search-suggestions button:hover,
+.attendance-search-suggestions button:focus-visible {
+    outline: none;
+    background: color-mix(in srgb, var(--red) 9%, var(--surface));
+}
+
+.attendance-search-suggestions button strong {
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.attendance-search-suggestions button span,
+.attendance-search-empty {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.attendance-search-empty {
+    display: block;
+    padding: 10px;
+}
+
+.attendance-date-controls {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 5px;
+}
+
+.attendance-date-nav {
+    display: inline-flex;
+    width: 36px;
+    height: 40px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--ink);
+    cursor: pointer;
+}
+
+.attendance-date-nav:hover:not(:disabled) {
+    border-color: var(--red);
+    color: var(--red);
+}
+
+.attendance-date-nav:disabled {
+    opacity: .42;
+    cursor: not-allowed;
+}
+
+.attendance-outlet-select {
+    position: relative;
+    display: inline-flex;
+    min-width: 185px;
+    flex: 0 1 210px;
+    align-items: center;
+}
+
+.attendance-outlet-select select {
+    width: 100%;
+    min-width: 0;
+    height: 40px;
+    appearance: auto;
+    -webkit-appearance: menulist;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    background-image: none;
+    color: var(--ink);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.attendance-outlet-select select:focus {
+    outline: none;
+    border-color: var(--red);
+    box-shadow: 0 0 0 3px rgba(201, 71, 55, .12);
+}
+
+.attendance-status-heading {
+    display: flex;
+    min-width: max-content;
+    align-items: center;
+    gap: 10px;
+    white-space: nowrap;
+}
+
+.attendance-all-present {
+    display: inline-flex;
+    min-width: 58px;
+    min-height: 26px;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    padding: 0 8px;
+    border: 1px solid color-mix(in srgb, var(--status-present) 38%, var(--line));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--status-present) 9%, var(--surface));
+    color: var(--status-present);
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1;
+    text-align: center;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.attendance-all-present[aria-pressed="true"] {
+    border-color: var(--status-present);
+    background: var(--status-present);
+    color: #fff;
+}
+
+.attendance-all-present:hover:not(:disabled) {
+    background: var(--status-present);
+    color: #fff;
+}
+
+.attendance-all-present:disabled {
+    opacity: .45;
+    cursor: not-allowed;
+}
+
+@media (max-width: 980px) {
+    .page-head:has(.attendance-toolbar) {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .page-head:has(.attendance-toolbar) .attendance-toolbar {
+        width: 100%;
+    }
+
+    .attendance-search-control {
+        flex-basis: 100%;
+        min-width: 0;
+    }
+
+    .attendance-toolbar > select {
+        flex: 1;
+        min-width: 160px;
+    }
+
+    .attendance-outlet-select {
+        flex: 1;
+    }
+}
+
+@media (max-width: 760px) {
+    .attendance-search-control {
+        flex-basis: 100%;
+        min-width: 0;
+    }
+
+    .attendance-search-field {
+        width: 100%;
+    }
+
+    .attendance-date-controls {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .attendance-date-picker {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .attendance-date-nav {
+        width: 34px;
+        border-radius: 10px;
+    }
+
+    .attendance-outlet-select {
+        min-width: 0;
+    }
+
+    .attendance-status-heading {
+        gap: 5px;
+    }
+
+    .attendance-all-present {
+        min-height: 24px;
+        padding: 0 7px;
+    }
+}
+
 .workspace-skeleton-brand {
     display: flex;
     align-items: center;
