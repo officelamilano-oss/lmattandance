@@ -97,6 +97,7 @@ export interface EmployeeView {
   outletName?: string;
   attendanceSubmitted?: boolean;
   attendanceEntryExists?: boolean;
+  attendanceEntryUpdatedAt?: string | null;
   attendanceCorrectionCount?: number;
 }
 

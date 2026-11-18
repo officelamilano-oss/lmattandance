@@ -98,6 +98,16 @@ export const attendanceSchema = z.object({
     )
     .max(500),
   clearEmployeeIds: z.array(objectIdSchema).max(500).optional().default([]),
+  versions: z
+    .array(
+      z.object({
+        employeeId: objectIdSchema,
+        updatedAt: z.iso.datetime().nullable(),
+      }),
+    )
+    .max(500)
+    .optional()
+    .default([]),
   reason: z.string().trim().max(500).optional(),
 });
 

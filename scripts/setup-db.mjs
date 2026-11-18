@@ -223,6 +223,19 @@ try {
   );
   if (legacySalaryIndex)
     await db.collection("salaryRecords").dropIndex(legacySalaryIndex.name);
+  const attendanceIndexes = await db.collection("attendance").indexes();
+  const legacyAttendanceIndex = attendanceIndexes.find(
+    (index) =>
+      index.unique &&
+      JSON.stringify(index.key) ===
+        JSON.stringify({ employeeId: 1, date: 1 }),
+  );
+  if (legacyAttendanceIndex) {
+    await db.collection("attendance").dropIndex(legacyAttendanceIndex.name);
+    console.log(
+      `Removed obsolete unique index attendance.${legacyAttendanceIndex.name}; attendance is unique per outlet and date.`,
+    );
+  }
   for (const [collection, keys, options] of indexes) {
     try {
       await db.collection(collection).createIndex(keys, options);

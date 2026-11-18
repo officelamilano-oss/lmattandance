@@ -1845,6 +1845,7 @@
         {
           entries: Array<{ employeeId: string; status: AttendanceStatus }>;
           clearEmployeeIds: string[];
+          versions: Array<{ employeeId: string; updatedAt: string | null }>;
         }
       >();
       for (const employee of attendanceEmployees) {
@@ -1860,6 +1861,7 @@
         const group = entriesByOutlet.get(outletId) ?? {
           entries: [],
           clearEmployeeIds: [],
+          versions: [],
         };
         if (employee.attendanceStatus) {
           group.entries.push({
@@ -1871,6 +1873,10 @@
         } else {
           continue;
         }
+        group.versions.push({
+          employeeId: employee._id,
+          updatedAt: employee.attendanceEntryUpdatedAt ?? null,
+        });
         entriesByOutlet.set(outletId, group);
       }
       const outletsWithAttendanceWork = [...entriesByOutlet].filter(
@@ -1890,6 +1896,7 @@
       setError("");
       setSuccess("");
       const failedOutlets: string[] = [];
+      const failedEmployees: string[] = [];
       let submittedOutlets = 0;
       let draftOutlets = 0;
       try {
@@ -1900,7 +1907,15 @@
           const outletAction =
             action === "SUBMIT" && !group.entries.length ? "SAVE" : action;
           try {
-            await request("/api/attendance", {
+            const result = await request<{
+              savedEmployeeCount: number;
+              submittedEmployeeCount: number;
+              failures: Array<{
+                employeeId: string;
+                employeeName: string;
+                reason: string;
+              }>;
+            }>("/api/attendance", {
               method: "PUT",
               body: JSON.stringify({
                 outletId,
@@ -1910,8 +1925,16 @@
                 reason,
               }),
             });
-            if (outletAction === "SUBMIT") submittedOutlets += 1;
-            else draftOutlets += 1;
+            if (result.savedEmployeeCount > 0) {
+              if (result.submittedEmployeeCount > 0) submittedOutlets += 1;
+              else draftOutlets += 1;
+            }
+            failedEmployees.push(
+              ...result.failures.map(
+                (failure) =>
+                  `${outlet?.code ?? outletId}: ${failure.employeeName}: ${failure.reason}`,
+              ),
+            );
           } catch (caught) {
             failedOutlets.push(
               `${outlet?.code ?? outletId}: ${
@@ -1923,9 +1946,9 @@
           }
         }
         await reload();
-        if (failedOutlets.length) {
+        if (failedOutlets.length || failedEmployees.length) {
           setError(
-            `${submittedOutlets} outlet(s) submitted and ${draftOutlets} draft(s) saved; ${failedOutlets.length} failed. ${failedOutlets.join(" ")}`,
+            `${submittedOutlets} outlet(s) submitted and ${draftOutlets} draft(s) saved; ${failedOutlets.length + failedEmployees.length} failed. ${[...failedOutlets, ...failedEmployees].join(" ")}`,
           );
         } else {
           setSuccess(action === "SUBMIT"

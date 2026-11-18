@@ -65,13 +65,13 @@ The app uses a local username/email and password sign-in backed by MongoDB. Admi
 
 ## Safe Database Setup
 
-The setup command connects only to the configured database. It does not drop collections or remove records. It normalizes existing email and employee-code values, adds query and uniqueness indexes, inserts default payroll settings only when absent, and inserts missing inactive `OUT01`-`OUT10` placeholders only when their code is absent.
+The setup command connects only to the configured database. It does not drop collections or remove records. It normalizes existing email and employee-code values, adds query and uniqueness indexes, removes the obsolete unique `attendance(employeeId, date)` index left by the former per-employee attendance schema, inserts default payroll settings only when absent, and inserts missing inactive `OUT01`-`OUT10` placeholders only when their code is absent.
 
 ```powershell
 npm run setup:db
 ```
 
-If a unique index conflicts with existing records, setup stops with the index name. Review and resolve duplicate data or an incompatible existing index manually; do not drop production data to make setup pass. Run setup again after correction. Confirm Atlas network access and grant the database user read/write access to the configured database.
+If a unique index conflicts with existing records, setup stops with the index name. Review and resolve duplicate data or an incompatible existing index manually; do not drop production data to make setup pass. Run setup again after correction. Confirm Atlas network access and grant the database user read/write access to the configured database. After deploying a change that alters attendance persistence, run this setup command against the same database used by the app so legacy indexes are migrated.
 
 The application uses the existing collections: `users`, `outlets`, `employees`, `attendance`, `advances`, `loans`, `salaryRecords`, `accessPermissions`, `auditLogs`, `settings`, and `roles`. Attendance is stored as one date/outlet document with employee entries; this supports an atomic submit/lock transition.
 

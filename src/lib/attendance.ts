@@ -11,6 +11,13 @@ export function isAttendanceEntryLocked(
   return submitted && role !== "MAIN_ADMIN";
 }
 
+export function attendanceEntryVersionMatches(
+  expectedUpdatedAt: string | null,
+  actualUpdatedAt: Date | undefined,
+) {
+  return expectedUpdatedAt === (actualUpdatedAt?.toISOString() ?? null);
+}
+
 export function isAttendanceOutletSubmitted(
   day: AttendanceDayDocument | undefined,
   activeEmployees: Pick<EmployeeDocument, "_id">[],

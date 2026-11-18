@@ -44,11 +44,11 @@ Har employee ke liye yeh statuses hain:
 ## Phase 4: Draft save karna
 
 1. “Save draft” button tab active hota hai jab kam se kam ek unlocked employee marked ho.
-2. UI `PUT /api/attendance` par `action: "SAVE"` bhejta hai. Payload mein outlet, date, employee/status entries aur pehle se saved unsubmitted status clear karne ke liye `clearEmployeeIds` ho sakte hain.
-3. Server schema check karta hai: date, outlet/employee IDs, maximum 500 entries/clear IDs, aur allowed status values.
-4. Server yeh bhi verify karta hai ki har employee selected outlet ka active employee ho ya us din ke existing historical entries/correction records mein ho, aur payload mein employee duplicate na ho.
+2. UI `PUT /api/attendance` par `action: "SAVE"` bhejta hai. Payload mein outlet, date, employee/status entries, har affected employee ka loaded `updatedAt` version, aur pehle se saved unsubmitted status clear karne ke liye `clearEmployeeIds` hote hain.
+3. Server schema check karta hai: date, outlet/employee IDs, maximum 500 entries/clear IDs/versions, aur allowed status values.
+4. Server har employee ka version independently compare karta hai. Sirf us employee ke liye failure return hoti hai jiska version stale/missing ho, employee unavailable ho, ya lock/correction condition apply ho; baaki valid employees save ho sakte hain.
 5. New day record `DRAFT` state se create ho sakta hai. Entry ke saath status, update time/user, correction count aur submission flag store hote hain.
-6. Draft save ke baad data reload hota hai aur latest server state UI mein dikhayi jaati hai.
+6. Draft save ke baad data reload hota hai aur latest server state UI mein dikhayi jaati hai. Partial failures mein response employee name aur exact reason deta hai.
 
 ## Phase 5: Attendance submit aur lock
 
@@ -57,7 +57,7 @@ Har employee ke liye yeh statuses hain:
 3. `MAIN_ADMIN` ko submit se pehle confirmation dialog dikhaya jata hai. Us confirmation ki preference browser ke `localStorage` mein user email ke saath save hoti hai.
 4. Submit request sirf marked, abhi tak unsubmitted entries ko `submitted: true` karti hai; unmarked employees ko default status nahi diya jata.
 5. Submitted employee entries non-admin users ke liye lock ho jaati hain. Unmarked aur draft employees unlocked rehte hain; isliye ek hi din mein alag submissions karke baaki employees baad mein mark/submit kiye ja sakte hain.
-6. All-outlets view mein save/submit har outlet ke liye alag request bhejta hai. Jis outlet mein marked employees hain woh submit hota hai; sirf unmarked existing entries wale outlet ke liye save request ho sakti hai. Ek outlet fail ho to doosre outlets ke successful results preserve hote hain aur failed outlets ka error dikhaya jata hai.
+6. All-outlets view mein save/submit har outlet ke liye alag request bhejta hai. Jis outlet mein marked employees hain woh submit hota hai; sirf unmarked existing entries wale outlet ke liye save request ho sakti hai. Ek employee fail ho to uska naam/reason dikhaya jata hai aur doosre valid employees/outlets ke successful results preserve hote hain.
 7. Submit par `ATTENDANCE_SUBMITTED` audit event likha jata hai. Day ka submit time/user bhi record hota hai.
 8. Submitted row ko outlet user edit, re-submit, ya delete karne ki API request bheje to server `403` deta hai. `MAIN_ADMIN` submitted status badalne ya clear karne ke liye correction reason deta hai; correction history aur audit log maintain hote hain.
 9. Concurrent update ya locked data ke case mein server conflict (`409`) deta hai; UI error display karta hai.
@@ -84,6 +84,7 @@ Har employee ke liye yeh statuses hain:
 
 - MongoDB collection: `attendance`
 - Ek day record ki pehchaan: `outletId` + `date`
+- `attendance(employeeId, date)` ka legacy unique index day/outlet schema ke saath compatible nahi hai; `npm run setup:db` ise safely remove karke outlet/date unique index rakhta hai.
 - Day status: `DRAFT` ya `SUBMITTED`
 - Entry status: `P`, `A`, `WO`, `HD`; unmarked state `unmarked` se represent ho sakti hai
 - Read: `GET /api/attendance`

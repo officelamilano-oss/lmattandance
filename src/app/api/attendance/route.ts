@@ -11,6 +11,7 @@ import { dateOnlySchema } from "@/lib/validation/common";
 import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
 import {
+  attendanceEntryVersionMatches,
   isAttendanceEntryLocked,
   isAttendanceOutletSubmitted,
 } from "@/lib/attendance";
@@ -117,6 +118,7 @@ export async function GET(request: Request) {
             attendanceStatus: entry?.status ?? null,
             savedAttendanceStatus: entry?.status ?? null,
             attendanceEntryExists: !!entry,
+            attendanceEntryUpdatedAt: entry?.updatedAt?.toISOString() ?? null,
             attendanceSubmitted:
               !!entry &&
               day?.status === "SUBMITTED" &&
@@ -185,6 +187,9 @@ export async function GET(request: Request) {
         savedAttendanceStatus:
           entries.get(employee._id.toHexString())?.status ?? null,
         attendanceEntryExists: entries.has(employee._id.toHexString()),
+        attendanceEntryUpdatedAt:
+          entries.get(employee._id.toHexString())?.updatedAt?.toISOString() ??
+          null,
         attendanceSubmitted:
           !!entries.get(employee._id.toHexString()) &&
           day?.status === "SUBMITTED" &&
@@ -201,6 +206,16 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
+  return handleAttendancePut(request, 0);
+}
+
+async function handleAttendancePut(
+  request: Request,
+  retryCount: number,
+  bodyOverride?: unknown,
+) {
+  let parsedBody = bodyOverride;
+  let hasParsedBody = retryCount > 0;
   try {
     const actor = await getActor();
     if (!actor)
@@ -210,7 +225,11 @@ export async function PUT(request: Request) {
       );
     if (!actor.permissions.includes("attendance.write"))
       return NextResponse.json({ error: "Forbidden." }, { status: 403 });
-    const body = (await readJson<unknown>(request)) as { action?: string };
+    const body = (hasParsedBody
+      ? parsedBody
+      : await readJson<unknown>(request)) as { action?: string };
+    parsedBody = body;
+    hasParsedBody = true;
     const input = attendanceSchema.parse(body);
     if (body.action !== "SAVE" && body.action !== "SUBMIT")
       return NextResponse.json(
@@ -261,39 +280,26 @@ export async function PUT(request: Request) {
         (item) => item.employeeId,
       ),
     ];
+    const historicalEmployeeIdSet = new Set(
+      historicalEmployeeIds.map((employeeId) => employeeId.toHexString()),
+    );
+    const requestedEmployeeIds = [
+      ...input.entries.map((entry) => entry.employeeId),
+      ...input.clearEmployeeIds,
+    ];
+    const requestedObjectIds = [
+      ...new Set(requestedEmployeeIds),
+    ].map((employeeId) => new ObjectId(employeeId));
     const employees = await db
       .collection<EmployeeDocument>("employees")
       .find(
         {
           outletId,
-          $or: [{ active: true }, { _id: { $in: historicalEmployeeIds } }],
+          _id: { $in: requestedObjectIds },
         },
-        { projection: { _id: 1 } },
+        { projection: { _id: 1, active: 1, fullName: 1 } },
       )
       .toArray();
-    const allowedEmployees = new Set(
-      employees.map((employee) => employee._id.toHexString()),
-    );
-    const seen = new Set<string>();
-    for (const employeeId of [
-      ...input.entries.map((entry) => entry.employeeId),
-      ...input.clearEmployeeIds,
-    ]) {
-      if (!allowedEmployees.has(employeeId))
-        return NextResponse.json(
-          {
-            error:
-              "Every attendance employee must be active and belong to the selected outlet.",
-          },
-          { status: 400 },
-        );
-      if (seen.has(employeeId))
-        return NextResponse.json(
-          { error: "An employee may appear only once per date." },
-          { status: 400 },
-        );
-      seen.add(employeeId);
-    }
     const now = new Date();
     const wasUnlocked = existingDay?.corrections.at(-1)?.action === "UNLOCK";
     if (body.action === "SUBMIT" && input.entries.length === 0)
@@ -313,6 +319,82 @@ export async function PUT(request: Request) {
         item.correctionCount,
       ]),
     );
+    const employeeById = new Map(
+      employees.map((employee) => [employee._id.toHexString(), employee]),
+    );
+    const versionsByEmployee = new Map<string, string>();
+    const duplicateVersionIds = new Set<string>();
+    for (const version of input.versions) {
+      if (versionsByEmployee.has(version.employeeId))
+        duplicateVersionIds.add(version.employeeId);
+      else
+        versionsByEmployee.set(
+          version.employeeId,
+          version.updatedAt ?? "",
+        );
+    }
+    const employeeIdCounts = new Map<string, number>();
+    for (const employeeId of requestedEmployeeIds)
+      employeeIdCounts.set(
+        employeeId,
+        (employeeIdCounts.get(employeeId) ?? 0) + 1,
+      );
+    const failures: Array<{
+      employeeId: string;
+      employeeName: string;
+      reason: string;
+    }> = [];
+    const failedEmployeeIds = new Set<string>();
+    const rejectEmployee = (employeeId: string, reason: string) => {
+      if (failedEmployeeIds.has(employeeId)) return;
+      failedEmployeeIds.add(employeeId);
+      failures.push({
+        employeeId,
+        employeeName:
+          employeeById.get(employeeId)?.fullName ?? `Employee ${employeeId}`,
+        reason,
+      });
+    };
+    for (const employeeId of new Set(requestedEmployeeIds)) {
+      const employee = employeeById.get(employeeId);
+      if ((employeeIdCounts.get(employeeId) ?? 0) > 1) {
+        rejectEmployee(employeeId, "Employee appears more than once in this save.");
+        continue;
+      }
+      if (
+        !employee ||
+        (!employee.active && !historicalEmployeeIdSet.has(employeeId))
+      ) {
+        rejectEmployee(
+          employeeId,
+          "Employee is inactive or does not belong to the selected outlet.",
+        );
+        continue;
+      }
+      if (duplicateVersionIds.has(employeeId)) {
+        rejectEmployee(employeeId, "Employee version was provided more than once.");
+        continue;
+      }
+      if (!versionsByEmployee.has(employeeId)) {
+        rejectEmployee(employeeId, "Employee version is missing. Refresh and retry.");
+        continue;
+      }
+      const expectedUpdatedAt = versionsByEmployee.get(employeeId) || null;
+      const actualUpdatedAt = previousEntries.get(employeeId)?.updatedAt;
+      if (!attendanceEntryVersionMatches(expectedUpdatedAt, actualUpdatedAt)) {
+        console.warn("Attendance employee version mismatch", {
+          outletId: outletId.toHexString(),
+          date: input.date,
+          employeeId,
+          expectedUpdatedAt,
+          actualUpdatedAt: actualUpdatedAt?.toISOString() ?? null,
+        });
+        rejectEmployee(
+          employeeId,
+          "This employee's attendance changed since it was loaded. Refresh and retry.",
+        );
+      }
+    }
     const isSubmittedEntry = (employeeId: string) => {
       const previous = previousEntries.get(employeeId);
       return (
@@ -322,23 +404,32 @@ export async function PUT(request: Request) {
       );
     };
     let hasAdminSubmittedCorrection = false;
+    const validEntries: typeof input.entries = [];
     for (const entry of input.entries) {
+      if (failedEmployeeIds.has(entry.employeeId)) continue;
       const previous = previousEntries.get(entry.employeeId);
       const isAlreadySubmitted = isSubmittedEntry(entry.employeeId);
-      if (isAttendanceEntryLocked(isAlreadySubmitted, actor.role))
-        return NextResponse.json(
-          {
-            error:
-              "Submitted employee attendance cannot be changed or submitted again.",
-          },
-          { status: 403 },
+      if (isAttendanceEntryLocked(isAlreadySubmitted, actor.role)) {
+        rejectEmployee(
+          entry.employeeId,
+          "Submitted attendance cannot be changed or submitted again.",
         );
+        continue;
+      }
       if (
         isAlreadySubmitted &&
         previous?.status !== entry.status &&
         actor.role === "MAIN_ADMIN"
-      )
+      ) {
+        if (!input.reason) {
+          rejectEmployee(
+            entry.employeeId,
+            "A correction reason is required to change submitted attendance.",
+          );
+          continue;
+        }
         hasAdminSubmittedCorrection = true;
+      }
       const correctionCount =
         previous?.correctionCount ?? correctionCounts.get(entry.employeeId) ?? 0;
       if (
@@ -346,47 +437,76 @@ export async function PUT(request: Request) {
         actor.role !== "MAIN_ADMIN" &&
         previous?.status !== entry.status &&
         correctionCount >= 2
-      )
-        return NextResponse.json(
-          {
-            error: `An employee's attendance is locked after 2 changes for this date. Contact MAIN_ADMIN for further corrections.`,
-          },
-          { status: 409 },
+      ) {
+        rejectEmployee(
+          entry.employeeId,
+          "Attendance is locked after 2 changes for this date. Contact MAIN_ADMIN for further corrections.",
         );
+        continue;
+      }
+      validEntries.push(entry);
     }
+    const validClearEmployeeIds: string[] = [];
     for (const employeeId of input.clearEmployeeIds) {
+      if (failedEmployeeIds.has(employeeId)) continue;
       const previous = previousEntries.get(employeeId);
       if (!previous) continue;
       const isAlreadySubmitted = isSubmittedEntry(employeeId);
-      if (isAttendanceEntryLocked(isAlreadySubmitted, actor.role))
-        return NextResponse.json(
-          {
-            error:
-              "Submitted employee attendance cannot be changed or deleted.",
-          },
-          { status: 403 },
+      if (isAttendanceEntryLocked(isAlreadySubmitted, actor.role)) {
+        rejectEmployee(
+          employeeId,
+          "Submitted attendance cannot be changed or deleted.",
         );
-      if (isAlreadySubmitted && actor.role === "MAIN_ADMIN")
+        continue;
+      }
+      if (isAlreadySubmitted && actor.role === "MAIN_ADMIN") {
+        if (!input.reason) {
+          rejectEmployee(
+            employeeId,
+            "A correction reason is required to change submitted attendance.",
+          );
+          continue;
+        }
         hasAdminSubmittedCorrection = true;
+      }
       const correctionCount =
         previous.correctionCount ?? correctionCounts.get(employeeId) ?? 0;
       if (
         wasUnlocked &&
         actor.role !== "MAIN_ADMIN" &&
         correctionCount >= 2
-      )
-        return NextResponse.json(
-          {
-            error: `An employee's attendance is locked after 2 changes for this date. Contact MAIN_ADMIN for further corrections.`,
-          },
-          { status: 409 },
+      ) {
+        rejectEmployee(
+          employeeId,
+          "Attendance is locked after 2 changes for this date. Contact MAIN_ADMIN for further corrections.",
         );
+        continue;
+      }
+      validClearEmployeeIds.push(employeeId);
     }
-    if (hasAdminSubmittedCorrection && !input.reason)
-      return NextResponse.json(
-        { error: "A correction reason is required to change submitted attendance." },
-        { status: 400 },
-      );
+    if (failures.length)
+      console.warn("Attendance employee validation failed", {
+        outletId: outletId.toHexString(),
+        date: input.date,
+        action: body.action,
+        failures: failures.map(({ employeeId, reason }) => ({
+          employeeId,
+          reason,
+        })),
+      });
+    const appliedEmployeeIds = new Set([
+      ...validEntries.map((entry) => entry.employeeId),
+      ...validClearEmployeeIds.filter((employeeId) =>
+        previousEntries.has(employeeId),
+      ),
+    ]);
+    if (!appliedEmployeeIds.size)
+      return NextResponse.json({
+        day: existingDay,
+        savedEmployeeCount: 0,
+        submittedEmployeeCount: 0,
+        failures,
+      });
     const entries = new Map(
       (existingDay?.entries ?? []).map((entry) => [
         entry.employeeId.toHexString(),
@@ -396,7 +516,7 @@ export async function PUT(request: Request) {
         },
       ]),
     );
-    for (const entry of input.entries) {
+    for (const entry of validEntries) {
       const previous = previousEntries.get(entry.employeeId);
       const correctionCount =
         previous?.correctionCount ?? correctionCounts.get(entry.employeeId) ?? 0;
@@ -411,11 +531,13 @@ export async function PUT(request: Request) {
           (wasUnlocked || isAlreadySubmitted) && changed
             ? correctionCount + 1
             : correctionCount,
-        submitted: isAlreadySubmitted || body.action === "SUBMIT",
+        submitted:
+          isAlreadySubmitted ||
+          (body.action === "SUBMIT" && validEntries.length > 0),
       });
       correctionCounts.delete(entry.employeeId);
     }
-    for (const employeeId of input.clearEmployeeIds) {
+    for (const employeeId of validClearEmployeeIds) {
       const previous = previousEntries.get(employeeId);
       if (!previous) continue;
       const correctionCount =
@@ -431,8 +553,9 @@ export async function PUT(request: Request) {
         entry.submitted ||
         (existingDay?.status === "SUBMITTED" && entry.submitted !== false),
     );
-    const shouldBeSubmitted =
-      body.action === "SUBMIT" || hasSubmittedEntries;
+    const shouldSubmitEntries =
+      body.action === "SUBMIT" && validEntries.length > 0;
+    const shouldBeSubmitted = shouldSubmitEntries || hasSubmittedEntries;
     const correctionEvents = [
       ...(hasAdminSubmittedCorrection
         ? [
@@ -450,7 +573,7 @@ export async function PUT(request: Request) {
             },
           ]
         : []),
-      ...(body.action === "SUBMIT" && wasUnlocked
+      ...(shouldSubmitEntries && wasUnlocked
         ? [
             {
               at: now,
@@ -475,7 +598,7 @@ export async function PUT(request: Request) {
         ...(shouldBeSubmitted
           ? {
               status: "SUBMITTED" as const,
-              ...(body.action === "SUBMIT"
+              ...(shouldSubmitEntries
                 ? { submittedAt: now, submittedBy: actor.id }
                 : {}),
             }
@@ -495,39 +618,135 @@ export async function PUT(request: Request) {
           }
         : {}),
     };
+    const writeFilter = {
+      outletId,
+      date: input.date,
+      ...(existingDay
+        ? {
+            _id: existingDay._id,
+            ...(existingDay.updatedAt
+              ? { updatedAt: existingDay.updatedAt }
+              : {
+                  $or: [
+                    { updatedAt: { $exists: false } },
+                    { updatedAt: { $type: "null" as const } },
+                  ],
+                }),
+          }
+        : { status: { $ne: "SUBMITTED" as const } }),
+    };
+    const logFilter = {
+      outletId: outletId.toHexString(),
+      date: input.date,
+      ...(existingDay
+        ? {
+            _id: existingDay._id.toHexString(),
+            ...(existingDay.updatedAt
+              ? { updatedAt: existingDay.updatedAt.toISOString() }
+              : {
+                  $or: [
+                    { updatedAt: { $exists: false } },
+                    { updatedAt: { $type: "null" as const } },
+                  ],
+                }),
+          }
+        : { status: { $ne: "SUBMITTED" as const } }),
+    };
+    const reportWriteConflict = async (
+      reason: string,
+      extra: Record<string, unknown> = {},
+    ) => {
+      const latestDay = await collection.findOne({
+        outletId,
+        date: input.date,
+      });
+      const latestEntries = new Map(
+        (latestDay?.entries ?? []).map((entry) => [
+          entry.employeeId.toHexString(),
+          entry,
+        ]),
+      );
+      const diagnostic = {
+        reason,
+        outletId: outletId.toHexString(),
+        date: input.date,
+        attempts: retryCount + 1,
+        filter: logFilter,
+        currentRecord: latestDay
+          ? {
+              id: latestDay._id.toHexString(),
+              status: latestDay.status,
+              updatedAt:
+                latestDay.updatedAt instanceof Date
+                  ? latestDay.updatedAt.toISOString()
+                  : String(latestDay.updatedAt ?? "missing"),
+            }
+          : null,
+        employeeVersions: [...new Set(requestedEmployeeIds)].map(
+          (employeeId) => ({
+            name:
+              employeeById.get(employeeId)?.fullName ??
+              `Employee ${employeeId}`,
+            expectedUpdatedAt:
+              versionsByEmployee.get(employeeId) || null,
+            actualUpdatedAt:
+              latestEntries.get(employeeId)?.updatedAt instanceof Date
+                ? latestEntries.get(employeeId)?.updatedAt.toISOString()
+                : String(
+                    latestEntries.get(employeeId)?.updatedAt ?? "missing",
+                  ),
+          }),
+        ),
+        ...extra,
+      };
+      console.error("Attendance write could not be completed", diagnostic);
+      return NextResponse.json(
+        {
+          error: "Attendance could not be saved.",
+          details: JSON.stringify(diagnostic),
+        },
+        { status: 409 },
+      );
+    };
     let result;
     try {
       result = await collection.updateOne(
-        {
-          outletId,
-          date: input.date,
-          ...(existingDay
-            ? { _id: existingDay._id, updatedAt: existingDay.updatedAt }
-            : { status: { $ne: "SUBMITTED" } }),
-        },
+        writeFilter,
         update,
-        { upsert: true },
+        { upsert: !existingDay },
       );
     } catch (error) {
-      if ((error as { code?: number }).code === 11000)
-        return NextResponse.json(
-          {
-            error:
-              "Attendance is locked or was updated concurrently. Refresh before editing.",
-          },
-          { status: 409 },
-        );
+      if ((error as { code?: number }).code === 11000) {
+        console.error("Attendance write hit a unique-key conflict", {
+          filter: logFilter,
+          upsert: !existingDay,
+          retryCount,
+          keyPattern: (error as { keyPattern?: unknown }).keyPattern,
+          keyValue: (error as { keyValue?: unknown }).keyValue,
+        });
+        if (retryCount < 2 && hasParsedBody)
+          return handleAttendancePut(request, retryCount + 1, parsedBody);
+        return reportWriteConflict("UNIQUE_KEY_CONFLICT", {
+          keyPattern: (error as { keyPattern?: unknown }).keyPattern,
+          keyValue: (error as { keyValue?: unknown }).keyValue,
+        });
+      }
       throw error;
     }
-    if (!result.matchedCount && !result.upsertedCount)
-      return NextResponse.json(
-        { error: "Attendance is locked." },
-        { status: 409 },
-      );
+    if (!result.matchedCount && !result.upsertedCount) {
+      console.warn("Attendance optimistic-lock condition did not match", {
+        filter: logFilter,
+        upsert: !existingDay,
+        retryCount,
+      });
+      if (retryCount < 2 && hasParsedBody)
+        return handleAttendancePut(request, retryCount + 1, parsedBody);
+      return reportWriteConflict("CONDITIONAL_UPDATE_MATCHED_ZERO");
+    }
     const record = await db
       .collection<AttendanceDayDocument>("attendance")
       .findOne({ outletId, date: input.date });
-    if (body.action === "SUBMIT" && record)
+    if (shouldSubmitEntries && record)
       await writeAudit({
         actorId: actor.id,
         actorEmail: actor.email,
@@ -546,7 +765,12 @@ export async function PUT(request: Request) {
         outletId,
         reason: input.reason,
       });
-    return NextResponse.json({ day: record });
+    return NextResponse.json({
+      day: record,
+      savedEmployeeCount: appliedEmployeeIds.size,
+      submittedEmployeeCount: shouldSubmitEntries ? validEntries.length : 0,
+      failures,
+    });
   } catch (error) {
     return apiError(error);
   }

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import bcrypt from "bcryptjs";
 import { ObjectId } from "mongodb";
 import {
+  attendanceEntryVersionMatches,
   isAttendanceEntryLocked,
   isAttendanceOutletSubmitted,
 } from "../src/lib/attendance.ts";
@@ -50,11 +51,62 @@ const base = {
 test("attendance updates accept clear requests for saved draft entries", () => {
   const parsed = attendanceSchema.parse({
     outletId: "aaaaaaaaaaaaaaaaaaaaaaaa",
-    date: "2026-10-29",
+    date: "2026-11-18",
     entries: [],
     clearEmployeeIds: ["bbbbbbbbbbbbbbbbbbbbbbbb"],
+    versions: [
+      {
+        employeeId: "bbbbbbbbbbbbbbbbbbbbbbbb",
+        updatedAt: "2026-11-18T10:15:00.000Z",
+      },
+    ],
   });
   assert.deepEqual(parsed.clearEmployeeIds, ["bbbbbbbbbbbbbbbbbbbbbbbb"]);
+});
+
+test("attendance saves validate mixed statuses and employee versions", () => {
+  const parsed = attendanceSchema.parse({
+    outletId: "aaaaaaaaaaaaaaaaaaaaaaaa",
+    date: "2026-11-18",
+    entries: [
+      { employeeId: "bbbbbbbbbbbbbbbbbbbbbbbb", status: "P" },
+      { employeeId: "cccccccccccccccccccccccc", status: "A" },
+      { employeeId: "dddddddddddddddddddddddd", status: "WO" },
+      { employeeId: "eeeeeeeeeeeeeeeeeeeeeeee", status: "HD" },
+    ],
+    clearEmployeeIds: [],
+    versions: [
+      { employeeId: "bbbbbbbbbbbbbbbbbbbbbbbb", updatedAt: null },
+      { employeeId: "cccccccccccccccccccccccc", updatedAt: null },
+      { employeeId: "dddddddddddddddddddddddd", updatedAt: null },
+      { employeeId: "eeeeeeeeeeeeeeeeeeeeeeee", updatedAt: null },
+    ],
+  });
+  assert.deepEqual(
+    parsed.entries.map((entry) => entry.status),
+    ["P", "A", "WO", "HD"],
+  );
+  assert.equal(parsed.date, "2026-11-18");
+});
+
+test("attendance entry versions distinguish fresh, stale, and unmarked entries", () => {
+  const currentVersion = new Date("2026-11-18T10:15:00.000Z");
+  assert.equal(
+    attendanceEntryVersionMatches(
+      "2026-11-18T10:15:00.000Z",
+      currentVersion,
+    ),
+    true,
+  );
+  assert.equal(
+    attendanceEntryVersionMatches(
+      "2026-11-18T10:14:59.000Z",
+      currentVersion,
+    ),
+    false,
+  );
+  assert.equal(attendanceEntryVersionMatches(null, undefined), true);
+  assert.equal(attendanceEntryVersionMatches(null, currentVersion), false);
 });
 
 test("attendance locks only submitted entries for non-admin users", () => {
