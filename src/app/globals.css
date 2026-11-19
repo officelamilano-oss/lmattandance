@@ -9847,11 +9847,11 @@ tbody tr:hover {
 
 .dashboard-trend-line,
 .dashboard-trend-point {
-    stroke: var(--cherry) !important;
+    stroke: var(--status-present) !important;
 }
 
 .dashboard-trend-point {
-    fill: var(--cherry) !important;
+    fill: var(--status-present) !important;
 }
 
 .dashboard-chart-gridline,
