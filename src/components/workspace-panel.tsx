@@ -70,6 +70,7 @@
     legacyOutletDefaultPermissions,
   } from "@/lib/access-control";
   import { useEmployeeAttendanceReport } from "@/lib/use-employee-attendance-report";
+  import { clientRequestCache } from "@/lib/client-request-cache";
   import { EmployeeImportPanel } from "@/components/employee-import-panel";
   import { EmployeeCreatePanel } from "@/components/employee-create-panel";
   import {
@@ -180,6 +181,13 @@
           ? `${payload.error ?? "Request failed."} ${details}`
           : (payload.error ?? "Request failed."),
       );
+    }
+    if ((init?.method ?? "GET").toUpperCase() !== "GET") {
+      const pathname = url.split("?")[0];
+      if (pathname.startsWith("/api/outlets"))
+        clientRequestCache.invalidateUrl("/api/outlets");
+      if (pathname.startsWith("/api/designations"))
+        clientRequestCache.invalidateUrl("/api/designations");
     }
     return payload as T;
   }
@@ -312,6 +320,7 @@
     };
   }) {
     const [outlets, setOutlets] = useState<Outlet[]>([]);
+    const [outletsLoaded, setOutletsLoaded] = useState(false);
     const activeOutlets = outlets.filter((outlet) => outlet.active);
     const employeeOutlets = activeOutlets;
     const [selectedOutlet, setSelectedOutlet] = useState("");
@@ -327,6 +336,7 @@
     const [dashboardFetching, setDashboardFetching] = useState(false);
     const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
     const attendanceReloadId = useRef(0);
+    const activeReloadController = useRef<AbortController | null>(null);
     const [
       attendanceAllPresentSnapshot,
       setAttendanceAllPresentSnapshot,
@@ -413,7 +423,42 @@
       installments: Array<Record<string, unknown>>;
       transactions: Array<Record<string, unknown>>;
     } | null>(null);
-    async function reload() {
+    const reloadKey = (() => {
+      switch (section) {
+        case "dashboard":
+          return JSON.stringify([
+            dashboardDate,
+            dashboardFrom,
+            dashboardTo,
+            awayPeriod,
+            awayFrom,
+            awayTo,
+            selectedOutlet,
+            dashboardRefreshKey,
+          ]);
+        case "attendance":
+          return JSON.stringify([date, attendanceOutletId, attendanceOutlets.length]);
+        case "employees":
+          return JSON.stringify([page, debouncedSearch, selectedOutlet, user.role]);
+        case "advances":
+          return JSON.stringify([page, advanceStatus, selectedOutlet]);
+        case "loans":
+        case "salary":
+          return JSON.stringify([month, selectedOutlet]);
+        case "activeLogs":
+          return selectedOutlet;
+        default:
+          return "initial";
+      }
+    })();
+
+    async function reload(signal?: AbortSignal) {
+      if (!signal) {
+        activeReloadController.current?.abort();
+        const controller = new AbortController();
+        activeReloadController.current = controller;
+        signal = controller.signal;
+      }
       const reloadId = ++attendanceReloadId.current;
       if (section !== "dashboard") {
         if (!loading) setRefreshing(true);
@@ -442,18 +487,20 @@
           if (selectedOutlet) dashboardParams.set("outletId", selectedOutlet);
           dashboardParams.set("parts", "summary");
           const dashboardUrl = `/api/dashboard?${dashboardParams.toString()}`;
-          const dashboard = await request<WorkspaceData>(dashboardUrl);
+          const dashboard = await request<WorkspaceData>(dashboardUrl, { signal });
           commitData(dashboard);
         }
         if (section === "attendance") {
           if (attendanceOutletId) {
             const attendanceData = await request<WorkspaceData>(
                 `/api/attendance?outletId=${attendanceOutletId}&date=${date}`,
+                { signal },
               );
             commitData(attendanceData);
           } else if (attendanceOutlets.length > 1) {
             const attendanceData = await request<WorkspaceData>(
               `/api/attendance?date=${date}`,
+              { signal },
             );
             commitData(attendanceData);
           } else if (reloadId === attendanceReloadId.current) {
@@ -464,6 +511,7 @@
           commitData(
             await request<WorkspaceData>(
               `/api/employees?page=${page}&pageSize=20&q=${encodeURIComponent(debouncedSearch)}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}${user.role === "MAIN_ADMIN" ? "&active=all" : ""}`,
+              { signal },
             ),
           );
         if (section === "advances") {
@@ -474,11 +522,15 @@
           const [advances, employees, outlets] = await Promise.all([
             request<WorkspaceData>(
               `/api/advances?${advanceParams.toString()}`,
+              { signal },
             ),
             request<WorkspaceData>(
               "/api/employees?pageSize=100",
+              { signal },
             ),
-            request<WorkspaceData>("/api/outlets"),
+            clientRequestCache.get(user.email, "/api/outlets", 120_000, () =>
+              request<WorkspaceData>("/api/outlets"),
+            ),
           ]);
           commitData({
             ...advances,
@@ -490,16 +542,23 @@
           commitData(
             await request<WorkspaceData>(
               `/api/loans?month=${month}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
+              { signal },
             ),
           );
         if (section === "salary" && month)
           commitData(
             await request<WorkspaceData>(
               `/api/payroll?month=${month}${selectedOutlet ? `&outletId=${selectedOutlet}` : ""}`,
+              { signal },
             ),
           );
         if (section === "outlets") {
-          const outletData = await request<WorkspaceData>("/api/outlets");
+          const outletData = await clientRequestCache.get(
+            user.email,
+            "/api/outlets",
+            120_000,
+            () => request<WorkspaceData>("/api/outlets"),
+          );
           const refreshedOutlets = outletData.outlets ?? [];
           if (reloadId === attendanceReloadId.current) {
             setData(outletData);
@@ -523,8 +582,16 @@
         }
         if (section === "access") {
           const [users, designations] = await Promise.all([
-            request<WorkspaceData>("/api/users"),
-            request<{ designations: DesignationView[] }>("/api/designations"),
+            request<WorkspaceData>("/api/users", { signal }),
+            clientRequestCache.get(
+              user.email,
+              "/api/designations",
+              300_000,
+              () =>
+                request<{ designations: DesignationView[] }>(
+                  "/api/designations",
+                ),
+            ),
           ]);
           commitData({ ...users, designations: designations.designations });
         }
@@ -534,18 +601,19 @@
           commitData(
             await request<WorkspaceData>(
               `/api/audit?${params.toString()}`,
+              { signal },
             ),
           );
         }
         if (section === "settings")
-          commitData(await request<WorkspaceData>("/api/settings"));
+          commitData(await request<WorkspaceData>("/api/settings", { signal }));
       } catch (caught) {
-        if (reloadId === attendanceReloadId.current)
+        if (!signal.aborted && reloadId === attendanceReloadId.current)
           setError(
             caught instanceof Error ? caught.message : "Unable to load records.",
           );
       } finally {
-        if (reloadId === attendanceReloadId.current) {
+        if (!signal.aborted && reloadId === attendanceReloadId.current) {
           setLoading(false);
           setRefreshing(false);
           setDashboardFetching(false);
@@ -558,7 +626,12 @@
     });
     useEffect(() => {
       let cancelled = false;
-      void request<{ outlets: Outlet[] }>("/api/outlets")
+      void clientRequestCache.get(
+        user.email,
+        "/api/outlets",
+        120_000,
+        () => request<{ outlets: Outlet[] }>("/api/outlets"),
+      )
         .then((result) => {
           if (cancelled) return;
           setOutlets(result.outlets);
@@ -583,11 +656,14 @@
                 ? caught.message
                 : "Unable to load outlets.",
             );
+        })
+        .finally(() => {
+          if (!cancelled) setOutletsLoaded(true);
         });
       return () => {
         cancelled = true;
       };
-    }, []);
+    }, [user.email]);
     useEffect(() => {
       if (user.role !== "MAIN_ADMIN") return;
       const savedPreference = window.localStorage.getItem(
@@ -606,21 +682,13 @@
       return () => window.clearTimeout(timeout);
     }, [search]);
     useEffect(() => {
-      void Promise.resolve().then(() => reloadCurrentView());
-    }, [
-      section,
-      selectedOutlet,
-      attendanceOutletId,
-      attendanceOutlets.length,
-      date,
-      month,
-      dashboardDate,
-      dashboardFrom,
-      dashboardTo,
-      debouncedSearch,
-      page,
-      advanceStatus,
-    ]);
+      if (!outletsLoaded) return;
+      const timer = window.setTimeout(() => reloadCurrentView(), 0);
+      return () => {
+        window.clearTimeout(timer);
+        activeReloadController.current?.abort();
+      };
+    }, [section, reloadKey, outletsLoaded]);
 
     function applyDashboardPreset(value: string) {
       setDashboardPreset(value);
@@ -4106,7 +4174,7 @@
       );
 
     if (section === "reports")
-      return <ReportsPanel outlets={activeOutlets} />;
+      return <ReportsPanel outlets={activeOutlets} enabled={outletsLoaded} />;
     if (section === "activeLogs")
       return (
         <div className="content-area">
@@ -4670,6 +4738,7 @@
         return;
       }
       let current = true;
+      const controller = new AbortController();
       const params = new URLSearchParams({
         month,
         outletId: employee.outletId,
@@ -4677,7 +4746,9 @@
         periodStart,
         periodEnd,
       });
-      void request<Preview>(`/api/payroll/preview?${params.toString()}`)
+      void request<Preview>(`/api/payroll/preview?${params.toString()}`, {
+        signal: controller.signal,
+      })
         .then((result) => {
           if (!current) return;
           setPreview(result);
@@ -4685,13 +4756,14 @@
           setAdvanceIds(result.advances.map((advance) => advance._id));
         })
         .catch((caught) => {
-          if (!current) return;
+          if (!current || controller.signal.aborted) return;
           setPreviewError(
             caught instanceof Error ? caught.message : "Unable to prepare payroll preview.",
           );
         });
       return () => {
         current = false;
+        controller.abort();
       };
     }, [employee._id, employee.outletId, month, periodEnd, periodStart]);
 
@@ -5522,10 +5594,10 @@
     subtitle?: string;
   }) {
     const data = [
-      { name: "Present", value: attendance.P, color: "var(--status-present)", status: "p" },
-      { name: "Absent", value: attendance.A, color: "var(--status-absent)", status: "a" },
-      { name: "Half day", value: attendance.HD, color: "var(--status-half)", status: "hd" },
-      { name: "Week off", value: attendance.WO, color: "var(--status-weekoff)", status: "wo" },
+      { name: "Absent", value: attendance.A, color: "var(--absent)", status: "a" },
+      { name: "Half day", value: attendance.HD, color: "var(--half)", status: "hd" },
+      { name: "Present", value: attendance.P, color: "var(--present)", status: "p" },
+      { name: "Week off", value: attendance.WO, color: "var(--weekoff)", status: "wo" },
     ].filter((item) => item.value > 0);
 
     return (
@@ -5547,12 +5619,16 @@
                   innerRadius="52%"
                   outerRadius="76%"
                   paddingAngle={3}
+                  animationDuration={600}
+                  animationEasing="ease-out"
                 >
                   {data.map((item) => (
                     <Cell
                       key={item.name}
                       className={`attendance-status-segment attendance-status-${item.status}`}
                       fill={item.color}
+                      stroke="var(--cream-light)"
+                      strokeWidth={2}
                     />
                   ))}
                 </Pie>
@@ -5560,9 +5636,13 @@
                 <Legend
                   verticalAlign="bottom"
                   height={30}
+                  iconType="none"
                   wrapperStyle={{ fontSize: 10 }}
-                  formatter={(value) => (
-                    <span className="attendance-chart-legend-label">{value}</span>
+                  formatter={(value, entry) => (
+                    <span className="attendance-chart-legend-label">
+                      <i aria-hidden="true" style={{ backgroundColor: entry.color, boxShadow: `0 0 8px ${entry.color}` }} />
+                      {value}
+                    </span>
                   )}
                 />
               </PieChart>
@@ -5628,11 +5708,11 @@
         </div>
         <div className="dashboard-trend-chart">
           {data.length ? (
-            <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Daily attendance rate trend">
+            <svg className="dashboard-attendance-trend" viewBox={`0 0 ${chartWidth} ${chartHeight}`} role="img" aria-label="Daily attendance rate trend">
               <defs>
                 <linearGradient id="dashboard-attendance-area" x1="0" x2="0" y1="0" y2="1">
-                  <stop offset="0%" stopColor="#39a564" stopOpacity=".22" />
-                  <stop offset="100%" stopColor="#39a564" stopOpacity="0" />
+                  <stop offset="0%" stopColor="var(--present)" stopOpacity=".22" />
+                  <stop offset="100%" stopColor="var(--present)" stopOpacity="0" />
                 </linearGradient>
               </defs>
               {[100, 50, 0].map((rate) => (
@@ -5969,7 +6049,7 @@
                 data={data}
                 margin={{ top: 8, right: 16, left: -18, bottom: 0 }}
               >
-                <CartesianGrid stroke="#eceee9" vertical={false} />
+                <CartesianGrid stroke="var(--cream-dark)" vertical={false} />
                 <XAxis
                   dataKey="period"
                   tickFormatter={(period: string) =>
@@ -5981,7 +6061,7 @@
                         }).format(new Date(`${period}-01T00:00:00Z`))
                       : formatDate(period)
                   }
-                  tick={{ fill: "#777b74", fontSize: 10 }}
+                  tick={{ fill: "var(--muted)", fontSize: 10 }}
                   axisLine={false}
                   tickLine={false}
                   minTickGap={14}
@@ -5998,15 +6078,19 @@
                   }
                 />
                 <Legend
+                  iconType="none"
                   wrapperStyle={{ fontSize: 10 }}
-                  formatter={(value) => (
-                    <span className="attendance-chart-legend-label">{value}</span>
+                  formatter={(value, entry) => (
+                    <span className="attendance-chart-legend-label">
+                      <i aria-hidden="true" style={{ backgroundColor: entry.color, boxShadow: `0 0 8px ${entry.color}` }} />
+                      {value}
+                    </span>
                   )}
                 />
-                <Bar className="attendance-chart-present" dataKey="present" name="Present" stackId="attendance" fill="var(--status-present)" />
-                <Bar className="attendance-chart-absent" dataKey="absent" name="Absent" stackId="attendance" fill="var(--status-absent)" />
-                <Bar className="attendance-chart-half" dataKey="halfDay" name="Half day" stackId="attendance" fill="var(--status-half)" />
-                <Bar className="attendance-chart-weekoff" dataKey="weekOff" name="Week off" stackId="attendance" fill="var(--status-weekoff)" />
+                <Bar className="attendance-chart-absent" dataKey="absent" name="Absent" stackId="attendance" fill="var(--absent)" stroke="var(--cream-light)" strokeWidth={2} animationDuration={600} animationEasing="ease-out" />
+                <Bar className="attendance-chart-half" dataKey="halfDay" name="Half day" stackId="attendance" fill="var(--half)" stroke="var(--cream-light)" strokeWidth={2} animationDuration={600} animationEasing="ease-out" />
+                <Bar className="attendance-chart-present" dataKey="present" name="Present" stackId="attendance" fill="var(--present)" stroke="var(--cream-light)" strokeWidth={2} animationDuration={600} animationEasing="ease-out" />
+                <Bar className="attendance-chart-weekoff" dataKey="weekOff" name="Week off" stackId="attendance" fill="var(--weekoff)" stroke="var(--cream-light)" strokeWidth={2} animationDuration={600} animationEasing="ease-out" />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -7707,7 +7791,13 @@
     );
   }
 
-  function ReportsPanel({ outlets }: { outlets: Outlet[] }) {
+  function ReportsPanel({
+    outlets,
+    enabled,
+  }: {
+    outlets: Outlet[];
+    enabled: boolean;
+  }) {
     const [kind, setKind] = useState("attendance");
     const [outletId, setOutletId] = useState("");
     const selectedOutletId =
@@ -7723,7 +7813,7 @@
     const [error, setError] = useState("");
     const [employeeId, setEmployeeId] = useState("");
     const employeeReport = useEmployeeAttendanceReport({
-      enabled: kind === "attendance",
+      enabled: enabled && kind === "attendance",
       from,
       to,
       outletId: selectedOutletId,

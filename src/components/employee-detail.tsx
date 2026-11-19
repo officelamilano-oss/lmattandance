@@ -15,6 +15,7 @@ import {
 import { getEmployeeCodePrefix } from "@/lib/employee-code";
 import { UniformDetailsFields } from "@/components/uniform-details-fields";
 import { uniformEntriesFromForm } from "@/lib/uniform-deductions";
+import { clientRequestCache } from "@/lib/client-request-cache";
 import {
   EMPLOYEE_DOCUMENT_MAX_BYTES,
   EMPLOYEE_DOCUMENT_MIME_TYPES,
@@ -106,11 +107,17 @@ async function loadEmployeeDetailData(
   employeeDetailEmployeeRequests.set(cacheKey, employeeRequest);
   const request = Promise.all([
     employeeRequest,
-    fetch("/api/outlets", { cache: "no-store" }).then((response) =>
-      readResponse<{ outlets: EmployeeDetailData["outlets"] }>(
-        response,
-        "Unable to load outlets.",
-      ),
+    clientRequestCache.get(
+      cacheScope,
+      "/api/outlets",
+      120_000,
+      async () => {
+        const response = await fetch("/api/outlets", { cache: "no-store" });
+        return readResponse<{ outlets: EmployeeDetailData["outlets"] }>(
+          response,
+          "Unable to load outlets.",
+        );
+      },
     ),
     includeDocuments
       ? fetch(`/api/employees/${id}/documents`, { cache: "no-store" }).then(

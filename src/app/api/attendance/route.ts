@@ -62,13 +62,23 @@ export async function GET(request: Request) {
       const employees = outletIds.length
         ? await db
             .collection<EmployeeDocument>("employees")
-            .find({
-              outletId: { $in: outletIds },
-              $or: [
-                { active: true },
-                { _id: { $in: historicalEmployeeIds } },
-              ],
-            })
+            .find(
+              {
+                outletId: { $in: outletIds },
+                $or: [
+                  { active: true },
+                  { _id: { $in: historicalEmployeeIds } },
+                ],
+              },
+              {
+                projection: {
+                  employeeCode: 1,
+                  fullName: 1,
+                  designation: 1,
+                  outletId: 1,
+                  active: 1,
+                },
+              })
             .sort({ outletId: 1, fullName: 1 })
             .toArray()
         : [];
@@ -149,10 +159,20 @@ export async function GET(request: Request) {
     ];
     const employees = await db
       .collection<EmployeeDocument>("employees")
-      .find({
-        outletId: outlet._id,
-        $or: [{ active: true }, { _id: { $in: historicalEmployeeIds } }],
-      })
+      .find(
+        {
+          outletId: outlet._id,
+          $or: [{ active: true }, { _id: { $in: historicalEmployeeIds } }],
+        },
+        {
+          projection: {
+            employeeCode: 1,
+            fullName: 1,
+            designation: 1,
+            outletId: 1,
+            ...(actor.role === "OUTLET_USER" ? {} : { mobile: 1 }),
+          },
+        })
       .sort({ fullName: 1 })
       .toArray();
     const entries = new Map(

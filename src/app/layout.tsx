@@ -1,12 +1,19 @@
 import type { Metadata } from "next";
-import localFont from "next/font/local";
+import { Anton, Inter } from "next/font/google";
 import "./globals.css";
 
-const outfit = localFont({
-  src: "../../public/Fonts/Outfit/Outfit-VariableFont_wght.ttf",
-  variable: "--font-outfit",
+const anton = Anton({
+  subsets: ["latin"],
+  variable: "--font-anton",
   display: "swap",
-  weight: "100 900",
+  weight: "400",
+});
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+  weight: ["400", "500", "600"],
 });
 
 export const metadata: Metadata = {
@@ -18,7 +25,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="en-GB"
-      className={`${outfit.variable} h-full antialiased`}
+      className={`${anton.variable} ${inter.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

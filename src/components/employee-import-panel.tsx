@@ -766,7 +766,7 @@ export function EmployeeImportPanel({
               </label>
 
               {unmappedFields.length > 0 && (
-                <p style={{ gridColumn: "1 / -1", color: "#b26a00" }}>
+                <p className="import-unmapped-warning" style={{ gridColumn: "1 / -1" }}>
                   These columns were not found in your sheet:{" "}
                   {unmappedFields.map((field) => field.label).join(", ")}. If
                   they are in the sheet under another name, choose them in
@@ -885,7 +885,7 @@ export function EmployeeImportPanel({
                             <td>
                               {(visiblePage - 1) * pageSize + (pageIndex + 1)}
                               {duplicateRows.has(row.sheetRow) && (
-                                <div style={{ color: "#b26a00", fontSize: 12 }}>
+                                <div className="import-duplicate-warning">
                                   Duplicate
                                 </div>
                               )}
@@ -897,18 +897,12 @@ export function EmployeeImportPanel({
                               const style = {
                                 minWidth: field.width,
                                 width: "100%",
-                                ...(invalid
-                                  ? {
-                                      borderColor: "#d64545",
-                                      background: "#fdecec",
-                                    }
-                                  : {}),
                               };
                               return (
                                 <td key={field.key}>
                                   {yesNoFields.includes(field.key) ? (
                                     <select
-                                      className="cell-input"
+                                      className={`cell-input${invalid ? " cell-input-invalid" : ""}`}
                                       style={style}
                                       value={row[field.key]}
                                       onChange={(event) =>
@@ -924,7 +918,7 @@ export function EmployeeImportPanel({
                                     </select>
                                   ) : field.key === "employmentType" ? (
                                     <select
-                                      className="cell-input"
+                                      className={`cell-input${invalid ? " cell-input-invalid" : ""}`}
                                       style={style}
                                       value={row[field.key] || "Full-time"}
                                       onChange={(event) =>
@@ -952,7 +946,7 @@ export function EmployeeImportPanel({
                                     </select>
                                   ) : (
                                     <input
-                                      className="cell-input"
+                                      className={`cell-input${invalid ? " cell-input-invalid" : ""}`}
                                       style={style}
                                       type={
                                         field.key === "dateOfJoining"

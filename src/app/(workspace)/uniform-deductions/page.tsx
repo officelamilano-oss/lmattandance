@@ -7,6 +7,7 @@ export default async function UniformDeductionsPage() {
   return (
     <UniformDeductionPanel
       canExport={actor.permissions.includes("reports.export")}
+      cacheScope={actor.email}
     />
   );
 }

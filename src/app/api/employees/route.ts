@@ -154,7 +154,32 @@ export async function GET(request: Request) {
     const [employees, total] = await Promise.all([
       db
         .collection<EmployeeDocument>("employees")
-        .find(query)
+        .find(query, {
+          projection: {
+            beneficiaryName: 0,
+            bankName: 0,
+            branchName: 0,
+            accountNumber: 0,
+            ifscCode: 0,
+            panNumber: 0,
+            aadhaarNumber: 0,
+            drivingLicenceNumber: 0,
+            acceptedAt: 0,
+            acceptedBy: 0,
+            ...(actor.role === "MAIN_ADMIN"
+              ? {}
+              : {
+                  monthlyBaseSalary: 0,
+                  salaryMethod: 0,
+                  pfEnabled: 0,
+                  employeePfPercent: 0,
+                  employerPfPercent: 0,
+                  esiEnabled: 0,
+                  esiPercent: 0,
+                }),
+            ...(actor.role === "OUTLET_USER" ? { mobile: 0 } : {}),
+          },
+        })
         .sort({ fullName: 1 })
         .skip((page.page - 1) * page.pageSize)
         .limit(page.pageSize)

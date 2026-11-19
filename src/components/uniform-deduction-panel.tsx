@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { Download, LoaderCircle, Printer, Search, Trash2 } from "lucide-react";
 import { UNIFORM_ITEMS, UNIFORM_ITEM_LABELS } from "@/lib/uniform-deductions";
 import type { UniformDeductionStatus, UniformItemKey } from "@/lib/models";
+import { clientRequestCache } from "@/lib/client-request-cache";
 
 type OutletOption = { _id: string; code: string; name: string };
 type EmployeeOption = {
@@ -63,8 +64,10 @@ function currency(amount: number) {
 
 export function UniformDeductionPanel({
   canExport,
+  cacheScope,
 }: {
   canExport: boolean;
+  cacheScope: string;
 }) {
   const [outlets, setOutlets] = useState<OutletOption[]>([]);
   const [outletId, setOutletId] = useState("");
@@ -90,7 +93,7 @@ export function UniformDeductionPanel({
   const [total, setTotal] = useState(0);
   const pageSize = 25;
 
-  const loadRows = useCallback(async () => {
+  const loadRows = useCallback(async (signal?: AbortSignal) => {
     try {
       const params = new URLSearchParams({
         page: String(page),
@@ -103,6 +106,7 @@ export function UniformDeductionPanel({
       if (reportEmployeeId) params.set("employeeId", reportEmployeeId);
       const response = await fetch(`/api/uniform-deductions?${params}`, {
         cache: "no-store",
+        signal,
       });
       const body = await response.json();
       if (!response.ok)
@@ -111,33 +115,35 @@ export function UniformDeductionPanel({
       setRows(body.deductions);
       setTotal(body.total);
     } catch (caught) {
+      if (signal?.aborted) return;
       setError(
         caught instanceof Error
           ? caught.message
           : "Unable to load uniform deductions.",
       );
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [itemFilter, monthFilter, page, reportEmployeeId, reportOutletId, statusFilter]);
 
   useEffect(() => {
-    void fetch("/api/outlets", { cache: "no-store" })
-      .then(async (response) => {
+    void clientRequestCache.get(cacheScope, "/api/outlets", 120_000, async () => {
+      const response = await fetch("/api/outlets", { cache: "no-store" });
         const body = await response.json();
         if (!response.ok)
           throw new Error(body.error ?? "Unable to load outlets.");
-        const nextOutlets: OutletOption[] = body.outlets;
-        setOutlets(nextOutlets);
+        return body.outlets as OutletOption[];
       })
+      .then(setOutlets)
       .catch((caught: unknown) =>
         setError(
           caught instanceof Error ? caught.message : "Unable to load outlets.",
         ),
       );
-  }, []);
+  }, [cacheScope]);
 
   useEffect(() => {
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
       if (!outletId) {
         setEmployees([]);
@@ -149,7 +155,10 @@ export function UniformDeductionPanel({
         active: "true",
       });
       if (employeeQuery.trim()) params.set("q", employeeQuery.trim());
-      void fetch(`/api/employees?${params}`, { cache: "no-store" })
+      void fetch(`/api/employees?${params}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      })
         .then(async (response) => {
           const body = await response.json();
           if (!response.ok)
@@ -157,22 +166,30 @@ export function UniformDeductionPanel({
           setEmployees(body.employees);
         })
         .catch((caught: unknown) =>
+          !controller.signal.aborted &&
           setError(
             caught instanceof Error
               ? caught.message
               : "Unable to search employees.",
           ),
         );
-    }, 200);
-    return () => window.clearTimeout(timer);
+    }, 350);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [employeeQuery, outletId]);
 
   useEffect(() => {
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
       const params = new URLSearchParams({ pageSize: "100", active: "true" });
       if (reportOutletId) params.set("outletId", reportOutletId);
       if (reportEmployeeQuery.trim()) params.set("q", reportEmployeeQuery.trim());
-      void fetch(`/api/employees?${params}`, { cache: "no-store" })
+      void fetch(`/api/employees?${params}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      })
         .then(async (response) => {
           const body = await response.json();
           if (!response.ok)
@@ -180,18 +197,29 @@ export function UniformDeductionPanel({
           setReportEmployees(body.employees);
         })
         .catch((caught: unknown) =>
+          !controller.signal.aborted &&
           setError(
             caught instanceof Error
               ? caught.message
               : "Unable to load employee filters.",
           ),
         );
-    }, 200);
-    return () => window.clearTimeout(timer);
+    }, 350);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [reportEmployeeQuery, reportOutletId]);
 
   useEffect(() => {
-    void loadRows();
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void loadRows(controller.signal);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
   }, [loadRows]);
 
   useEffect(() => {

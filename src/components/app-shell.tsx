@@ -4,10 +4,16 @@ import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
-import { useCallback, useEffect, useState } from "react";
-import { Activity, ArrowRight, Banknote, Bell, BookOpen, Building2, CalendarDays, ClipboardList, FileSpreadsheet, LayoutDashboard, LogOut, Menu, Moon, Settings2, ShieldCheck, Sun, Users, Wallet, X, HandCoins, Shirt } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { Activity, ArrowRight, Banknote, Bell, BookOpen, Building2, CalendarDays, ClipboardList, FileSpreadsheet, House, LayoutDashboard, LogOut, Menu, Moon, Settings2, ShieldCheck, Sun, Users, Wallet, X, HandCoins, Shirt } from "lucide-react";
 import type { Permission, UserRole } from "@/lib/models";
 import type { AdvanceView, WorkspaceData } from "@/lib/ui-types";
+import { clientRequestCache } from "@/lib/client-request-cache";
 
 type AppNotification = {
   id: string;
@@ -20,7 +26,7 @@ type AppNotification = {
 };
 
 const navigation: Array<{ href: string; label: string; icon: typeof LayoutDashboard; permission: Permission; mainAdminOnly?: boolean; always?: boolean }> = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard, permission: "dashboard.read" },
+  { href: "/", label: "Dashboard", icon: House, permission: "dashboard.read" },
   { href: "/attendance", label: "Attendance", icon: CalendarDays, permission: "attendance.read" },
   { href: "/salary", label: "Monthly salary", icon: Banknote, permission: "salary.read" },
   { href: "/uniform-deductions", label: "Uniform deduction", icon: Shirt, permission: "uniforms.manage" },
@@ -44,12 +50,24 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
   const [dismissedNotifications, setDismissedNotifications] = useState<string[]>([]);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
   const [notificationError, setNotificationError] = useState("");
+  const notificationsLoaded = useRef(false);
+  const notificationRequestActive = useRef(false);
+  const cacheUserEmail = useRef(user.email);
   const canReadDashboard = user.permissions.includes("dashboard.read");
   const canReadAdvances = user.permissions.includes("advances.read");
+  useEffect(() => {
+    if (cacheUserEmail.current === user.email) return;
+    clientRequestCache.clear();
+    cacheUserEmail.current = user.email;
+    notificationsLoaded.current = false;
+    notificationRequestActive.current = false;
+  }, [user.email]);
   useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? "dark" : "light";
   }, [darkMode]);
   const loadNotifications = useCallback(async () => {
+    if (notificationsLoaded.current || notificationRequestActive.current) return;
+    notificationRequestActive.current = true;
     setNotificationsLoading(true);
     setNotificationError("");
     try {
@@ -128,6 +146,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
       setDismissedNotifications(dismissed);
       setNotifications(nextNotifications);
       setNotificationError(errors.join(" "));
+      notificationsLoaded.current = errors.length === 0;
     } catch (caught) {
       setNotificationError(
         caught instanceof Error
@@ -135,6 +154,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
           : "Unable to load notifications.",
       );
     } finally {
+      notificationRequestActive.current = false;
       setNotificationsLoading(false);
     }
   }, [canReadAdvances, canReadDashboard, user.email]);
@@ -166,10 +186,10 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
             return <Link key={href} href={href} onClick={() => setOpen(false)} className={`nav-link ${active ? "nav-active" : ""}`}><Icon size={18} strokeWidth={1.8} /><span>{label}</span>{active && <i />}</Link>;
           })}
         </nav>
-        <div className="sidebar-bottom"><div className="system-status"><span className="status-dot" /> Workspace secured</div><div className="user-block"><div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div><div className="user-info"><strong>{user.name}</strong><span>{user.role.replaceAll("_", " ")}</span></div><button className="icon-button logout-button" title="Sign out" aria-label="Sign out" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={17} /></button></div></div>
+        <div className="sidebar-bottom"><div className="system-status"><span className="status-dot" /> Workspace secured</div><div className="user-block"><div className="avatar">{user.name.slice(0, 1).toUpperCase()}</div><div className="user-info"><strong>{user.name}</strong><span>{user.role.replaceAll("_", " ")}</span></div><button className="icon-button logout-button" title="Sign out" aria-label="Sign out" onClick={() => { clientRequestCache.clear(); void signOut({ callbackUrl: "/login" }); }}><LogOut size={17} /></button></div></div>
       </aside>
       {open && <button className="mobile-scrim" aria-label="Close navigation" onClick={() => setOpen(false)} />}
-      <main className="main-column" data-page={pathname === "/" ? "dashboard" : pathname.split("/")[1] ?? "dashboard"}><header className="topbar"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setOpen(!open)}>{open ? <X size={20} /> : <Menu size={20} />}</button><div className="breadcrumb"><Activity size={15} /><span>Operations</span><b>/</b><strong>{navigation.find((item) => item.href === pathname)?.label ?? "Workspace"}</strong></div><div className="topbar-right"><span className="topbar-date">AMS powered by Roshan</span>{(user.permissions.includes("dashboard.read") || user.permissions.includes("advances.read")) && <button className="topbar-utility notification-trigger" type="button" aria-label="Open notifications" title="Notifications" onClick={() => { setNotificationsOpen(true); void loadNotifications(); }}><Bell size={15} />{notifications.filter((item) => !dismissedNotifications.includes(item.id)).length > 0 && <span className="notification-count">{notifications.filter((item) => !dismissedNotifications.includes(item.id)).length > 99 ? "99+" : notifications.filter((item) => !dismissedNotifications.includes(item.id)).length}</span>}</button>}<button className="topbar-utility" type="button" aria-label={darkMode ? "Switch to light theme" : "Switch to dark theme"} title={darkMode ? "Switch to light theme" : "Switch to dark theme"} onClick={() => setDarkMode((current) => !current)}>{darkMode ? <Sun size={15} /> : <Moon size={15} />}</button><details className="profile-menu"><summary className="topbar-avatar" aria-label="Open profile menu">{user.name.slice(0, 1).toUpperCase()}</summary><div className="profile-menu-content"><strong>{user.name}</strong><span>{user.email}</span><small>{user.role.replaceAll("_", " ")}</small><button type="button" onClick={() => signOut({ callbackUrl: "/login" })}><LogOut size={14} /> Sign out</button></div></details></div></header>{children}</main>
+      <main className="main-column" data-page={pathname === "/" ? "dashboard" : pathname.split("/")[1] ?? "dashboard"}><header className="topbar"><button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setOpen(!open)}>{open ? <X size={20} /> : <Menu size={20} />}</button><div className="breadcrumb"><Activity size={15} /><span>Operations</span><b>/</b><strong>{navigation.find((item) => item.href === pathname)?.label ?? "Workspace"}</strong></div><div className="topbar-right"><span className="topbar-date">AMS powered by Roshan</span>{(user.permissions.includes("dashboard.read") || user.permissions.includes("advances.read")) && <button className="topbar-utility notification-trigger" type="button" aria-label="Open notifications" title="Notifications" onClick={() => { setNotificationsOpen(true); void loadNotifications(); }}><Bell size={15} />{notifications.filter((item) => !dismissedNotifications.includes(item.id)).length > 0 && <span className="notification-count">{notifications.filter((item) => !dismissedNotifications.includes(item.id)).length > 99 ? "99+" : notifications.filter((item) => !dismissedNotifications.includes(item.id)).length}</span>}</button>}<button className="topbar-utility" type="button" aria-label={darkMode ? "Switch to light theme" : "Switch to dark theme"} title={darkMode ? "Switch to light theme" : "Switch to dark theme"} onClick={() => setDarkMode((current) => !current)}>{darkMode ? <Sun size={15} /> : <Moon size={15} />}</button><details className="profile-menu"><summary className="topbar-avatar" aria-label="Open profile menu"><Image src="/Profile/skull.svg" alt="" aria-hidden="true" width={24} height={24} /></summary><div className="profile-menu-content"><strong>{user.name}</strong><span>{user.email}</span><small>{user.role.replaceAll("_", " ")}</small><button type="button" onClick={() => { clientRequestCache.clear(); void signOut({ callbackUrl: "/login" }); }}><LogOut size={14} /> Sign out</button></div></details></div></header>{children}</main>
       {notificationsOpen && (
         <div className="notification-drawer-backdrop">
           <button
