@@ -203,6 +203,8 @@ export interface PayrollEmployeeView {
   latestPayrollRecordId?: string;
   nextPeriodStart?: string;
   suggestedPeriodEnd?: string;
+  liveNotMarkedDays?: number;
+  estimatedCalculation?: PayrollCalculation;
   estimatedNetPayable?: number;
   estimatedUniformDeduction?: number;
   approvedAdvanceTotal: number;

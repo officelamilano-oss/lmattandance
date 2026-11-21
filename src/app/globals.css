@@ -546,6 +546,7 @@ a {
     text-align: left
 }
 
+
 .salary-table table {
     min-width: 1600px;
     table-layout: auto;
@@ -670,8 +671,11 @@ td strong {
     padding: 5px 8px;
     border: 1px solid var(--on-cherry);
     border-radius: 999px;
-    background: var(--status-present);
-    color: var(--muted);
+    /* background: var(--status-present); */
+      
+        background: var(--pill-present-bg) !important;
+            color: var(--pill-present-text) !important;
+    /* color: var(--muted); */
     font-size: 10px;
     cursor: pointer;
     list-style: none
@@ -1150,7 +1154,110 @@ td strong {
 }
 
 .settings-panel .form-grid {
-    padding: 14px 0
+    padding: 14px 0;
+    align-items: end
+}
+
+.payroll-not-marked-toggle {
+    min-height: 42px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 9px 7px 11px;
+    border: 1px solid color-mix(in srgb, var(--status-present) 9%, transparent);
+    border-radius: 9px;
+    background: var(--surface);
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease
+}
+
+.payroll-not-marked-toggle:hover {
+    border-color: color-mix(in srgb, var(--status-present) 28%, transparent);
+    background: var(--on-cherry)
+}
+
+.payroll-not-marked-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px
+}
+
+.payroll-not-marked-copy strong {
+    color: var(--ink);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.25
+}
+
+.payroll-not-marked-copy small {
+    color: var(--muted);
+    font-size: 9.5px;
+    line-height: 1.25
+}
+
+.payroll-switch {
+    position: relative;
+    flex: 0 0 auto;
+    width: 38px;
+    height: 22px
+}
+
+.payroll-switch input {
+    position: absolute;
+    inset: 0;
+    width: 38px;
+    height: 22px;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer
+}
+
+.payroll-switch i {
+    display: block;
+    width: 38px;
+    height: 22px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--cream-dark);
+    transition: background 180ms ease, border-color 180ms ease
+}
+
+.payroll-switch i::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--on-cherry);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
+    transition: transform 180ms ease
+}
+
+.payroll-switch input:checked+i {
+    border-color: var(--status-present);
+    background: var(--status-present)
+}
+
+.payroll-switch input:checked+i::after {
+    transform: translateX(16px)
+}
+
+.payroll-switch input:focus-visible+i {
+    outline: 3px solid color-mix(in srgb, var(--status-present) 24%, transparent);
+    outline-offset: 2px
+}
+
+.payroll-switch input:disabled {
+    cursor: not-allowed
+}
+
+.payroll-not-marked-toggle:has(.payroll-switch input:disabled) {
+    cursor: not-allowed;
+    opacity: .65
 }
 
 .policy-note {
@@ -3157,7 +3264,7 @@ td strong {
     flex: 0 0 auto;
     place-items: center;
     border-radius: 8px;
-    background: var(--status-present);
+    /* background: var(--status-present); */
     color: var(--status-present)
 }
 
@@ -3251,8 +3358,8 @@ td strong {
 
 .about-toc-links button:hover,
 .about-toc-links .about-toc-active {
-    background: var(--status-present);
-    color: var(--status-present)
+    background: #e3e3e3;
+    color: #242424
 }
 
 .about-toc-links button span {
@@ -3303,7 +3410,7 @@ td strong {
     flex: 0 0 auto;
     place-items: center;
     border-radius: 10px;
-    background: var(--status-present);
+    /* background: var(--status-present); */
     color: var(--status-present)
 }
 
@@ -3369,7 +3476,7 @@ td strong {
     flex: 0 0 auto;
     place-items: center;
     border-radius: 8px;
-    background: var(--status-present);
+    background: #00be2026;
     color: var(--status-present);
     font-size: 9px;
     font-weight: 700
@@ -3501,12 +3608,12 @@ td strong {
 }
 
 .about-tip {
-    background: var(--status-present);
+    background: #00be2026;
     color: var(--muted)
 }
 
 .about-warning {
-    background: var(--status-half);
+    background: #ebc61f78;
     color: var(--status-half)
 }
 
@@ -4852,35 +4959,35 @@ tbody tr:hover {
 }
 
 .attendance-status-segment {
-    filter: drop-shadow(0 0 6px var(--status-present-glow))
+    filter: none
 }
 
 .attendance-status-segment.attendance-status-a {
-    filter: drop-shadow(0 0 6px var(--status-absent-glow))
+    filter: none
 }
 
 .attendance-status-segment.attendance-status-hd {
-    filter: drop-shadow(0 0 6px var(--status-half-glow))
+    filter: none
 }
 
 .attendance-status-segment.attendance-status-wo {
-    filter: drop-shadow(0 0 6px var(--status-weekoff-glow))
+    filter: none
 }
 
 .attendance-chart-present .recharts-rectangle {
-    filter: drop-shadow(0 0 6px var(--status-present-glow))
+    filter: none
 }
 
 .attendance-chart-absent .recharts-rectangle {
-    filter: drop-shadow(0 0 6px var(--status-absent-glow))
+    filter: none
 }
 
 .attendance-chart-half .recharts-rectangle {
-    filter: drop-shadow(0 0 6px var(--status-half-glow))
+    filter: none
 }
 
 .attendance-chart-weekoff .recharts-rectangle {
-    filter: drop-shadow(0 0 6px var(--status-weekoff-glow))
+    filter: none
 }
 
 .heatmap-no-data {
@@ -8330,6 +8437,48 @@ select option:disabled {
     min-width: 130px;
 }
 
+.uniform-edit-button {
+    min-width: 58px;
+    height: 32px;
+    margin-right: 8px;
+    background: var(--on-cherry);
+    border: 1px solid var(--line);
+    color: var(--green);
+    box-shadow: none;
+}
+
+.uniform-edit-button:hover {
+    background: var(--surface);
+    border-color: color-mix(in srgb, var(--green) 35%, var(--line));
+}
+
+.uniform-edit-modal {
+    width: min(440px, 100%);
+}
+
+.uniform-edit-form {
+    gap: 14px;
+}
+
+.uniform-edit-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding-top: 4px;
+}
+
+.uniform-edit-actions .button {
+    width: 100%;
+    justify-content: center;
+    margin: 0;
+}
+
+@media (max-width: 520px) {
+    .uniform-edit-actions {
+        grid-template-columns: 1fr;
+    }
+}
+
 .uniform-row-actions {
     display: inline-block;
     position: relative;
@@ -9288,9 +9437,9 @@ select option:disabled {
     --cream-dark: light-dark(#E0D3C6, #43221F);
     --ink: light-dark(#1A1A1A, #F3E9E0);
     --muted: light-dark(#5F5752, #B9A296);
-    --present: #1DB954;
-    --absent: #EF4B5F;
-    --half: #EBA21F;
+    --present: #00be20;
+    --absent: #dd001a;
+    --half: #ebc61f;
     --weekoff: #8794B2;
     --unmarked: #A9A29C;
     --late: var(--half);
@@ -10179,7 +10328,8 @@ tbody tr:nth-child(even):hover,
 }
 
 .about-toc-links button:hover:not(.about-toc-active) {
-    background: transparent !important;
+    background: #e3e3e3 !important;
+    color: #242424 !important;
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -10394,29 +10544,27 @@ tbody tr:nth-child(even):hover,
 .attendance-chart-absent .recharts-rectangle,
 .attendance-chart-half .recharts-rectangle,
 .attendance-chart-weekoff .recharts-rectangle {
-    transition: filter 150ms ease, transform 150ms ease;
-    transform-box: fill-box;
-    transform-origin: center;
+    transition: opacity 150ms ease;
 }
 
 .attendance-status-segment.attendance-status-a,
 .attendance-chart-absent .recharts-rectangle {
-    filter: drop-shadow(0 0 var(--chart-status-glow-size) var(--glow-absent)) drop-shadow(0 0 4px var(--chart-inner-glow));
+    filter: none;
 }
 
 .attendance-status-segment.attendance-status-hd,
 .attendance-chart-half .recharts-rectangle {
-    filter: drop-shadow(0 0 var(--chart-status-glow-size) var(--glow-half)) drop-shadow(0 0 4px var(--chart-inner-glow));
+    filter: none;
 }
 
 .attendance-status-segment.attendance-status-p,
 .attendance-chart-present .recharts-rectangle {
-    filter: drop-shadow(0 0 var(--chart-status-glow-size) var(--glow-present)) drop-shadow(0 0 4px var(--chart-inner-glow));
+    filter: none;
 }
 
 .attendance-status-segment.attendance-status-wo,
 .attendance-chart-weekoff .recharts-rectangle {
-    filter: drop-shadow(0 0 var(--chart-status-glow-size) var(--glow-weekoff)) drop-shadow(0 0 4px var(--chart-inner-glow));
+    filter: none;
 }
 
 .attendance-status-segment:hover,
@@ -10424,45 +10572,45 @@ tbody tr:nth-child(even):hover,
 .attendance-chart-absent .recharts-rectangle:hover,
 .attendance-chart-half .recharts-rectangle:hover,
 .attendance-chart-weekoff .recharts-rectangle:hover {
-    filter: drop-shadow(0 0 13px var(--glow-present));
-    transform: scale(1.03);
+    opacity: 0.88;
 }
 
 .attendance-status-segment.attendance-status-a:hover {
-    filter: drop-shadow(0 0 13px var(--glow-absent));
+    opacity: 0.88;
 }
 
 .attendance-status-segment.attendance-status-hd:hover {
-    filter: drop-shadow(0 0 13px var(--glow-half));
+    opacity: 0.88;
 }
 
 .attendance-status-segment.attendance-status-p:hover {
-    filter: drop-shadow(0 0 13px var(--glow-present));
+    opacity: 0.88;
 }
 
 .attendance-status-segment.attendance-status-wo:hover {
-    filter: drop-shadow(0 0 13px var(--glow-weekoff));
+    opacity: 0.88;
 }
 
 .attendance-chart-absent .recharts-rectangle:hover {
-    filter: drop-shadow(0 0 13px var(--glow-absent));
+    opacity: 0.88;
 }
 
 .attendance-chart-half .recharts-rectangle:hover {
-    filter: drop-shadow(0 0 13px var(--glow-half));
+    opacity: 0.88;
 }
 
 .attendance-chart-weekoff .recharts-rectangle:hover {
-    filter: drop-shadow(0 0 13px var(--glow-weekoff));
+    opacity: 0.88;
 }
 
 .dashboard-attendance-trend {
-    animation: attendance-chart-enter 600ms ease-out both;
+    contain: layout paint;
+    animation: attendance-chart-enter 450ms ease-out both;
 }
 
 .dashboard-trend-line,
 .dashboard-trend-point {
-    filter: drop-shadow(0 0 var(--chart-status-glow-size) var(--glow-present));
+    filter: none;
 }
 
 .dashboard-trend-point {

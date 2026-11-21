@@ -64,7 +64,7 @@ export function AttendanceStatusChart({
                 innerRadius="52%"
                 outerRadius="76%"
                 paddingAngle={3}
-                animationDuration={600}
+                animationDuration={450}
                 animationEasing="ease-out"
               >
                 {data.map((item) => (
@@ -227,7 +227,7 @@ export function AttendanceTrendChart({
                 fill="var(--absent)"
                 stroke="var(--cream-light)"
                 strokeWidth={2}
-                animationDuration={600}
+                animationDuration={450}
                 animationEasing="ease-out"
               />
               <Bar
@@ -238,7 +238,7 @@ export function AttendanceTrendChart({
                 fill="var(--half)"
                 stroke="var(--cream-light)"
                 strokeWidth={2}
-                animationDuration={600}
+                animationDuration={450}
                 animationEasing="ease-out"
               />
               <Bar
@@ -249,7 +249,7 @@ export function AttendanceTrendChart({
                 fill="var(--present)"
                 stroke="var(--cream-light)"
                 strokeWidth={2}
-                animationDuration={600}
+                animationDuration={450}
                 animationEasing="ease-out"
               />
               <Bar
@@ -260,7 +260,7 @@ export function AttendanceTrendChart({
                 fill="var(--weekoff)"
                 stroke="var(--cream-light)"
                 strokeWidth={2}
-                animationDuration={600}
+                animationDuration={450}
                 animationEasing="ease-out"
               />
             </BarChart>

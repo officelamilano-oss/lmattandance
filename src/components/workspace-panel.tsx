@@ -3970,59 +3970,92 @@
                 ];
                 }),
                 ...ungeneratedPayrollEmployees.map((employee) => [
-                    <div key={employee._id}>
-                      <strong>{employee.fullName}</strong>
+                  <div key={employee._id}>
+                    <strong>{employee.fullName}</strong>
+                    <span className="sub-cell">
+                      {employee.employeeCode} · {employee.designation} ·{" "}
+                      {employee.outletCode}
+                    </span>
+                    <span className="sub-cell">{employee.mobile || "-"}</span>
+                    {employee.suggestedPeriodEnd && (
                       <span className="sub-cell">
-                        {employee.employeeCode} · {employee.designation} ·{" "}
-                        {employee.outletCode}
+                        Ready through {employee.suggestedPeriodEnd}
                       </span>
-                      <span className="sub-cell">
-                        {employee.mobile || "-"}
-                      </span>
-                      {employee.suggestedPeriodEnd && (
-                        <span className="sub-cell">
-                          Ready through {employee.suggestedPeriodEnd}
-                        </span>
-                      )}
-
-                    </div>,
-                    currency(employee.monthlyBaseSalary),
+                    )}
+                  </div>,
+                  currency(employee.monthlyBaseSalary),
+                  "-",
+                  `${employee.attendance.P} / ${employee.attendance.A} / ${employee.attendance.HD} / ${employee.attendance.WO}`,
+                  employee.attendance.P +
+                    employee.attendance.A +
+                    employee.attendance.HD +
+                    employee.attendance.WO,
+                  employee.liveNotMarkedDays ??
+                    employee.estimatedCalculation?.notMarkedDays ??
                     "-",
-                    `${employee.attendance.P} / ${employee.attendance.A} / ${employee.attendance.HD} / ${employee.attendance.WO}`,
-                    employee.attendance.P +
-                      employee.attendance.A +
-                      employee.attendance.HD +
-                      employee.attendance.WO,
-                    "-",
-                    currency(employee.approvedAdvanceTotal),
-                    currency(employee.estimatedUniformDeduction ?? 0),
-                    "-",
-                    "-",
-                    "-",
-                    "-",
-                    employee.outstandingLoanTotal > 0
-                      ? currency(employee.outstandingLoanTotal)
-                      : "-",
-                    "-",
-                    currency(0),
-                    currency(employee.estimatedNetPayable ?? 0),
-                    <span key="status" className="badge badge-muted">
-                      Not generated
-                    </span>,
-                    user.permissions.includes("salary.generate") &&
-                    employee.suggestedPeriodEnd &&
-                    !employee.hasLegacyPayroll ? (
-                      <button
-                        key="generate"
-                        className="button button-small"
-                        disabled={busy}
-                        onClick={() => setSalaryGenerateEmployee(employee)}
-                      >
-                        <Plus size={14} /> Generate
-                      </button>
-                    ) : (
-                      "—"
-                    ),
+                  employee.estimatedCalculation?.allowedWeekOff ?? 3,
+                  employee.estimatedCalculation?.totalEquivalentDays ?? "-",
+                  employee.estimatedCalculation?.chargeableDays ?? "-",
+                  employee.estimatedCalculation
+                    ? currency(employee.estimatedCalculation.attendanceDeduction)
+                    : "-",
+                  employee.estimatedCalculation
+                    ? currency(employee.estimatedCalculation.notMarkedDeduction)
+                    : "-",
+                  employee.estimatedCalculation
+                    ? `${employee.estimatedCalculation.allowanceConsumed} of ${employee.estimatedCalculation.allowedWeekOff}`
+                    : "-",
+                  employee.estimatedCalculation
+                    ? currency(employee.estimatedCalculation.grossEarnings)
+                    : "-",
+                  currency(
+                    employee.estimatedCalculation?.advances ??
+                      employee.approvedAdvanceTotal,
+                  ),
+                  currency(
+                    employee.estimatedCalculation?.uniformDeductions ??
+                      employee.estimatedUniformDeduction ??
+                      0,
+                  ),
+                  employee.estimatedCalculation
+                    ? currency(employee.estimatedCalculation.esi)
+                    : "-",
+                  employee.estimatedCalculation
+                    ? currency(employee.estimatedCalculation.employerPf)
+                    : "-",
+                  employee.estimatedCalculation
+                    ? currency(employee.estimatedCalculation.employeePf)
+                    : "-",
+                  "-",
+                  employee.outstandingLoanTotal > 0
+                    ? currency(employee.outstandingLoanTotal)
+                    : "-",
+                  employee.estimatedCalculation
+                    ? currency(employee.estimatedCalculation.loanDeduction)
+                    : "-",
+                  "-",
+                  currency(
+                    employee.estimatedCalculation?.netPayable ??
+                      employee.estimatedNetPayable ??
+                      0,
+                  ),
+                  <span key="status" className="badge badge-muted">
+                    Not generated
+                  </span>,
+                  user.permissions.includes("salary.generate") &&
+                  employee.suggestedPeriodEnd &&
+                  !employee.hasLegacyPayroll ? (
+                    <button
+                      key="generate"
+                      className="button button-small"
+                      disabled={busy}
+                      onClick={() => setSalaryGenerateEmployee(employee)}
+                    >
+                      <Plus size={14} /> Generate
+                    </button>
+                  ) : (
+                    "—"
+                  ),
                   ]),
               ]}                                                                                                        
               empty="No eligible employees or payroll records for this month."
@@ -6059,6 +6092,16 @@
     onPageSizeChange?: (pageSize: number | "all") => void;
     paginateRows?: boolean;
   }) {
+    if (process.env.NODE_ENV !== "production") {
+      rows.forEach((row, index) => {
+        if (row.length !== headers.length) {
+          console.warn(
+            `DataTable row ${index} has ${row.length} cells, expected ${headers.length}.`,
+          );
+        }
+      });
+    }
+
     const pageCount =
       total === undefined || pageSize === "all"
         ? 1
@@ -8086,13 +8129,20 @@
               max="31"
               defaultValue={String(settings.paidAbsences ?? 0)}
             />
-            <label className="field">
-              <span>Count today&apos;s missing attendance as not marked</span>
-              <input
-                type="checkbox"
-                name="countTodayAsNotMarked"
-                defaultChecked={settings.countTodayAsNotMarked ?? true}
-              />
+            <label className="payroll-not-marked-toggle">
+              <span className="payroll-not-marked-copy">
+                <strong>Today&apos;s missing attendance</strong>
+                <small>Count as not marked in payroll</small>
+              </span>
+              <span className="payroll-switch">
+                <input
+                  type="checkbox"
+                  name="countTodayAsNotMarked"
+                  defaultChecked={settings.countTodayAsNotMarked ?? true}
+                  disabled={user.role !== "MAIN_ADMIN"}
+                />
+                <i aria-hidden="true" />
+              </span>
             </label>
           </div>
           <p className="policy-note">

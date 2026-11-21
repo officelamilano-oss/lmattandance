@@ -323,7 +323,7 @@ export async function GET(request: Request) {
       }
       return { start, end };
     };
-    const estimateNetPayable = async (
+    const estimatePayrollCalculation = async (
       employee: EmployeeDocument,
       periodStart: string,
       periodEnd: string,
@@ -404,12 +404,19 @@ export async function GET(request: Request) {
         esiEnabled: employee.esiEnabled ?? false,
         esiPercent: employee.esiPercent ?? 0.75,
       });
-      return calculation.netPayable;
+      return calculation;
     };
     const payrollEmployees = await Promise.all(salaryEmployees.map(async (employee) => {
       const employeeId = employee._id.toHexString();
       const employeeRecords = recordsByEmployee.get(employeeId) ?? [];
       const period = getEmployeePeriod(employee);
+      const liveNotMarkedDays = employeeRecords.length
+        ? undefined
+        : await getNotMarkedDays(employee, month, monthEnd, monthStart);
+      const estimatedCalculation =
+        !employeeRecords.length && period.start && period.end
+          ? await estimatePayrollCalculation(employee, period.start, period.end)
+          : undefined;
       return {
         _id: employeeId,
         outletId: employee.outletId.toHexString(),
@@ -429,10 +436,9 @@ export async function GET(request: Request) {
         latestPayrollRecordId: employeeRecords.at(-1)?._id.toHexString(),
         nextPeriodStart: period.start,
         suggestedPeriodEnd: period.end,
-        estimatedNetPayable:
-          !employeeRecords.length && period.start && period.end
-            ? await estimateNetPayable(employee, period.start, period.end)
-            : undefined,
+        liveNotMarkedDays,
+        estimatedCalculation,
+        estimatedNetPayable: estimatedCalculation?.netPayable,
         estimatedUniformDeduction: (uniformByEmployee.get(employeeId) ?? [])
           .reduce((sum, deduction) => sum + deduction.amount, 0),
         approvedAdvanceTotal: advanceByEmployee.get(employeeId) ?? 0,

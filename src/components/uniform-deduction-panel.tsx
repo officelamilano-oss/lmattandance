@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { Download, LoaderCircle, Printer, Search, Trash2 } from "lucide-react";
+import { Download, LoaderCircle, Printer, Search, Trash2, X } from "lucide-react";
 import { UNIFORM_ITEMS, UNIFORM_ITEM_LABELS } from "@/lib/uniform-deductions";
 import type { UniformDeductionStatus, UniformItemKey } from "@/lib/models";
 import { clientRequestCache } from "@/lib/client-request-cache";
@@ -92,7 +92,17 @@ export function UniformDeductionPanel({
   const [success, setSuccess] = useState("");
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
+  const [editRow, setEditRow] = useState<DeductionRow | null>(null);
   const pageSize = 25;
+
+  useEffect(() => {
+    if (!editRow) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setEditRow(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [editRow]);
 
   const loadRows = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -333,6 +343,7 @@ export function UniformDeductionPanel({
           ? "Uniform deduction deleted."
           : "Uniform deduction updated.",
       );
+      setEditRow(null);
       await loadRows();
     } catch (caught) {
       setError(
@@ -685,16 +696,13 @@ export function UniformDeductionPanel({
                   <td>{row.remark || "—"}</td>
                   <td className="uniform-action-column">
                     {row.status === "SCHEDULED" && (
-                      <details className="uniform-row-actions">
-                        <summary>Edit</summary>
-                        <form onSubmit={(event) => void updateDeduction(row._id, event)}>
-                          <label className="field"><span>Amount (INR)</span><input name="amount" type="number" min="0" max="10000000" step="0.01" defaultValue={row.amount} /></label>
-                          <label className="field"><span>Deduction month</span><input name="deductionMonth" type="month" defaultValue={row.deductionMonth} /></label>
-                          <label className="field"><span>Remark</span><input name="remark" maxLength={500} defaultValue={row.remark ?? ""} /></label>
-                          <button type="submit" className="button button-primary button-small">Save</button>
-                          <button type="button" className="button button-small" onClick={() => void mutate(`/api/uniform-deductions/${row._id}`, "PATCH", { status: "CANCELLED" })}>Cancel deduction</button>
-                        </form>
-                      </details>
+                      <button
+                        type="button"
+                        className="button button-small uniform-edit-button"
+                        onClick={() => setEditRow(row)}
+                      >
+                        Edit
+                      </button>
                     )}
                     {row.status !== "APPLIED" && (
                       <button
@@ -725,6 +733,63 @@ export function UniformDeductionPanel({
           </div>
         </div>
       </section>
+      {editRow && (
+        <div
+          className="advance-modal-backdrop uniform-edit-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setEditRow(null);
+          }}
+        >
+          <section
+            className="advance-modal uniform-edit-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="uniform-edit-title"
+          >
+            <header className="advance-modal-heading">
+              <div>
+                <h2 id="uniform-edit-title">Edit uniform deduction</h2>
+                <p>{editRow.employeeName} · {UNIFORM_ITEM_LABELS[editRow.item]}</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label="Close edit dialog"
+                onClick={() => setEditRow(null)}
+              >
+                <X size={18} />
+              </button>
+            </header>
+            <form
+              className="advance-edit-form uniform-edit-form"
+              onSubmit={(event) => void updateDeduction(editRow._id, event)}
+            >
+              <label className="field">
+                <span>Amount (INR)</span>
+                <input name="amount" type="number" min="0" max="10000000" step="0.01" defaultValue={editRow.amount} />
+              </label>
+              <label className="field">
+                <span>Deduction month</span>
+                <input name="deductionMonth" type="month" defaultValue={editRow.deductionMonth} />
+              </label>
+              <label className="field">
+                <span>Remark</span>
+                <input name="remark" maxLength={500} defaultValue={editRow.remark ?? ""} />
+              </label>
+              <div className="uniform-edit-actions">
+                <button type="submit" className="button button-primary">Save</button>
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={() => void mutate(`/api/uniform-deductions/${editRow._id}`, "PATCH", { status: "CANCELLED" })}
+                >
+                  Cancel deduction
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
