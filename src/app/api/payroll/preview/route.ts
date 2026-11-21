@@ -7,7 +7,9 @@ import { apiError } from "@/lib/http";
 import {
   calculateLoanInstallment,
   calculatePayroll,
+  getLatestAttendanceEntry,
 } from "@/lib/payroll/calculate";
+import { getNotMarkedDays } from "@/lib/payroll/not-marked-days";
 import { getMonthDates } from "@/lib/payroll/dates";
 import type {
   AdvanceDocument,
@@ -124,6 +126,7 @@ export async function GET(request: Request) {
         { error: "No eligible employment dates are included in this period." },
         { status: 400 },
       );
+      
     const attendanceDays = await db
       .collection<AttendanceDayDocument>("attendance")
       .find({
@@ -137,17 +140,15 @@ export async function GET(request: Request) {
     );
     const counts = { P: 0, A: 0, HD: 0, WO: 0 };
     for (const date of applicableDates) {
-      const entry = attendanceByDate
-        .get(date)
-        ?.entries.find((item) => item.employeeId.equals(employee._id));
-      if (!entry)
-        return NextResponse.json(
-          {
-            error: `Submitted attendance is required for ${date} before payroll can be generated.`,
-          },
-          { status: 409 },
-        );
-      counts[entry.status] += 1;
+      const attendanceDay = attendanceByDate.get(date);
+      const entry = attendanceDay
+        ? getLatestAttendanceEntry(
+            attendanceDay.entries,
+            employee._id.toHexString(),
+            { outletId: outletId.toHexString(), date },
+          )
+        : undefined;
+      if (entry) counts[entry.status] += 1;
     }
     const settings = await db
       .collection<SalarySettings & { _id: string }>("settings")
@@ -236,6 +237,12 @@ export async function GET(request: Request) {
       halfDays: counts.HD,
       weekOffs: counts.WO,
       paidAbsences: rules.paidAbsences,
+      notMarkedDays: await getNotMarkedDays(
+        employee,
+        input.month,
+        input.periodEnd,
+        input.periodStart,
+      ),
       settleMonthlySalary: true,
       salaryEntitlementDays:
         input.periodStart === monthStart &&
@@ -267,6 +274,17 @@ export async function GET(request: Request) {
       counts,
       amounts: {
         grossEarnings: calculation.grossEarnings,
+        attendanceDeduction: calculation.attendanceDeduction,
+        notMarkedDays: calculation.notMarkedDays,
+        notMarkedDeduction: calculation.notMarkedDeduction,
+        totalEquivalentDays: calculation.totalEquivalentDays,
+        chargeableDays: calculation.chargeableDays,
+        allowedWeekOff: calculation.allowedWeekOff,
+        allowanceConsumed: calculation.allowanceConsumed,
+        allowanceRemaining: calculation.allowanceRemaining,
+        totalDeductions: calculation.totalDeductions,
+        netPayable: calculation.netPayable,
+        shortfall: calculation.shortfall,
         advances: advanceTotal,
         esi: calculation.esi,
         employeePf: calculation.employeePf,

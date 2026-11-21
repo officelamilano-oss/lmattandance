@@ -20,14 +20,18 @@ On the dashboard, **Attendance Summary** shows the day's Present, Absent, Half-d
 
 - **Days P / A / HD / WO** lists Present, Absent, Half-day, and Week-off attendance counts.
 - **Days filled** is the total of those four counts. It indicates how many attendance entries are included for the employee; it is not necessarily the number of calendar days in the month.
-- Full-month salary uses the existing 30-day divisor. Present and Week-off days count as paid units, half-days count as half a paid unit, unpaid absences reduce the payable units, and unmarked or unsubmitted dates are never inferred as absences.
-- **Gross** is earnings for the selected payroll period before deductions. It is calculated from the employee's monthly base salary and attendance, so a part-month payment is normally less than the full monthly base salary.
+- Salary uses a fixed 30-day divisor. Gross earnings are the daily salary multiplied by the employee's active calendar days in the selected payroll period (capped at the monthly salary).
+- Absent, Half-day, and Week-off equivalent days are combined against one allowance of 3 days per month. Only equivalent days beyond that allowance create an attendance deduction.
+- Past active dates without a marked employee attendance entry are counted separately as **Not Marked** and deducted at the full daily salary. Dates before joining, after leaving, in the future, and today by default are excluded. The Main Admin can configure whether today's unmarked attendance is counted.
+- Not Marked dates are not included in the 3-day allowance and are not classified as Absent. Attendance entries are recalculated from their latest valid correction; duplicate employee/date entries are flagged in server logs.
+- **Gross** is earnings for the selected payroll period before deductions. It is based on active calendar days, including partial periods, rather than only the statuses that were marked.
 - The employee details also show **Monthly base salary**, which is the fixed salary saved in the employee profile. The base is not the same as the period's gross earnings.
 - **Advances** contains only approved advances included in the generated payroll.
 - **Employee ESI** and **Employee PF (deduction)** are employee contributions deducted from net pay when enabled for the employee.
 - **Employer PF (tracked)** is tracked separately and is not deducted from the employee's net pay.
 - **Loan deduction** is the applicable monthly installment, capped at the opening balance and applied no earlier than the loan's deduction start month. Draft payroll records schedule but do not post repayments. Approval posts the installment once and records its opening balance, actual deduction, closing balance, and payroll reference. A skipped installment contributes zero and is not carried forward. Paused and completed loans are excluded.
 - **Net payable** is the resulting take-home amount.
+- The calculation breakdown includes Not Marked days, the 3-day allowance, equivalent and chargeable days, attendance/not-marked deductions, total deductions, and any shortfall when net pay is capped at zero.
 - **Not generated** means the employee is eligible to appear for the selected month, but no payroll record has been created for that employee and month yet. Financial payroll columns are blank until generation.
 
 ## What Generate does
@@ -61,4 +65,4 @@ Click **CSV** to download the currently displayed month and outlet scope. The fi
 
 CSV is a plain-text format and cannot retain cell colors or table formatting. Use **Excel** for a formatted workbook with a dark-highlighted header row and filterable table data.
 
-The CSV may contain confidential salary information. Store and share it only with authorized people.
+The CSV includes the allowance and attendance/not-marked deduction breakdown. The CSV may contain confidential salary information. Store and share it only with authorized people.

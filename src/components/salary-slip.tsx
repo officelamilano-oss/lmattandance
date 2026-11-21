@@ -59,6 +59,7 @@ export function SalarySlip({
           <div><span>Employee ID</span><strong>{employeeCode}</strong></div>
           <div><span>Monthly salary</span><strong>{currency(monthlySalary)}</strong></div>
           <div><span>Payable days</span><strong>{value("payableDayUnits")}</strong></div>
+          <div><span>Not marked</span><strong>{value("notMarkedDays")}</strong></div>
         </section>
         <section className="salary-slip-columns">
           <div>
@@ -70,6 +71,17 @@ export function SalarySlip({
           </div>
           <div>
             <h2>Deductions</h2>
+            <SlipRow label="Allowed week off" amount={value("allowedWeekOff")} />
+            <SlipRow label="Total equivalent days" amount={value("totalEquivalentDays")} />
+            <SlipRow label="Chargeable days" amount={value("chargeableDays")} />
+            <SlipRow label="Attendance deduction" amount={value("attendanceDeduction")} />
+            <SlipRow label="Not marked deduction" amount={value("notMarkedDeduction")} />
+            <div className="salary-slip-row">
+              <span>Allowance consumed</span>
+              <strong>
+                {value("allowanceConsumed")} of {value("allowedWeekOff")}
+              </strong>
+            </div>
             <SlipRow label="Advances" amount={value("advances")} />
             <SlipRow label="ESI" amount={value("esi")} />
             <SlipRow label="PF deduction" amount={value("employeePf")} />
@@ -83,6 +95,7 @@ export function SalarySlip({
               />
             ))}
             <SlipRow label="Uniform deduction total" amount={value("uniformDeductions")} total />
+            <SlipRow label="Total deductions" amount={value("totalDeductions")} total />
             <SlipRow label="Employer PF (tracked)" amount={value("employerPf")} />
           </div>
         </section>
@@ -90,6 +103,12 @@ export function SalarySlip({
           <span>Net payable</span>
           <strong>{currency(value("netPayable"))}</strong>
         </footer>
+        {value("shortfall") > 0 && (
+          <p className="salary-slip-note">
+            Payable is capped at zero. Shortfall carried:{" "}
+            {currency(value("shortfall"))}.
+          </p>
+        )}
         <p className="salary-slip-note">This is a system-generated payroll statement.</p>
       </article>
     </main>

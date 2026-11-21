@@ -293,6 +293,8 @@ export interface SalarySettings {
   defaultSalaryMethod: SalaryMethod;
   workingDaysDivisor: number;
   paidAbsences: number;
+  countTodayAsNotMarked?: boolean;
+  declaredOffDays?: string[];
   currency: "INR";
   advanceDeductionPolicy: "UNPAID_ONLY";
 }

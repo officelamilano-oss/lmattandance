@@ -10,7 +10,10 @@ import type {
   LoanInstallmentDocument,
   SalaryRecordDocument,
 } from "@/lib/models";
-import { calculateLoanInstallment } from "@/lib/payroll/calculate";
+import {
+  calculateLoanInstallment,
+  calculateNetPayable,
+} from "@/lib/payroll/calculate";
 import { z } from "zod";
 
 const actionSchema = z.discriminatedUnion("action", [
@@ -552,17 +555,3 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     return NextResponse.json({ ok: true });
   } catch (error) { return apiError(error); }
 }
-
-  function calculateNetPayable(calculation: Record<string, number | string>) {
-    return new Decimal(Number(calculation.grossEarnings ?? 0))
-      .plus(Number(calculation.overtime ?? 0))
-      .plus(Number(calculation.allowances ?? 0))
-      .minus(Number(calculation.advances ?? 0))
-      .minus(Number(calculation.loanDeduction ?? 0))
-      .minus(Number(calculation.otherDeductions ?? 0))
-      .minus(Number(calculation.uniformDeductions ?? 0))
-      .minus(Number(calculation.employeePf ?? 0))
-      .minus(Number(calculation.esi ?? 0))
-      .toDecimalPlaces(2)
-      .toNumber();
-  }

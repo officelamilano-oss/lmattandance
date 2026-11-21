@@ -10,6 +10,8 @@ import {
 import {
   calculateLoanInstallment,
   calculatePayroll,
+  countNotMarkedDays,
+  getLatestAttendanceEntries,
 } from "../src/lib/payroll/calculate.ts";
 import { getIndiaDate, getIndiaMonth, getMonthDates } from "../src/lib/payroll/dates.ts";
 import { findExistingPayrollEmployees } from "../src/lib/payroll/duplicate.ts";
@@ -33,6 +35,7 @@ import {
 const base = {
   monthlyBaseSalary: 30000,
   salaryMethod: "CALENDAR_DAYS",
+  salaryEntitlementDays: 26,
   workingDaysDivisor: 26,
   presentDays: 25,
   absentDays: 0,
@@ -43,10 +46,152 @@ const base = {
   overtime: 0,
   allowances: 0,
   otherDeductions: 0,
+  notMarkedDays: 0,
   pfEnabled: false,
   employeePfPercent: 12,
   employerPfPercent: 12,
 };
+
+test("combined three-day allowance and not-marked deductions follow the unified rules", () => {
+  const cases = [
+    [2, 2, 0, 0, 3, 0, 0, 0],
+    [1, 4, 0, 0, 3, 0, 0, 0],
+    [3, 6, 0, 0, 6, 3, 1800, 0],
+    [2, 0, 1, 0, 3, 0, 0, 0],
+    [0, 0, 3, 0, 3, 0, 0, 0],
+    [0, 1, 2, 0, 2.5, 0, 0, 0],
+    [0, 1, 3, 0, 3.5, 0.5, 300, 0],
+    [3, 0, 1, 0, 4, 1, 600, 0],
+    [3, 0, 0, 2, 3, 0, 0, 1200],
+    [2, 3, 1, 2, 4.5, 1.5, 900, 1200],
+  ];
+
+  for (const [
+    weekOffs,
+    halfDays,
+    absentDays,
+    notMarkedDays,
+    totalEquivalent,
+    chargeableDays,
+    attendanceDeduction,
+    notMarkedDeduction,
+  ] of cases) {
+    const result = calculatePayroll({
+      ...base,
+      monthlyBaseSalary: 18000,
+      presentDays: 20,
+      weekOffs,
+      halfDays,
+      absentDays,
+      notMarkedDays,
+      settleMonthlySalary: true,
+      salaryEntitlementDays: 30,
+    });
+    assert.equal(result.allowedWeekOff, 3);
+    assert.equal(result.allowanceConsumed, Math.min(3, totalEquivalent));
+    assert.equal(result.allowanceRemaining, 3 - Math.min(3, totalEquivalent));
+    assert.equal(result.totalEquivalentDays, totalEquivalent);
+    assert.equal(result.chargeableDays, chargeableDays);
+    assert.equal(result.attendanceDeduction, attendanceDeduction);
+    assert.equal(result.notMarkedDeduction, notMarkedDeduction);
+  }
+});
+
+test("not-marked counting excludes future, pre-joining, post-leaving, holiday, and marked dates", () => {
+  assert.equal(countNotMarkedDays({
+    dates: ["2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13"],
+    markedStatuses: new Map([["2026-10-10", "P"]]),
+    dateOfJoining: "2026-10-10",
+    cutoffDate: "2026-10-12",
+    today: "2026-10-12",
+    holidays: ["2026-10-11"],
+  }), 0);
+
+  assert.equal(countNotMarkedDays({
+    dates: ["2026-10-10", "2026-10-11"],
+    markedStatuses: new Map([["2026-10-10", "P"]]),
+    deactivatedAt: "2026-10-10",
+    cutoffDate: "2026-10-11",
+    today: "2026-10-11",
+  }), 0);
+
+  assert.equal(countNotMarkedDays({
+    dates: ["2026-10-12"],
+    markedStatuses: new Map(),
+    cutoffDate: "2026-10-12",
+    today: "2026-10-12",
+    countTodayAsNotMarked: true,
+  }), 1);
+});
+
+test("payroll cases A, B, C, and D use calendar gross and separate not-marked deductions", () => {
+  const caseA = calculatePayroll({
+    ...base,
+    monthlyBaseSalary: 18000,
+    presentDays: 16,
+    halfDays: 2,
+    weekOffs: 1,
+    salaryEntitlementDays: 19,
+    settleMonthlySalary: false,
+    notMarkedDays: 0,
+  });
+  assert.equal(caseA.grossEarnings, 11400);
+  assert.equal(caseA.attendanceDeduction, 0);
+  assert.equal(caseA.netPayable, 11400);
+
+  const caseB = calculatePayroll({
+    ...base,
+    monthlyBaseSalary: 18000,
+    presentDays: 18,
+    halfDays: 2,
+    salaryEntitlementDays: 21,
+    settleMonthlySalary: false,
+    notMarkedDays: 1,
+  });
+  assert.equal(caseB.grossEarnings, 12600);
+  assert.equal(caseB.notMarkedDeduction, 600);
+  assert.equal(caseB.netPayable, 12000);
+
+  const caseC = calculatePayroll({
+    ...base,
+    monthlyBaseSalary: 18000,
+    presentDays: 11,
+    salaryEntitlementDays: 11,
+    settleMonthlySalary: false,
+    notMarkedDays: 0,
+  });
+  assert.equal(caseC.grossEarnings, 6600);
+
+  const caseD = calculatePayroll({
+    ...base,
+    monthlyBaseSalary: 18000,
+    presentDays: 19,
+    halfDays: 2,
+    salaryEntitlementDays: 21,
+    settleMonthlySalary: false,
+    notMarkedDays: 0,
+  });
+  assert.equal(caseD.netPayable - caseB.netPayable, 600);
+});
+
+test("latest duplicate attendance status wins for an employee and date", () => {
+  const employeeId = new ObjectId();
+  const entries = [
+    {
+      employeeId,
+      status: "A",
+      updatedAt: new Date("2026-11-20T10:00:00Z"),
+      updatedBy: new ObjectId(),
+    },
+    {
+      employeeId,
+      status: "P",
+      updatedAt: new Date("2026-11-20T11:00:00Z"),
+      updatedBy: new ObjectId(),
+    },
+  ];
+  assert.equal(getLatestAttendanceEntries(entries)[0].status, "P");
+});
 
 test("attendance updates accept clear requests for saved draft entries", () => {
   const parsed = attendanceSchema.parse({
@@ -172,6 +317,7 @@ test("30-day salary divisor pays every present and week-off day", () => {
     absentDays: 2,
     halfDays: 0,
     weekOffs: 3,
+    salaryEntitlementDays: 29,
   });
   assert.equal(result.dailyRate, 1033.33);
   assert.equal(result.payableDayUnits, 29);
@@ -227,8 +373,10 @@ test("each absence deducts one 30th of monthly salary and each half-day deducts 
   });
   assert.equal(result.dailyRate, 500);
   assert.equal(result.halfDayDeduction, 250);
-  assert.equal(result.payableDayUnits, 28.5);
-  assert.equal(result.grossEarnings, 14250);
+  assert.equal(result.payableDayUnits, 30);
+  assert.equal(result.grossEarnings, 15000);
+  assert.equal(result.attendanceDeduction, 0);
+  assert.equal(result.netPayable, 15000);
 });
 
 test("half days earn half a day using decimal-safe INR rounding", () => {
@@ -277,8 +425,10 @@ test("full-month settlement deducts an absence in a 31-day month", () => {
     settleMonthlySalary: true,
     salaryEntitlementDays: 30,
   });
-  assert.equal(result.payableDayUnits, 29);
-  assert.equal(result.grossEarnings, 29000);
+  assert.equal(result.payableDayUnits, 30);
+  assert.equal(result.grossEarnings, 30000);
+  assert.equal(result.attendanceDeduction, 1000);
+  assert.equal(result.netPayable, 29000);
 });
 
 test("full-month salary is prorated for an employee who joined partway through the month", () => {
@@ -294,8 +444,8 @@ test("full-month salary is prorated for an employee who joined partway through t
     salaryEntitlementDays: 14,
   });
   assert.equal(result.dailyRate, 666.67);
-  assert.equal(result.payableDayUnits, 13);
-  assert.equal(result.grossEarnings, 8666.67);
+  assert.equal(result.payableDayUnits, 14);
+  assert.equal(result.grossEarnings, 9333.33);
 });
 
 test("full-month week-offs cannot raise base earnings above monthly salary", () => {
@@ -307,13 +457,14 @@ test("full-month week-offs cannot raise base earnings above monthly salary", () 
     halfDays: 0,
     weekOffs: 3,
     settleMonthlySalary: true,
+    salaryEntitlementDays: 30,
   });
   assert.equal(result.payableDayUnits, 30);
   assert.equal(result.grossEarnings, 30000);
 });
 
-test("partial-month calculations accrue only submitted paid attendance units", () => {
-  const result = calculatePayroll({ ...base, salaryMethod: "WORKING_DAYS_26", daysInMonth: 30, presentDays: 20, halfDays: 0, weekOffs: 5 });
+test("partial-month gross is based on active calendar days, not marked attendance units", () => {
+  const result = calculatePayroll({ ...base, salaryMethod: "WORKING_DAYS_26", daysInMonth: 30, presentDays: 20, halfDays: 0, weekOffs: 5, salaryEntitlementDays: 25 });
   assert.equal(result.dailyRate, 1000);
   assert.equal(result.payableDayUnits, 25);
   assert.equal(result.grossEarnings, 25000);
@@ -329,6 +480,7 @@ test("an incomplete month does not settle full salary or infer absences", () => 
     halfDays: 0,
     weekOffs: 2,
     settleMonthlySalary: false,
+    salaryEntitlementDays: 27,
   });
   assert.equal(result.payableDayUnits, 27);
   assert.equal(result.grossEarnings, 18000);
@@ -394,14 +546,14 @@ test("loan repayments and ESI are included in take-home deductions", () => {
 });
 
 test("monthly loan deduction is capped at the remaining loan balance", () => {
-  assert.equal(
-    calculateLoanInstallment([
-      { outstandingAmount: 10000, monthlyDeductionAmount: 1000 },
-      { outstandingAmount: 500, monthlyDeductionAmount: 1000 },
-      { outstandingAmount: 5000 },
-    ]),
-    1500,
-  );
+  const loans = [
+    { outstandingAmount: 10000, monthlyDeductionAmount: 1000 },
+    { outstandingAmount: 500, monthlyDeductionAmount: 1000 },
+    { outstandingAmount: 5000 },
+  ];
+  assert.equal(calculateLoanInstallment(loans), 1500);
+  assert.equal(calculateLoanInstallment(loans), 1500);
+  assert.deepEqual(loans.map((loan) => loan.outstandingAmount), [10000, 500, 5000]);
 });
 
 test("loan installments respect the start month, status, and final balance", () => {
@@ -629,6 +781,7 @@ test("uses the 30-day divisor and rounds half paise upward consistently", () => 
     daysInMonth: 28,
     presentDays: 1,
     halfDays: 0,
+    salaryEntitlementDays: 1,
   });
   assert.equal(result.dailyRate, 33.33);
   assert.equal(result.grossEarnings, 33.33);
@@ -670,6 +823,7 @@ test("uniform deductions reduce net payroll and remain separately itemized", () 
     halfDays: 0,
     weekOffs: 0,
     uniformDeductions: 500,
+    salaryEntitlementDays: 30,
   });
   assert.equal(result.grossEarnings, 30000);
   assert.equal(result.uniformDeductions, 500);

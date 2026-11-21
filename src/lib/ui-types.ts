@@ -251,6 +251,14 @@ export interface EmployeeAttendanceReportRow {
   monthlyBaseSalary?: number;
   payableAmount?: number;
   payableLabel?: string;
+  grossEarnings?: number;
+  notMarkedDays?: number;
+  allowedWeekOff?: number;
+  totalEquivalentDays?: number;
+  chargeableDays?: number;
+  attendanceDeduction?: number;
+  notMarkedDeduction?: number;
+  allowanceConsumed?: number;
   advances?: number;
   esi?: number;
   employeePf?: number;

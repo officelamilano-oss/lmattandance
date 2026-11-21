@@ -9,6 +9,7 @@ import { z } from "zod";
 const settingsSchema = z.object({
   timezone: z.string().min(1).max(80), defaultSalaryMethod: z.enum(["FIXED_30_DAYS", "CALENDAR_DAYS", "WORKING_DAYS_26"]),
   workingDaysDivisor: z.number().int().min(1).max(31), paidAbsences: z.number().int().min(0).max(31),
+  countTodayAsNotMarked: z.boolean().default(true),
   currency: z.literal("INR"), advanceDeductionPolicy: z.literal("UNPAID_ONLY"),
 });
 

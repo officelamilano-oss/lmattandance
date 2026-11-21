@@ -12,7 +12,10 @@ import type {
   UserDocument,
 } from "@/lib/models";
 import { getActor } from "@/lib/permissions";
-import { calculateLoanInstallment } from "@/lib/payroll/calculate";
+import {
+  calculateLoanInstallment,
+  calculateNetPayable,
+} from "@/lib/payroll/calculate";
 import { getIndiaMonth } from "@/lib/payroll/dates";
 import { dateOnlySchema, monthSchema } from "@/lib/validation/common";
 
@@ -314,16 +317,10 @@ export async function POST(
                     ),
                   0,
                 );
-              const previousLoanDeduction = Number(
-                currentPayroll.calculation.loanDeduction ?? 0,
-              );
-              const nextNetPayable = Number(
-                (
-                  Number(currentPayroll.calculation.netPayable ?? 0) +
-                  previousLoanDeduction -
-                  nextLoanDeduction
-                ).toFixed(2),
-              );
+              const nextNetPayable = calculateNetPayable({
+                ...currentPayroll.calculation,
+                loanDeduction: nextLoanDeduction,
+              });
               const loanSnapshots = Array.isArray(
                 currentPayroll.inputSnapshot.loans,
               )
@@ -605,9 +602,10 @@ export async function POST(
           );
           if (deductionAfter < 0)
             throw new Error("PAYROLL_DEDUCTION_CHANGED");
-          const netAfter = Number(
-            (Number(salary.calculation.netPayable ?? 0) + installment.actualDeduction).toFixed(2),
-          );
+          const netAfter = calculateNetPayable({
+            ...salary.calculation,
+            loanDeduction: deductionAfter,
+          });
           const loanSnapshots = Array.isArray(salary.inputSnapshot.loans)
             ? (salary.inputSnapshot.loans as Array<Record<string, unknown>>)
             : [];

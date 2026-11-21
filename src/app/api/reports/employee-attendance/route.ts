@@ -6,7 +6,9 @@
   import {
     calculateLoanInstallment,
     calculatePayroll,
+    getLatestAttendanceEntry,
   } from "@/lib/payroll/calculate";
+  import { getNotMarkedDays } from "@/lib/payroll/not-marked-days";
   import { dateAfter, getMonthDates } from "@/lib/payroll/dates";
   import {
     getUniformReportItems,
@@ -278,7 +280,7 @@
           skippedLoanIdsByEmployeeAndMonth.set(key, skipped);
         }
       }
-      const rows = employees
+      const rows = await Promise.all(employees
         .filter(
           (employee) =>
             (!query.employeeId ||
@@ -286,7 +288,7 @@
             (employee.active ||
               historicalEmployeeIds.has(employee._id.toHexString())),
         )
-        .map((employee) => {
+        .map(async (employee) => {
           const outlet = outletById.get(employee.outletId.toHexString());
           const start = employee.dateOfJoining > query.from
             ? employee.dateOfJoining
@@ -314,9 +316,13 @@
               const day = daysByOutletAndDate.get(
                 `${employee.outletId.toHexString()}:${date}`,
               );
-              const entry = day?.entries.find((item) =>
-                item.employeeId.equals(employee._id),
-              );
+              const entry = day
+                ? getLatestAttendanceEntry(
+                    day.entries,
+                    employee._id.toHexString(),
+                    { outletId: employee.outletId.toHexString(), date },
+                  )
+                : undefined;
               if (!day || !entry) {
                 missingDates.push(date);
                 monthData.complete = false;
@@ -341,6 +347,16 @@
             employeePf: 0,
             employerPf: 0,
             loanDeduction: 0,
+          };
+          const attendanceSalary = {
+            grossEarnings: 0,
+            notMarkedDays: 0,
+            allowedWeekOff: 0,
+            totalEquivalentDays: 0,
+            chargeableDays: 0,
+            attendanceDeduction: 0,
+            notMarkedDeduction: 0,
+            allowanceConsumed: 0,
           };
           const reportCutoff = new Date(`${query.to}T23:59:59.999Z`);
           const employeeLoans = (
@@ -402,18 +418,21 @@
               const completeMonthSelected =
                 query.from <= monthStart && query.to >= monthEnd;
               if (saved && completeMonthSelected) {
-                const uniformIncludedInPayroll = (
-                  saved.inputSnapshot.uniformDeductions ?? []
-                )
-                  .filter((entry) => entry.deductionMonth === month)
-                  .reduce((sum, entry) => sum + entry.amount, 0);
-                payableAmount +=
-                  Number(saved.calculation.netPayable ?? 0) +
-                  uniformIncludedInPayroll;
+                payableAmount += Number(saved.calculation.netPayable ?? 0);
+                attendanceSalary.grossEarnings += Number(
+                  saved.calculation.grossEarnings ?? 0,
+                );
                 salaryDeductions.advances += Number(saved.calculation.advances ?? 0);
                 salaryDeductions.esi += Number(saved.calculation.esi ?? 0);
                 salaryDeductions.employeePf += Number(saved.calculation.employeePf ?? 0);
                 salaryDeductions.employerPf += Number(saved.calculation.employerPf ?? 0);
+                attendanceSalary.notMarkedDays += Number(saved.calculation.notMarkedDays ?? 0);
+                attendanceSalary.allowedWeekOff += Number(saved.calculation.allowedWeekOff ?? 3);
+                attendanceSalary.totalEquivalentDays += Number(saved.calculation.totalEquivalentDays ?? 0);
+                attendanceSalary.chargeableDays += Number(saved.calculation.chargeableDays ?? 0);
+                attendanceSalary.attendanceDeduction += Number(saved.calculation.attendanceDeduction ?? 0);
+                attendanceSalary.notMarkedDeduction += Number(saved.calculation.notMarkedDeduction ?? 0);
+                attendanceSalary.allowanceConsumed += Number(saved.calculation.allowanceConsumed ?? 0);
                 const postedForMonth = loanInstallments.filter(
                   (entry) =>
                     entry.employeeId.equals(employee._id) &&
@@ -460,6 +479,18 @@
                   ),
                 );
               const loanDeduction = calculateLoanInstallment(monthLoans, month);
+              const notMarkedDays = await getNotMarkedDays(
+                employee,
+                month,
+                query.to < monthEnd ? query.to : monthEnd,
+                query.from > monthStart ? query.from : monthStart,
+              );
+              const monthUniformDeduction = (
+                uniformDeductionsByEmployee.get(employee._id.toHexString()) ??
+                []
+              )
+                .filter((entry) => entry.deductionMonth === month)
+                .reduce((sum, entry) => sum + entry.amount, 0);
               const calculation = calculatePayroll({
                 monthlyBaseSalary: employee.monthlyBaseSalary,
                 salaryMethod: "FIXED_30_DAYS",
@@ -470,9 +501,12 @@
                 halfDays: monthData.counts.HD,
                 weekOffs: monthData.counts.WO,
                 paidAbsences: settingsRules.paidAbsences,
+                notMarkedDays,
+                uniformDeductions: monthUniformDeduction,
                 settleMonthlySalary:
                   completeMonthSelected && monthData.complete,
                 salaryEntitlementDays:
+                  completeMonthSelected &&
                   employee.dateOfJoining <= monthStart &&
                   (!employee.deactivatedAt || employee.deactivatedAt >= monthEnd)
                     ? 30
@@ -489,17 +523,22 @@
                 esiPercent: employee.esiPercent ?? 0.75,
               });
               payableAmount += calculation.netPayable;
+              attendanceSalary.grossEarnings += calculation.grossEarnings;
+              attendanceSalary.notMarkedDays += calculation.notMarkedDays;
+              attendanceSalary.allowedWeekOff += calculation.allowedWeekOff;
+              attendanceSalary.totalEquivalentDays += calculation.totalEquivalentDays;
+              attendanceSalary.chargeableDays += calculation.chargeableDays;
+              attendanceSalary.attendanceDeduction += calculation.attendanceDeduction;
+              attendanceSalary.notMarkedDeduction += calculation.notMarkedDeduction;
+              attendanceSalary.allowanceConsumed += calculation.allowanceConsumed;
               salaryDeductions.advances += calculation.advances;
               salaryDeductions.esi += calculation.esi;
               salaryDeductions.employeePf += calculation.employeePf;
               salaryDeductions.employerPf += calculation.employerPf;
               salaryDeductions.loanDeduction += calculation.loanDeduction;
             }
-            payableAmount = Math.round(
-              (payableAmount - uniformSummary.total) * 100,
-            ) / 100;
             payableLabel = hasLiveCalculation
-              ? "Live accrued · submitted days"
+              ? `Live accrued · submitted days (${start} – ${end})`
               : hasSavedPayroll
                 ? "Payroll record"
                 : "No submitted attendance";
@@ -517,6 +556,7 @@
                   monthlyBaseSalary: employee.monthlyBaseSalary,
                   payableAmount,
                   payableLabel,
+                  ...attendanceSalary,
                   originalLoanAmount,
                   remainingLoanBalance,
                   monthlyLoanDeduction,
@@ -543,7 +583,7 @@
             reportStart: start <= end ? start : null,
             reportEnd: start <= end ? end : null,
           };
-        });
+        }));
 
       return NextResponse.json({
         from: query.from,

@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import type { SalaryMethod } from "@/lib/models";
+import type { AttendanceEntry, SalaryMethod } from "@/lib/models";
 import { addMonths } from "@/lib/payroll/loans";
 
 export interface PayrollInputs {
@@ -25,6 +25,7 @@ export interface PayrollInputs {
   employerPfPercent: number;
   esiEnabled?: boolean;
   esiPercent?: number;
+  notMarkedDays: number;
 }
 
 export interface PayrollCalculation {
@@ -47,9 +48,109 @@ export interface PayrollCalculation {
   employerPf: number;
   esi: number;
   netPayable: number;
+  allowedWeekOff: number;
+  allowanceConsumed: number;
+  allowanceRemaining: number;
+  totalEquivalentDays: number;
+  chargeableDays: number;
+  attendanceDeduction: number;
+  notMarkedDays: number;
+  notMarkedDeduction: number;
+  totalDeductions: number;
+  shortfall: number;
 }
 
 const money = (amount: Decimal) => amount.toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toNumber();
+
+export function getLatestAttendanceEntries(
+  entries: AttendanceEntry[],
+  context?: { outletId?: string; date?: string },
+) {
+  const latest = new Map<string, AttendanceEntry>();
+  const duplicateIds = new Set<string>();
+  for (const entry of entries) {
+    const employeeId = entry.employeeId.toHexString();
+    const previous = latest.get(employeeId);
+    if (previous) duplicateIds.add(employeeId);
+    if (!previous || entry.updatedAt.getTime() >= previous.updatedAt.getTime())
+      latest.set(employeeId, entry);
+  }
+  if (duplicateIds.size) {
+    console.warn("Duplicate attendance entries found; latest valid entry used.", {
+      ...context,
+      employeeIds: [...duplicateIds],
+    });
+  }
+  return [...latest.values()];
+}
+
+export function getLatestAttendanceEntry(
+  entries: AttendanceEntry[],
+  employeeId: string,
+  context?: { outletId?: string; date?: string },
+) {
+  return getLatestAttendanceEntries(entries, context).find(
+    (entry) => entry.employeeId.toHexString() === employeeId,
+  );
+}
+
+export function calculateNetPayable(calculation: {
+  grossEarnings?: number | string;
+  overtime?: number | string;
+  allowances?: number | string;
+  advances?: number | string;
+  loanDeduction?: number | string;
+  otherDeductions?: number | string;
+  uniformDeductions?: number | string;
+  employeePf?: number | string;
+  esi?: number | string;
+  attendanceDeduction?: number | string;
+  notMarkedDeduction?: number | string;
+}) {
+  const net = new Decimal(Number(calculation.grossEarnings ?? 0))
+    .plus(Number(calculation.overtime ?? 0))
+    .plus(Number(calculation.allowances ?? 0))
+    .minus(Number(calculation.attendanceDeduction ?? 0))
+    .minus(Number(calculation.notMarkedDeduction ?? 0))
+    .minus(Number(calculation.advances ?? 0))
+    .minus(Number(calculation.loanDeduction ?? 0))
+    .minus(Number(calculation.otherDeductions ?? 0))
+    .minus(Number(calculation.uniformDeductions ?? 0))
+    .minus(Number(calculation.employeePf ?? 0))
+    .minus(Number(calculation.esi ?? 0));
+  return money(Decimal.max(0, net));
+}
+
+export function countNotMarkedDays({
+  dates,
+  markedStatuses,
+  dateOfJoining,
+  deactivatedAt,
+  cutoffDate,
+  today,
+  holidays = [],
+  countTodayAsNotMarked = false,
+}: {
+  dates: string[];
+  markedStatuses: Map<string, string>;
+  dateOfJoining?: string;
+  deactivatedAt?: string;
+  cutoffDate: string;
+  today: string;
+  holidays?: string[];
+  countTodayAsNotMarked?: boolean;
+}) {
+  const holidaySet = new Set(holidays);
+  return dates.filter((date) => {
+    if (date > cutoffDate) return false;
+    if (dateOfJoining && date < dateOfJoining) return false;
+    if (deactivatedAt && date > deactivatedAt) return false;
+    if (holidaySet.has(date)) return false;
+    if (date > today) return false;
+    if (date === today && !countTodayAsNotMarked) return false;
+    return !markedStatuses.has(date);
+  }).length;
+}
 
 export function calculateLoanInstallment(
   loans: Array<{
@@ -110,21 +211,31 @@ export function calculatePayroll(input: PayrollInputs): PayrollCalculation {
   const base = new Decimal(input.monthlyBaseSalary);
   const dailyRate = base.div(divisor);
   const paidAbsenceDays = Math.min(input.absentDays, input.paidAbsences);
-  const eligibleSalaryDays = Math.min(
-    divisor,
-    input.salaryEntitlementDays ?? divisor,
+  const eligibleSalaryDays = Math.max(
+    0,
+    Math.min(divisor, input.salaryEntitlementDays ?? divisor),
   );
-  const rawPayableDayUnits = input.settleMonthlySalary
-    ? eligibleSalaryDays -
-      (input.absentDays - paidAbsenceDays) -
-      input.halfDays * 0.5
-    : input.presentDays +
-      input.halfDays * 0.5 +
-      input.weekOffs +
-      paidAbsenceDays;
-  const payableDayUnits = Math.max(0, Math.min(rawPayableDayUnits, divisor));
-  const grossEarnings = dailyRate.mul(payableDayUnits);
+  const paidAttendanceUnits =
+    input.presentDays +
+    input.halfDays * 0.5 +
+    input.weekOffs +
+    paidAbsenceDays;
+  const payableDayUnits = input.settleMonthlySalary
+    ? eligibleSalaryDays
+    : Math.max(0, Math.min(paidAttendanceUnits, eligibleSalaryDays));
+  const grossEarnings =
+    eligibleSalaryDays >= divisor
+      ? base
+      : dailyRate.mul(eligibleSalaryDays);
   const halfDayDeduction = dailyRate.mul(input.halfDays * 0.5);
+  const totalEquivalentDays =
+    input.weekOffs + input.halfDays * 0.5 + input.absentDays;
+  const allowanceConsumed = Math.min(3, totalEquivalentDays);
+  const allowanceRemaining = Math.max(0, 3 - allowanceConsumed);
+  const chargeableDays = Math.max(0, totalEquivalentDays - 3);
+  const attendanceDeduction = dailyRate.mul(chargeableDays);
+  const notMarkedDays = Math.max(0, input.notMarkedDays);
+  const notMarkedDeduction = dailyRate.mul(notMarkedDays);
   const overtime = new Decimal(input.overtime);
   const allowances = new Decimal(input.allowances);
   const advances = new Decimal(input.advances);
@@ -136,7 +247,17 @@ export function calculatePayroll(input: PayrollInputs): PayrollCalculation {
   const esi = input.esiEnabled
     ? grossEarnings.mul(input.esiPercent ?? 0).div(100)
     : new Decimal(0);
-  const netPayable = grossEarnings.plus(overtime).plus(allowances).minus(advances).minus(loanDeduction).minus(otherDeductions).minus(uniformDeductions).minus(employeePf).minus(esi);
+  const totalDeductions = attendanceDeduction
+    .plus(notMarkedDeduction)
+    .plus(advances)
+    .plus(employeePf)
+    .plus(esi)
+    .plus(loanDeduction)
+    .plus(uniformDeductions)
+    .plus(otherDeductions);
+  const grossWithExtras = grossEarnings.plus(overtime).plus(allowances);
+  const netBeforeClamp = grossWithExtras.minus(totalDeductions);
+  const netPayable = Decimal.max(0, netBeforeClamp);
 
   return {
     dailyRate: money(dailyRate), halfDayDeduction: money(halfDayDeduction),
@@ -146,5 +267,15 @@ export function calculatePayroll(input: PayrollInputs): PayrollCalculation {
     overtime: money(overtime), allowances: money(allowances), advances: money(advances),
     loanDeduction: money(loanDeduction), otherDeductions: money(otherDeductions), uniformDeductions: money(uniformDeductions), employeePf: money(employeePf), employerPf: money(employerPf), esi: money(esi),
     netPayable: money(netPayable),
+    allowedWeekOff: 3,
+    allowanceConsumed: money(new Decimal(allowanceConsumed)),
+    allowanceRemaining: money(new Decimal(allowanceRemaining)),
+    totalEquivalentDays: money(new Decimal(totalEquivalentDays)),
+    chargeableDays: money(new Decimal(chargeableDays)),
+    attendanceDeduction: money(attendanceDeduction),
+    notMarkedDays: money(new Decimal(notMarkedDays)),
+    notMarkedDeduction: money(notMarkedDeduction),
+    totalDeductions: money(totalDeductions),
+    shortfall: money(Decimal.max(0, netBeforeClamp.neg())),
   };
 }

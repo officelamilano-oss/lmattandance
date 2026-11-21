@@ -7,8 +7,12 @@ import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
 import {
   calculateLoanInstallment,
+  calculateNetPayable,
   calculatePayroll,
+  getLatestAttendanceEntries,
+  getLatestAttendanceEntry,
 } from "@/lib/payroll/calculate";
+import { getNotMarkedDays } from "@/lib/payroll/not-marked-days";
 import { getMonthDates } from "@/lib/payroll/dates";
 import {
   dateOnlySchema,
@@ -135,7 +139,10 @@ export async function GET(request: Request) {
       ]),
     );
     for (const day of attendanceDays) {
-      for (const entry of day.entries) {
+      for (const entry of getLatestAttendanceEntries(day.entries, {
+        outletId: day.outletId.toHexString(),
+        date: day.date,
+      })) {
         const employeeId = entry.employeeId.toHexString();
         const employee = employeeById.get(employeeId);
         if (
@@ -316,7 +323,7 @@ export async function GET(request: Request) {
       }
       return { start, end };
     };
-    const estimateNetPayable = (
+    const estimateNetPayable = async (
       employee: EmployeeDocument,
       periodStart: string,
       periodEnd: string,
@@ -329,14 +336,24 @@ export async function GET(request: Request) {
           (!employee.deactivatedAt || date <= employee.deactivatedAt),
       );
       if (!applicableDates.length) return undefined;
+      const employeeId = employee._id.toHexString();
       const counts = { P: 0, A: 0, HD: 0, WO: 0 };
       for (const date of applicableDates) {
-        const entry = submittedByDate
-          .get(`${employee.outletId.toHexString()}:${date}`)
-          ?.entries.find((item) => item.employeeId.equals(employee._id));
+        const attendanceDay = submittedByDate.get(
+          `${employee.outletId.toHexString()}:${date}`,
+        );
+        const entry = attendanceDay
+          ? getLatestAttendanceEntry(
+              attendanceDay.entries,
+              employeeId,
+              {
+                outletId: employee.outletId.toHexString(),
+                date,
+              },
+            )
+          : undefined;
         if (entry) counts[entry.status] += 1;
       }
-      const employeeId = employee._id.toHexString();
       const advances = (advancesByEmployee.get(employeeId) ?? [])
         .filter((advance) => advance.date <= periodEnd)
         .reduce((sum, advance) => sum.plus(advance.amount), new Decimal(0))
@@ -361,6 +378,12 @@ export async function GET(request: Request) {
         halfDays: counts.HD,
         weekOffs: counts.WO,
         paidAbsences: payrollSettings?.paidAbsences ?? 0,
+        notMarkedDays: await getNotMarkedDays(
+          employee,
+          month,
+          periodEnd,
+          periodStart,
+        ),
         settleMonthlySalary: true,
         salaryEntitlementDays:
           periodStart === monthStart &&
@@ -383,7 +406,7 @@ export async function GET(request: Request) {
       });
       return calculation.netPayable;
     };
-    const payrollEmployees = salaryEmployees.map((employee) => {
+    const payrollEmployees = await Promise.all(salaryEmployees.map(async (employee) => {
       const employeeId = employee._id.toHexString();
       const employeeRecords = recordsByEmployee.get(employeeId) ?? [];
       const period = getEmployeePeriod(employee);
@@ -408,7 +431,7 @@ export async function GET(request: Request) {
         suggestedPeriodEnd: period.end,
         estimatedNetPayable:
           !employeeRecords.length && period.start && period.end
-            ? estimateNetPayable(employee, period.start, period.end)
+            ? await estimateNetPayable(employee, period.start, period.end)
             : undefined,
         estimatedUniformDeduction: (uniformByEmployee.get(employeeId) ?? [])
           .reduce((sum, deduction) => sum + deduction.amount, 0),
@@ -418,7 +441,7 @@ export async function GET(request: Request) {
           (record) => !record.periodStart,
         ),
       };
-    });
+    }));
     return NextResponse.json({ records, payrollEmployees });
   } catch (error) {
     return apiError(error);
@@ -568,23 +591,17 @@ export async function POST(request: Request) {
           const attendanceByDate = new Map(
             attendanceDays.map((day) => [day.date, day]),
           );
-          const missing = applicableDates.filter(
-            (date) => !attendanceByDate.has(date),
-          );
-          if (missing.length)
-            throw new Error(
-              `ATTENDANCE_MISSING:${employee.employeeCode}:${missing[0]}`,
-            );
           const counts = { P: 0, A: 0, HD: 0, WO: 0 };
           for (const date of applicableDates) {
-            const entry = attendanceByDate
-              .get(date)
-              ?.entries.find((item) => item.employeeId.equals(employee._id));
-            if (!entry)
-              throw new Error(
-                `ATTENDANCE_ENTRY_MISSING:${employee.employeeCode}:${date}`,
-              );
-            counts[entry.status] += 1;
+            const attendanceDay = attendanceByDate.get(date);
+            const entry = attendanceDay
+              ? getLatestAttendanceEntry(
+                  attendanceDay.entries,
+                  employee._id.toHexString(),
+                  { outletId: outletId.toHexString(), date },
+                )
+              : undefined;
+            if (entry) counts[entry.status] += 1;
           }
           const firstDate = `${input.month}-01`;
           const advances = input.advanceIds
@@ -687,6 +704,12 @@ export async function POST(request: Request) {
             halfDays: counts.HD,
             weekOffs: counts.WO,
             paidAbsences: rules.paidAbsences,
+            notMarkedDays: await getNotMarkedDays(
+              employee,
+              input.month,
+              input.periodEnd,
+              input.periodStart,
+            ),
             settleMonthlySalary: true,
             salaryEntitlementDays:
               input.periodStart === firstDate &&
@@ -848,17 +871,10 @@ export async function POST(request: Request) {
           const calculation = {
             ...computed,
             ...amounts,
-            netPayable: new Decimal(amounts.grossEarnings)
-              .plus(computed.overtime)
-              .plus(computed.allowances)
-              .minus(amounts.advances)
-              .minus(amounts.esi)
-              .minus(amounts.employeePf)
-              .minus(amounts.loanDeduction)
-              .minus(computed.otherDeductions)
-              .minus(computed.uniformDeductions)
-              .toDecimalPlaces(2)
-              .toNumber(),
+            netPayable: calculateNetPayable({
+              ...computed,
+              ...amounts,
+            }),
           };
           const record: SalaryRecordDocument = {
             _id: new ObjectId(),

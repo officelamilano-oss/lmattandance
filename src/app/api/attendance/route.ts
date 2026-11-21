@@ -11,6 +11,10 @@ import { dateOnlySchema } from "@/lib/validation/common";
 import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
 import {
+  getLatestAttendanceEntries,
+  getLatestAttendanceEntry,
+} from "@/lib/payroll/calculate";
+import {
   attendanceEntryVersionMatches,
   isAttendanceEntryLocked,
   isAttendanceOutletSubmitted,
@@ -98,7 +102,11 @@ export async function GET(request: Request) {
       );
       const counts = { P: 0, A: 0, WO: 0, HD: 0 };
       for (const day of days)
-        for (const entry of day.entries) counts[entry.status] += 1;
+        for (const entry of getLatestAttendanceEntries(day.entries, {
+          outletId: day.outletId.toHexString(),
+          date: day.date,
+        }))
+          counts[entry.status] += 1;
       return NextResponse.json({
         counts,
         outletCount: outlets.length,
@@ -114,9 +122,13 @@ export async function GET(request: Request) {
         employees: employees.map((employee) => {
           const outlet = outletById.get(employee.outletId.toHexString());
           const day = dayByOutletId.get(employee.outletId.toHexString());
-          const entry = day?.entries.find((item) =>
-            item.employeeId.equals(employee._id),
-          );
+          const entry = day
+            ? getLatestAttendanceEntry(
+                day.entries,
+                employee._id.toHexString(),
+                { outletId: day.outletId.toHexString(), date: day.date },
+              )
+            : undefined;
           return {
             _id: employee._id,
             employeeCode: employee.employeeCode,

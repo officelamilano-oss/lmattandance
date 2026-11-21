@@ -84,7 +84,10 @@
   import { DashboardPartLoader } from "@/components/dashboard-part-loader";
   import { dateAfter, getIndiaDate, getIndiaMonth } from "@/lib/payroll/dates";
   import { isAttendanceEntryLocked } from "@/lib/attendance";
-  import { calculateLoanInstallment } from "@/lib/payroll/calculate";
+  import {
+    calculateLoanInstallment,
+    calculateNetPayable,
+  } from "@/lib/payroll/calculate";
   import { UNIFORM_ITEM_LABELS } from "@/lib/uniform-deductions";
   import {
     expectedCompletionMonth,
@@ -1204,6 +1207,7 @@
                         days={trendData.attendanceTrend ?? []}
                         from={dashboardFrom}
                         to={dashboardTo}
+                        accrualDate={dashboardDate}
                         metrics={data.metrics}
                         selectedOutlet={selectedOutlet}
                         onSelectOutlet={setSelectedOutlet}
@@ -3797,6 +3801,13 @@
                 "Period",
                 "Days P / A / HD / WO",
                 "Days filled",
+                "Not marked",
+                "Allowed week off",
+                "Total equivalent days",
+                "Chargeable days",
+                "Attendance deduction",
+                "Not marked deduction",
+                "Allowance consumed",
                 "Gross",
                 "Advances",
                 "Uniform deduction",
@@ -3843,6 +3854,23 @@
                       <dd>{record.calculation.paidAbsenceDays}</dd>
                       <dt>Paid week-offs</dt>
                       <dd>{record.calculation.weekOffs}</dd>
+                      <dt>Not marked days</dt>
+                      <dd>{record.calculation.notMarkedDays ?? 0}</dd>
+                      <dt>Allowed week-off allowance</dt>
+                      <dd>{record.calculation.allowedWeekOff ?? 3}</dd>
+                      <dt>Total equivalent days</dt>
+                      <dd>{record.calculation.totalEquivalentDays ?? 0}</dd>
+                      <dt>Chargeable days</dt>
+                      <dd>{record.calculation.chargeableDays ?? 0}</dd>
+                      <dt>Attendance deduction</dt>
+                      <dd>{currency(record.calculation.attendanceDeduction ?? 0)}</dd>
+                      <dt>Not marked deduction</dt>
+                      <dd>{currency(record.calculation.notMarkedDeduction ?? 0)}</dd>
+                      <dt>Allowance consumed</dt>
+                      <dd>
+                        {record.calculation.allowanceConsumed ?? 0} of{" "}
+                        {record.calculation.allowedWeekOff ?? 3}
+                      </dd>
                       <dt>Overtime / allowances</dt>
                       <dd>
                         {currency(record.calculation.overtime)} /{" "}
@@ -3894,6 +3922,13 @@
                   record.calculation.absentDays +
                   record.calculation.halfDays +
                   record.calculation.weekOffs,
+                record.calculation.notMarkedDays ?? 0,
+                record.calculation.allowedWeekOff ?? 3,
+                record.calculation.totalEquivalentDays ?? 0,
+                record.calculation.chargeableDays ?? 0,
+                currency(record.calculation.attendanceDeduction ?? 0),
+                currency(record.calculation.notMarkedDeduction ?? 0),
+                `${record.calculation.allowanceConsumed ?? 0} of ${record.calculation.allowedWeekOff ?? 3}`,
                 currency(record.calculation.grossEarnings),
                 currency(record.calculation.advances),
                 currency(record.calculation.uniformDeductions ?? 0),
@@ -4502,16 +4537,10 @@
     const [adjustmentLabel, setAdjustmentLabel] = useState("");
     const [adjustmentAmount, setAdjustmentAmount] = useState("");
     const [adjustmentReason, setAdjustmentReason] = useState("");
-    const netPayable =
-      Number(amounts.grossEarnings) +
-      Number(record.calculation.overtime ?? 0) +
-      Number(record.calculation.allowances ?? 0) -
-      Number(amounts.advances) -
-      Number(amounts.esi) -
-      Number(amounts.employeePf) -
-      Number(amounts.loanDeduction) -
-      Number(record.calculation.otherDeductions ?? 0) -
-      Number(record.calculation.uniformDeductions ?? 0);
+    const netPayable = calculateNetPayable({
+      ...record.calculation,
+      ...amounts,
+    });
 
     async function submitPaidCorrection(event: FormEvent<HTMLFormElement>) {
       event.preventDefault();
@@ -4789,6 +4818,8 @@
       employeePf: number;
       employerPf: number;
       loanDeduction: number;
+      attendanceDeduction?: number;
+      notMarkedDeduction?: number;
     };
     type Preview = {
       counts: AttendanceCounts;
@@ -4857,12 +4888,7 @@
     }, [employee._id, employee.outletId, month, periodEnd, periodStart]);
 
     const netPayable = amounts
-      ? amounts.grossEarnings -
-        amounts.advances -
-      amounts.uniformDeductions -
-        amounts.esi -
-        amounts.employeePf -
-        amounts.loanDeduction
+      ? calculateNetPayable(amounts)
       : 0;
     function submit(event: FormEvent<HTMLFormElement>) {
       event.preventDefault();
@@ -5364,6 +5390,7 @@
     days,
     from,
     to,
+    accrualDate,
     metrics,
     selectedOutlet,
     onSelectOutlet,
@@ -5373,6 +5400,7 @@
     days: NonNullable<WorkspaceData["attendanceTrend"]>;
     from: string;
     to: string;
+    accrualDate: string;
     metrics?: WorkspaceData["metrics"];
     selectedOutlet: string;
     onSelectOutlet: (outletId: string) => void;
@@ -5507,8 +5535,7 @@
             <DashboardPayrollBreakdown
               metrics={metrics}
               employeeCount={metrics?.activeEmployees ?? 0}
-              from={from}
-              to={to}
+              accrualDate={accrualDate}
             />
           )}
           <DashboardSuggestions items={suggestions} />
@@ -5920,23 +5947,22 @@
   function DashboardPayrollBreakdown({
     metrics,
     employeeCount,
-    from,
-    to,
+    accrualDate,
   }: {
     metrics?: WorkspaceData["metrics"];
     employeeCount: number;
-    from: string;
-    to: string;
+    accrualDate: string;
   }) {
     const gross = metrics?.grossSalary ?? 0;
     const net = metrics?.netPayable ?? 0;
     const progress = gross > 0 ? Math.max(0, Math.min(100, (net / gross) * 100)) : 0;
+    const periodStart = `${accrualDate.slice(0, 7)}-01`;
     return (
       <section className="panel dashboard-payroll-panel">
         <div className="panel-heading">
           <div>
             <h2>Payroll breakdown</h2>
-            <p>Live accrual · {formatDate(from)} – {formatDate(to)}</p>
+            <p>Live accrual period · {formatDate(periodStart)} – {formatDate(accrualDate)}</p>
           </div>
           <Link className="dashboard-panel-link" href="/salary">Review payroll <ArrowUpRight size={14} /></Link>
         </div>
@@ -7462,6 +7488,13 @@
                     <th rowSpan={2}>Week off</th>
                     <th rowSpan={2}>Filled days</th>
                     <th rowSpan={2}>Not marked</th>
+                    <th rowSpan={2}>Allowed week off</th>
+                    <th rowSpan={2}>Total equivalent days</th>
+                    <th rowSpan={2}>Chargeable days</th>
+                    <th rowSpan={2}>Attendance deduction</th>
+                    <th rowSpan={2}>Not marked deduction</th>
+                    <th rowSpan={2}>Allowance consumed</th>
+                    <th rowSpan={2}>Gross accrued</th>
                     <th rowSpan={2}>Fixed salary</th>
                     <th rowSpan={2}>Advances</th>
                     <th rowSpan={2}>Employee ESI</th>
@@ -7581,7 +7614,22 @@
                         row.halfDays +
                         row.weekOffs}
                   </td>
-                  <td>{row.missingDays}</td>
+                  <td>{row.notMarkedDays ?? row.missingDays}</td>
+                  {canReadSalary && (
+                    <>
+                      <td>{row.allowedWeekOff ?? 3}</td>
+                      <td>{row.totalEquivalentDays ?? 0}</td>
+                      <td>{row.chargeableDays ?? 0}</td>
+                      <td>{currency(row.attendanceDeduction ?? 0)}</td>
+                      <td>{currency(row.notMarkedDeduction ?? 0)}</td>
+                      <td>
+                        {row.allowanceConsumed ?? 0} of {row.allowedWeekOff ?? 3}
+                      </td>
+                    </>
+                  )}
+                  {canReadSalary && (
+                    <td>{currency(row.grossEarnings ?? 0)}</td>
+                  )}
                   {canReadSalary && (
                     <td>{currency(row.monthlyBaseSalary ?? 0)}</td>
                   )}
@@ -7631,9 +7679,21 @@
                 <td>{sum((row) => row.halfDays)}</td>
                 <td>{sum((row) => row.weekOffs)}</td>
                 <td>{sum((row) => row.filledDays)}</td>
-                <td>{sum((row) => row.missingDays)}</td>
+                <td>
+                  {sum((row) => row.notMarkedDays ?? row.missingDays)}
+                </td>
                 {canReadSalary && (
                   <>
+                    <td>{sum((row) => row.allowedWeekOff ?? 0)}</td>
+                    <td>{sum((row) => row.totalEquivalentDays ?? 0)}</td>
+                    <td>{sum((row) => row.chargeableDays ?? 0)}</td>
+                    <td>{currency(sum((row) => row.attendanceDeduction ?? 0))}</td>
+                    <td>{currency(sum((row) => row.notMarkedDeduction ?? 0))}</td>
+                    <td>
+                      {sum((row) => row.allowanceConsumed ?? 0)} of{" "}
+                      {sum((row) => row.allowedWeekOff ?? 0)}
+                    </td>
+                    <td>{currency(sum((row) => row.grossEarnings ?? 0))}</td>
                     <td>{currency(sum((row) => row.monthlyBaseSalary ?? 0))}</td>
                     <td>{currency(sum((row) => row.advances ?? 0))}</td>
                     <td>{currency(sum((row) => row.esi ?? 0))}</td>
@@ -8002,6 +8062,7 @@
               defaultSalaryMethod: "FIXED_30_DAYS",
               workingDaysDivisor: 30,
               paidAbsences: Number(values.get("paidAbsences")),
+              countTodayAsNotMarked: values.get("countTodayAsNotMarked") === "on",
               currency: "INR",
               advanceDeductionPolicy: "UNPAID_ONLY",
             });
@@ -8025,6 +8086,14 @@
               max="31"
               defaultValue={String(settings.paidAbsences ?? 0)}
             />
+            <label className="field">
+              <span>Count today&apos;s missing attendance as not marked</span>
+              <input
+                type="checkbox"
+                name="countTodayAsNotMarked"
+                defaultChecked={settings.countTodayAsNotMarked ?? true}
+              />
+            </label>
           </div>
           <p className="policy-note">
             Present and week-off days receive full daily pay; half-days receive

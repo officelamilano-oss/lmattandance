@@ -4,7 +4,13 @@ import { connection, NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError } from "@/lib/http";
-import { calculateLoanInstallment, calculatePayroll } from "@/lib/payroll/calculate";
+import {
+  calculateLoanInstallment,
+  calculatePayroll,
+  getLatestAttendanceEntries,
+  getLatestAttendanceEntry,
+} from "@/lib/payroll/calculate";
+import { getNotMarkedDays } from "@/lib/payroll/not-marked-days";
 import { expectedCompletionMonth } from "@/lib/payroll/loans";
 import {
   getUniformReportItems,
@@ -428,7 +434,10 @@ async function getRows(
       .toArray();
     const rows: ExportRow[] = [];
     for (const day of days) {
-      for (const entry of day.entries) {
+      for (const entry of getLatestAttendanceEntries(day.entries, {
+        outletId: day.outletId.toHexString(),
+        date: day.date,
+      })) {
         if (entry.status !== "A" && entry.status !== "HD") continue;
         const employee = employeeById.get(entry.employeeId.toHexString());
         if (
@@ -569,7 +578,7 @@ async function getRows(
       configuredUniformItems,
       uniformDeductions.map((entry) => entry.item),
     );
-    return employees.map((employee) => {
+    return Promise.all(employees.map(async (employee) => {
       const start =
         employee.dateOfJoining > from ? employee.dateOfJoining : from;
       const end =
@@ -606,9 +615,13 @@ async function getRows(
           }
           monthData.eligibleDays += 1;
           const day = dayByDate.get(date);
-          const entry = day?.entries.find((item) =>
-            item.employeeId.equals(employee._id),
-          );
+          const entry = day
+            ? getLatestAttendanceEntry(
+                day.entries,
+                employee._id.toHexString(),
+                { outletId: employee.outletId.toHexString(), date },
+              )
+            : undefined;
           if (!day || !entry) {
             missingDates.push(date);
             monthData.complete = false;
@@ -640,6 +653,13 @@ async function getRows(
         "Week Offs": counts.WO,
         "Attendance Filled Days":
           counts.P + counts.A + counts.HD + counts.WO,
+        "Not Marked": 0,
+        "Allowed Week Off (3)": 0,
+        "Total Equivalent Days": 0,
+        "Chargeable Days": 0,
+        "Attendance Deduction INR": 0,
+        "Not Marked Deduction INR": 0,
+        "Allowance Consumed": "0 of 0",
         "Present Dates": statusDates.P.join(", "),
         "Absent Dates": statusDates.A.join(", "),
         "Half Day Dates": statusDates.HD.join(", "),
@@ -663,6 +683,13 @@ async function getRows(
         let loanDeduction = 0;
         let otherDeductions = 0;
         let netPayable = 0;
+        let notMarkedDaysTotal = 0;
+        let allowedWeekOffTotal = 0;
+        let totalEquivalentDaysTotal = 0;
+        let chargeableDaysTotal = 0;
+        let attendanceDeductionTotal = 0;
+        let notMarkedDeductionTotal = 0;
+        let allowanceConsumedTotal = 0;
         let hasLiveCalculation = false;
         let hasSavedPayroll = false;
         for (const [month, monthDayCounts] of monthCounts) {
@@ -687,14 +714,14 @@ async function getRows(
             otherDeductions += Number(
               saved.calculation.otherDeductions ?? 0,
             );
-            const uniformIncludedInPayroll = (
-              saved.inputSnapshot.uniformDeductions ?? []
-            )
-              .filter((entry) => entry.deductionMonth === month)
-              .reduce((sum, entry) => sum + entry.amount, 0);
-            netPayable +=
-              Number(saved.calculation.netPayable ?? 0) +
-              uniformIncludedInPayroll;
+            netPayable += Number(saved.calculation.netPayable ?? 0);
+            notMarkedDaysTotal += Number(saved.calculation.notMarkedDays ?? 0);
+            allowedWeekOffTotal += Number(saved.calculation.allowedWeekOff ?? 3);
+            totalEquivalentDaysTotal += Number(saved.calculation.totalEquivalentDays ?? 0);
+            chargeableDaysTotal += Number(saved.calculation.chargeableDays ?? 0);
+            attendanceDeductionTotal += Number(saved.calculation.attendanceDeduction ?? 0);
+            notMarkedDeductionTotal += Number(saved.calculation.notMarkedDeduction ?? 0);
+            allowanceConsumedTotal += Number(saved.calculation.allowanceConsumed ?? 0);
             hasSavedPayroll = true;
             continue;
           }
@@ -737,6 +764,19 @@ async function getRows(
               : 0;
           const loanDeductionForMonth =
             ledgerLoanDeduction + currentMonthLoanSchedule;
+          const notMarkedDays = await getNotMarkedDays(
+            employee,
+            month,
+            to < `${month}-${String(daysInMonth).padStart(2, "0")}`
+              ? to
+              : `${month}-${String(daysInMonth).padStart(2, "0")}`,
+            from > `${month}-01` ? from : `${month}-01`,
+          );
+          const monthUniformDeduction = (
+            uniformDeductionsByEmployee.get(employee._id.toHexString()) ?? []
+          )
+            .filter((entry) => entry.deductionMonth === month)
+            .reduce((sum, entry) => sum + entry.amount, 0);
           const calculation = calculatePayroll({
             monthlyBaseSalary: employee.monthlyBaseSalary,
             salaryMethod: "FIXED_30_DAYS",
@@ -747,9 +787,11 @@ async function getRows(
             halfDays: monthDayCounts.counts.HD,
             weekOffs: monthDayCounts.counts.WO,
             paidAbsences: salaryRules.paidAbsences,
+            notMarkedDays,
             settleMonthlySalary:
               fullMonthSelected && monthDayCounts.complete,
             salaryEntitlementDays:
+              fullMonthSelected &&
               employee.dateOfJoining <= `${month}-01` &&
               (!employee.deactivatedAt ||
                 employee.deactivatedAt >=
@@ -761,6 +803,7 @@ async function getRows(
             overtime: 0,
             allowances: 0,
             otherDeductions: 0,
+            uniformDeductions: monthUniformDeduction,
             pfEnabled: employee.pfEnabled,
             employeePfPercent: employee.employeePfPercent,
             employerPfPercent: employee.employerPfPercent,
@@ -776,8 +819,23 @@ async function getRows(
           employerPf += calculation.employerPf;
           loanDeduction += calculation.loanDeduction;
           otherDeductions += calculation.otherDeductions;
+          notMarkedDaysTotal += calculation.notMarkedDays;
+          allowedWeekOffTotal += calculation.allowedWeekOff;
+          totalEquivalentDaysTotal += calculation.totalEquivalentDays;
+          chargeableDaysTotal += calculation.chargeableDays;
+          attendanceDeductionTotal += calculation.attendanceDeduction;
+          notMarkedDeductionTotal += calculation.notMarkedDeduction;
+          allowanceConsumedTotal += calculation.allowanceConsumed;
           netPayable += calculation.netPayable;
         }
+        result["Not Marked"] = notMarkedDaysTotal;
+        result["Allowed Week Off (3)"] = allowedWeekOffTotal;
+        result["Total Equivalent Days"] = totalEquivalentDaysTotal;
+        result["Chargeable Days"] = chargeableDaysTotal;
+        result["Attendance Deduction INR"] = attendanceDeductionTotal;
+        result["Not Marked Deduction INR"] = notMarkedDeductionTotal;
+        result["Allowance Consumed"] =
+          `${allowanceConsumedTotal} of ${allowedWeekOffTotal}`;
         result["Fixed Monthly Salary INR"] = employee.monthlyBaseSalary;
         result["Salary per Paid Day INR"] = dailyRate;
         result["Paid Attendance Days"] = payableDayUnits;
@@ -793,8 +851,7 @@ async function getRows(
             uniformSummary.byItem[item.key] ?? 0;
         result["Total Uniform Deduction INR"] = uniformSummary.total;
         result["Remaining Uniform Balance INR"] = uniformSummary.remaining;
-        result["Net Payable INR"] =
-          Math.round((netPayable - uniformSummary.total) * 100) / 100;
+        result["Net Payable INR"] = netPayable;
         result["Payable Type"] = hasLiveCalculation
           ? "Live accrued · submitted days"
           : hasSavedPayroll
@@ -802,7 +859,7 @@ async function getRows(
             : "No submitted attendance";
       }
       return result;
-    });
+    }));
   }
   if (type === "salary") {
     const fromMonth = from.slice(0, 7);
@@ -830,7 +887,10 @@ async function getRows(
       { P: number; A: number; HD: number; WO: number }
     >();
     for (const day of attendanceDays) {
-      for (const entry of day.entries) {
+      for (const entry of getLatestAttendanceEntries(day.entries, {
+        outletId: day.outletId.toHexString(),
+        date: day.date,
+      })) {
         const employeeId = entry.employeeId.toHexString();
         const employee = employeeById.get(employeeId);
         if (
@@ -885,6 +945,13 @@ async function getRows(
               : "Full month",
           "Days P / A / HD / WO": `${present} / ${absent} / ${halfDays} / ${weekOffs}`,
           "Days filled": present + absent + halfDays + weekOffs,
+          "Not Marked": Number(record.calculation.notMarkedDays ?? 0),
+          "Allowed Week Off (3)": Number(record.calculation.allowedWeekOff ?? 3),
+          "Total Equivalent Days": Number(record.calculation.totalEquivalentDays ?? 0),
+          "Chargeable Days": Number(record.calculation.chargeableDays ?? 0),
+          "Attendance Deduction INR": Number(record.calculation.attendanceDeduction ?? 0),
+          "Not Marked Deduction INR": Number(record.calculation.notMarkedDeduction ?? 0),
+          "Allowance Consumed": `${Number(record.calculation.allowanceConsumed ?? 0)} of ${Number(record.calculation.allowedWeekOff ?? 3)}`,
           "Monthly base salary INR": employee?.monthlyBaseSalary ?? 0,
           "Gross INR": Number(record.calculation.grossEarnings ?? 0),
           "Advances INR": Number(record.calculation.advances ?? 0),
@@ -925,6 +992,13 @@ async function getRows(
             Period: "",
             "Days P / A / HD / WO": `${counts.P} / ${counts.A} / ${counts.HD} / ${counts.WO}`,
             "Days filled": counts.P + counts.A + counts.HD + counts.WO,
+            "Not Marked": "",
+            "Allowed Week Off (3)": 3,
+            "Total Equivalent Days": "",
+            "Chargeable Days": "",
+            "Attendance Deduction INR": "",
+            "Not Marked Deduction INR": "",
+            "Allowance Consumed": "",
             "Monthly base salary INR": employee.monthlyBaseSalary,
             "Gross INR": "",
             "Advances INR":

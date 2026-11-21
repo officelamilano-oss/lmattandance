@@ -3,7 +3,13 @@ import { connection, NextResponse } from "next/server";
 import { assertOutletAccess, getActor } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError } from "@/lib/http";
-import { calculatePayroll } from "@/lib/payroll/calculate";
+import {
+  calculateLoanInstallment,
+  calculatePayroll,
+  getLatestAttendanceEntries,
+  getLatestAttendanceEntry,
+} from "@/lib/payroll/calculate";
+import { getNotMarkedDays } from "@/lib/payroll/not-marked-days";
 import { isAttendanceOutletSubmitted } from "@/lib/attendance";
 import { dateAfter, getMonthDates } from "@/lib/payroll/dates";
 import { dateOnlySchema } from "@/lib/validation/common";
@@ -11,9 +17,11 @@ import type {
   AdvanceDocument,
   AttendanceDayDocument,
   EmployeeDocument,
+  LoanDocument,
   OutletDocument,
   SalaryRecordDocument,
   SalarySettings,
+  UniformDeductionDocument,
 } from "@/lib/models";
 
 type DashboardPart =
@@ -290,7 +298,10 @@ export async function GET(request: Request) {
         outlets.map((outlet) => [outlet._id.toHexString(), outlet.code]),
       );
       for (const day of awayDays) {
-        for (const entry of day.entries) {
+        for (const entry of getLatestAttendanceEntries(day.entries, {
+          outletId: day.outletId.toHexString(),
+          date: day.date,
+        })) {
           if (entry.status !== "A" && entry.status !== "HD") continue;
           const employee = employeeById.get(entry.employeeId.toHexString());
           if (
@@ -339,6 +350,48 @@ export async function GET(request: Request) {
               })
               .toArray()
         : [];
+      const [payrollLoans, scheduledUniforms] = employeeIds.length
+        ? await Promise.all([
+            db
+              .collection<LoanDocument>("loans")
+              .find({
+                employeeId: { $in: employeeIds },
+                outletId: { $in: outletIds },
+                outstandingAmount: { $gt: 0 },
+                status: { $nin: ["PAUSED", "COMPLETED"] },
+                $or: [
+                  { deductionStartMonth: { $exists: false } },
+                  { deductionStartMonth: { $lte: month } },
+                ],
+              })
+              .toArray(),
+            db
+              .collection<UniformDeductionDocument>(
+                "employee_uniform_deductions",
+              )
+              .find({
+                employeeId: { $in: employeeIds },
+                outletId: { $in: outletIds },
+                deductionMonth: month,
+                status: "SCHEDULED",
+                payrollRecordId: { $exists: false },
+              })
+              .toArray(),
+          ])
+        : [[], []];
+      const loansByEmployee = new Map<string, LoanDocument[]>();
+      for (const loan of payrollLoans) {
+        const key = loan.employeeId.toHexString();
+        loansByEmployee.set(key, [...(loansByEmployee.get(key) ?? []), loan]);
+      }
+      const uniformsByEmployee = new Map<string, number>();
+      for (const deduction of scheduledUniforms) {
+        const key = deduction.employeeId.toHexString();
+        uniformsByEmployee.set(
+          key,
+          (uniformsByEmployee.get(key) ?? 0) + deduction.amount,
+        );
+      }
       const advanceTotals = new Map<string, number>();
       for (const advance of approvedAdvances) {
         const employeeId = advance.employeeId.toHexString();
@@ -363,7 +416,10 @@ export async function GET(request: Request) {
         ]),
       );
       for (const day of monthDays) {
-        for (const entry of day.entries) {
+        for (const entry of getLatestAttendanceEntries(day.entries, {
+          outletId: day.outletId.toHexString(),
+          date: day.date,
+        })) {
             const employeeId = entry.employeeId.toHexString();
             const employee = employeeById.get(employeeId);
             if (
@@ -416,9 +472,11 @@ export async function GET(request: Request) {
             ? employee.dateOfJoining
             : monthStart;
         const employedEnd =
-          employee.deactivatedAt && employee.deactivatedAt < monthEnd
-            ? employee.deactivatedAt
-            : monthEnd;
+          [
+            monthEnd,
+            dashboardDate,
+            employee.deactivatedAt ?? monthEnd,
+          ].sort()[0];
         const eligibleCalendarDays =
           employedStart > employedEnd
             ? 0
@@ -444,15 +502,26 @@ export async function GET(request: Request) {
             halfDays: counts.HD,
             weekOffs: counts.WO,
             paidAbsences: settings?.paidAbsences ?? 0,
+            notMarkedDays: await getNotMarkedDays(
+              employee,
+              month,
+              dashboardDate,
+            ),
             settleMonthlySalary: completeAttendance,
-            salaryEntitlementDays: employedFullMonth
-              ? 30
-              : eligibleCalendarDays,
+            salaryEntitlementDays:
+              fullMonthSelected && employedFullMonth
+                ? 30
+                : eligibleCalendarDays,
             advances: advanceTotals.get(employee._id.toHexString()) ?? 0,
-            loanDeduction: 0,
+            loanDeduction: calculateLoanInstallment(
+              loansByEmployee.get(employee._id.toHexString()) ?? [],
+              month,
+            ),
             overtime: 0,
             allowances: 0,
             otherDeductions: 0,
+            uniformDeductions:
+              uniformsByEmployee.get(employee._id.toHexString()) ?? 0,
             pfEnabled: employee.pfEnabled,
             employeePfPercent: employee.employeePfPercent,
             employerPfPercent: employee.employerPfPercent,
@@ -465,7 +534,11 @@ export async function GET(request: Request) {
     }
     const attendance = { P: 0, A: 0, WO: 0, HD: 0 };
     for (const day of todayDays)
-      for (const entry of day.entries) attendance[entry.status] += 1;
+      for (const entry of getLatestAttendanceEntries(day.entries, {
+        outletId: day.outletId.toHexString(),
+        date: day.date,
+      }))
+        attendance[entry.status] += 1;
     const periodAttendance = { P: 0, A: 0, WO: 0, HD: 0 };
     const periodAttendanceByDate = new Map<
       string,
@@ -491,7 +564,10 @@ export async function GET(request: Request) {
           HD: 0,
           WO: 0,
         };
-        for (const entry of day.entries) {
+        for (const entry of getLatestAttendanceEntries(day.entries, {
+          outletId: day.outletId.toHexString(),
+          date: day.date,
+        })) {
           dailyCounts[entry.status] += 1;
           outletCounts[entry.status] += 1;
           periodAttendance[entry.status] += 1;
@@ -560,7 +636,10 @@ export async function GET(request: Request) {
       .sort((left, right) => right.rate! - left.rate!)[0];
     const markedTodayIds = new Set(
       todayDays.flatMap((day) =>
-        day.entries.map((entry) => entry.employeeId.toHexString()),
+        getLatestAttendanceEntries(day.entries, {
+          outletId: day.outletId.toHexString(),
+          date: day.date,
+        }).map((entry) => entry.employeeId.toHexString()),
       ),
     );
     const unmarkedAttendanceEmployees = attendanceSubmissionEmployees.filter(
@@ -589,7 +668,10 @@ export async function GET(request: Request) {
           ...new Set(
             todayDays
               .flatMap((day) =>
-                day.entries
+                getLatestAttendanceEntries(day.entries, {
+                  outletId: day.outletId.toHexString(),
+                  date: day.date,
+                })
                   .filter((entry) => entry.status === "A")
                   .map((entry) => entry.employeeId.toHexString()),
               ),
@@ -636,7 +718,10 @@ export async function GET(request: Request) {
     const attendanceStatusByEmployee = new Map(
       wantsAttendance
         ? todayDays.flatMap((day) =>
-        day.entries.map((entry) => [
+        getLatestAttendanceEntries(day.entries, {
+          outletId: day.outletId.toHexString(),
+          date: day.date,
+        }).map((entry) => [
           entry.employeeId.toHexString(),
           {
             status: entry.status,
@@ -672,9 +757,16 @@ export async function GET(request: Request) {
         const day = todayDays.find((item) =>
           item.outletId.equals(employee.outletId),
         );
-        const entry = day?.entries.find((item) =>
-          item.employeeId.equals(employee._id),
-        );
+        const entry = day
+          ? getLatestAttendanceEntry(
+              day.entries,
+              employee._id.toHexString(),
+              {
+                outletId: employee.outletId.toHexString(),
+                date: dashboardDate,
+              },
+            )
+          : undefined;
         return {
           employeeId: employee._id.toHexString(),
           employeeName: employee.fullName,
@@ -709,7 +801,11 @@ export async function GET(request: Request) {
         );
         const counts = { P: 0, A: 0, WO: 0, HD: 0 };
         if (day)
-          for (const entry of day.entries) counts[entry.status] += 1;
+          for (const entry of getLatestAttendanceEntries(day.entries, {
+            outletId: day.outletId.toHexString(),
+            date: day.date,
+          }))
+            counts[entry.status] += 1;
         return {
           id: outlet._id.toHexString(),
           code: outlet.code,
@@ -717,7 +813,10 @@ export async function GET(request: Request) {
         };
       });
       for (const day of trendDays)
-        for (const entry of day.entries)
+        for (const entry of getLatestAttendanceEntries(day.entries, {
+          outletId: day.outletId.toHexString(),
+          date: day.date,
+        }))
           trendAttendance[entry.status] += 1;
       attendanceTrend.push({
         date: trendDate,
@@ -752,7 +851,12 @@ export async function GET(request: Request) {
           .countDocuments({ outletId: outlet._id, active: true });
         const day = todayDays.find((item) => item.outletId.equals(outlet._id));
         const counts = { P: 0, A: 0, WO: 0, HD: 0 };
-        if (day) for (const entry of day.entries) counts[entry.status] += 1;
+        if (day)
+          for (const entry of getLatestAttendanceEntries(day.entries, {
+            outletId: day.outletId.toHexString(),
+            date: day.date,
+          }))
+            counts[entry.status] += 1;
         return {
           id: outlet._id.toHexString(),
           _id: outlet._id.toHexString(),
