@@ -27,7 +27,7 @@
     --status-late: var(--late);
     --shadow: 0 14px 34px color-mix(in srgb, var(--ink) 6%, transparent)
 }
-
+    
 * {
     box-sizing: border-box
 }

@@ -12,6 +12,7 @@ import {
   calculatePayroll,
   countNotMarkedDays,
   getLatestAttendanceEntries,
+  getSubmittedAttendanceStatuses,
 } from "../src/lib/payroll/calculate.ts";
 import { getIndiaDate, getIndiaMonth, getMonthDates } from "../src/lib/payroll/dates.ts";
 import { findExistingPayrollEmployees } from "../src/lib/payroll/duplicate.ts";
@@ -122,6 +123,39 @@ test("not-marked counting excludes future, pre-joining, post-leaving, holiday, a
     today: "2026-10-12",
     countTodayAsNotMarked: true,
   }), 1);
+});
+
+test("submitted attendance statuses are batched by outlet, employee, and date", () => {
+  const outletId = new ObjectId();
+  const otherOutletId = new ObjectId();
+  const employeeId = new ObjectId();
+  const updatedBy = new ObjectId();
+  const statuses = getSubmittedAttendanceStatuses([
+    {
+      outletId,
+      date: "2026-11-01",
+      entries: [
+        { employeeId, status: "A", updatedAt: new Date(1), updatedBy },
+        { employeeId, status: "P", updatedAt: new Date(2), updatedBy },
+      ],
+    },
+    {
+      outletId: otherOutletId,
+      date: "2026-11-01",
+      entries: [
+        { employeeId, status: "HD", updatedAt: new Date(3), updatedBy },
+      ],
+    },
+  ]);
+
+  assert.equal(
+    statuses.get(outletId.toHexString())?.get(employeeId.toHexString())?.get("2026-11-01"),
+    "P",
+  );
+  assert.equal(
+    statuses.get(otherOutletId.toHexString())?.get(employeeId.toHexString())?.get("2026-11-01"),
+    "HD",
+  );
 });
 
 test("payroll cases A, B, C, and D use calendar gross and separate not-marked deductions", () => {

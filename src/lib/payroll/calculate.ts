@@ -1,5 +1,10 @@
 import Decimal from "decimal.js";
-import type { AttendanceEntry, SalaryMethod } from "@/lib/models";
+import type {
+  AttendanceDayDocument,
+  AttendanceEntry,
+  AttendanceStatus,
+  SalaryMethod,
+} from "@/lib/models";
 import { addMonths } from "@/lib/payroll/loans";
 
 export interface PayrollInputs {
@@ -92,6 +97,36 @@ export function getLatestAttendanceEntry(
   return getLatestAttendanceEntries(entries, context).find(
     (entry) => entry.employeeId.toHexString() === employeeId,
   );
+}
+
+export function getSubmittedAttendanceStatuses(
+  days: Pick<AttendanceDayDocument, "outletId" | "date" | "entries">[],
+) {
+  const statusesByOutlet = new Map<
+    string,
+    Map<string, Map<string, AttendanceStatus>>
+  >();
+  for (const day of days) {
+    const outletId = day.outletId.toHexString();
+    let statusesByEmployee = statusesByOutlet.get(outletId);
+    if (!statusesByEmployee) {
+      statusesByEmployee = new Map();
+      statusesByOutlet.set(outletId, statusesByEmployee);
+    }
+    for (const entry of getLatestAttendanceEntries(
+      day.entries.filter((item) => ["P", "A", "HD", "WO"].includes(item.status)),
+      { outletId, date: day.date },
+    )) {
+      const employeeId = entry.employeeId.toHexString();
+      let statusesByDate = statusesByEmployee.get(employeeId);
+      if (!statusesByDate) {
+        statusesByDate = new Map();
+        statusesByEmployee.set(employeeId, statusesByDate);
+      }
+      statusesByDate.set(day.date, entry.status);
+    }
+  }
+  return statusesByOutlet;
 }
 
 export function calculateNetPayable(calculation: {

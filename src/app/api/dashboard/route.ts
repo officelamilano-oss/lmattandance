@@ -4,12 +4,13 @@ import { assertOutletAccess, getActor } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError } from "@/lib/http";
 import {
+  countNotMarkedDays,
   calculateLoanInstallment,
   calculatePayroll,
   getLatestAttendanceEntries,
   getLatestAttendanceEntry,
+  getSubmittedAttendanceStatuses,
 } from "@/lib/payroll/calculate";
-import { getNotMarkedDays } from "@/lib/payroll/not-marked-days";
 import { isAttendanceOutletSubmitted } from "@/lib/attendance";
 import { dateAfter, getMonthDates } from "@/lib/payroll/dates";
 import { dateOnlySchema } from "@/lib/validation/common";
@@ -129,7 +130,7 @@ export async function GET(request: Request) {
     const awayTo = awayToResult.data;
     const month = dashboardDate.slice(0, 7);
     const monthStart = `${month}-01`;
-    const { daysInMonth } = getMonthDates(month);
+    const { daysInMonth, dates: monthDates } = getMonthDates(month);
     const monthEnd = `${month}-${String(daysInMonth).padStart(2, "0")}`;
     const requestedOutlet =
       url.searchParams.get("outletId") ?? undefined;
@@ -219,7 +220,7 @@ export async function GET(request: Request) {
                 })
                 .toArray()
             : Promise.resolve([]),
-        (wantsSummary || wantsTrend || wantsOutlets) && outletIds.length
+        (wantsSummary || wantsTrend || wantsOutlets || wants("notifications")) && outletIds.length
           ? db
               .collection<EmployeeDocument>("employees")
               .find(
@@ -415,6 +416,38 @@ export async function GET(request: Request) {
             employee,
         ]),
       );
+      const attendanceStatusesByOutlet = getSubmittedAttendanceStatuses(monthDays);
+      const countNotMarkedDaysForEmployee = (employee: EmployeeDocument) => {
+        const countTodayAsNotMarked = settings?.countTodayAsNotMarked ?? true;
+        const latestDate = [
+          dashboardDate,
+          monthEnd,
+          employee.deactivatedAt ?? dashboardDate,
+          countTodayAsNotMarked ? today : dateAfter(today, -1),
+        ].sort()[0];
+        const firstDate = [
+          monthStart,
+          employee.dateOfJoining,
+          monthStart,
+        ].sort().reverse()[0];
+        return firstDate > latestDate
+          ? 0
+          : countNotMarkedDays({
+              dates: monthDates.filter(
+                (date) => date >= firstDate && date <= latestDate,
+              ),
+              markedStatuses:
+                attendanceStatusesByOutlet
+                  .get(employee.outletId.toHexString())
+                  ?.get(employee._id.toHexString()) ?? new Map(),
+              dateOfJoining: employee.dateOfJoining,
+              deactivatedAt: employee.deactivatedAt,
+              cutoffDate: latestDate,
+              today,
+              holidays: settings?.declaredOffDays ?? [],
+              countTodayAsNotMarked,
+            });
+      };
       for (const day of monthDays) {
         for (const entry of getLatestAttendanceEntries(day.entries, {
           outletId: day.outletId.toHexString(),
@@ -502,11 +535,7 @@ export async function GET(request: Request) {
             halfDays: counts.HD,
             weekOffs: counts.WO,
             paidAbsences: settings?.paidAbsences ?? 0,
-            notMarkedDays: await getNotMarkedDays(
-              employee,
-              month,
-              dashboardDate,
-            ),
+            notMarkedDays: countNotMarkedDaysForEmployee(employee),
             settleMonthlySalary: completeAttendance,
             salaryEntitlementDays:
               fullMonthSelected && employedFullMonth
@@ -697,7 +726,7 @@ export async function GET(request: Request) {
             .toArray()
         : [];
     const submittedOutlets = new Set(
-      wantsSummary || wantsOutlets
+      wantsSummary || wantsOutlets || wants("notifications")
         ? todayDays
         .filter((day) => {
           if (day.status !== "SUBMITTED") return false;
@@ -926,7 +955,13 @@ export async function GET(request: Request) {
           : null,
       },
         }
-        : {}),
+        : wants("notifications")
+          ? {
+              metrics: {
+                missingSubmissions: outlets.length - submittedOutlets.size,
+              },
+            }
+          : {}),
       ...(wantsOutlets ? { outlets: outletSummaries } : {}),
       ...(wantsAttendance
         ? { attendanceEmployees: attendanceEmployeeSummaries }

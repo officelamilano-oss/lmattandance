@@ -73,7 +73,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user: 
     try {
       const [dashboardResponse, advancesResponse] = await Promise.all([
         canReadDashboard
-          ? fetch("/api/dashboard?parts=summary,notifications", { cache: "no-store" })
+          ? fetch("/api/dashboard?parts=notifications", { cache: "no-store" })
           : Promise.resolve(null),
         canReadAdvances
           ? fetch("/api/advances?status=PENDING&pageSize=100", {
