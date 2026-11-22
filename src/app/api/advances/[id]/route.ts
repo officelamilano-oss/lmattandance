@@ -3,9 +3,67 @@ import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { advanceSchema } from "@/lib/validation/business";
-import { apiError, readJson } from "@/lib/http";
+import { apiError, assertSameOrigin, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
 import type { AdvanceDocument, EmployeeDocument } from "@/lib/models";
+import { getDateInTimezone } from "@/lib/payroll/dates";
+
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    assertSameOrigin(request);
+    const actor = await getActor();
+    if (!actor)
+      return NextResponse.json(
+        { error: "Authentication required." },
+        { status: 401 },
+      );
+    if (!actor.permissions.includes("advances.write"))
+      return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+    const { id } = await context.params;
+    if (!ObjectId.isValid(id))
+      return NextResponse.json(
+        { error: "Invalid advance ID." },
+        { status: 400 },
+      );
+    const advances = (await getDb()).collection<AdvanceDocument>("advances");
+    const current = await advances.findOne({ _id: new ObjectId(id) });
+    if (!current) throw new Error("NOT_FOUND");
+    assertOutletAccess(actor, current.outletId);
+    if (current.payrollRecordId)
+      return NextResponse.json(
+        { error: "An advance assigned to payroll cannot be deleted." },
+        { status: 409 },
+      );
+    const deletion = await advances.deleteOne({
+      _id: current._id,
+      payrollRecordId: { $exists: false },
+    });
+    if (!deletion.deletedCount)
+      return NextResponse.json(
+        { error: "This advance was assigned to payroll and cannot be deleted." },
+        { status: 409 },
+      );
+    await writeAudit({
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: "ADVANCE_DELETED",
+      entityType: "advance",
+      entityId: id,
+      outletId: current.outletId,
+      changes: {
+        date: { before: current.date, after: null },
+        amount: { before: current.amount, after: null },
+        status: { before: current.status, after: "DELETED" },
+      },
+    });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return apiError(error);
+  }
+}
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -50,6 +108,19 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         },
       } as const;
       const transition = transitions[raw.action];
+      const now = new Date();
+      let approvedDate: string | undefined;
+      if (transition.to === "APPROVED") {
+        const settings = await db
+          .collection<{ _id: string; timezone?: string }>("settings")
+          .findOne({ _id: "payroll" });
+        approvedDate = getDateInTimezone(
+          now,
+          settings?.timezone ||
+            process.env.BUSINESS_TIMEZONE ||
+            "Asia/Kolkata",
+        );
+      }
       const result = await db.collection<AdvanceDocument>("advances").updateOne(
         {
           _id: current._id,
@@ -62,8 +133,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
           $set: {
             status: transition.to,
             updatedBy: actor.id,
-            updatedAt: new Date(),
+            updatedAt: now,
+            ...(approvedDate ? { approvedDate } : {}),
           },
+          ...(approvedDate ? {} : { $unset: { approvedDate: "" } }),
         },
       );
       if (!result.modifiedCount)
@@ -100,6 +173,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     const employee = await db.collection<EmployeeDocument>("employees").findOne({ _id: employeeId, outletId });
     if (!employee) return NextResponse.json({ error: "Employee does not belong to this outlet." }, { status: 400 });
     const nextStatus = current.status === "APPROVED" ? "PENDING" : current.status;
+    const now = new Date();
     const editLimitQuery = isOutletUser
       ? {
           $or: [
@@ -115,7 +189,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
         ...editLimitQuery,
       },
       {
-        $set: { ...input, employeeId, outletId, status: nextStatus, updatedBy: actor.id, updatedAt: new Date() },
+        $set: { ...input, employeeId, outletId, status: nextStatus, updatedBy: actor.id, updatedAt: now },
+        $unset: { approvedDate: "" },
         ...(isOutletUser ? { $inc: { editCount: 1 } } : {}),
       },
     );

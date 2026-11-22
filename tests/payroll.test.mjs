@@ -14,7 +14,12 @@ import {
   getLatestAttendanceEntries,
   getSubmittedAttendanceStatuses,
 } from "../src/lib/payroll/calculate.ts";
-import { getIndiaDate, getIndiaMonth, getMonthDates } from "../src/lib/payroll/dates.ts";
+import {
+  getDateInTimezone,
+  getIndiaDate,
+  getIndiaMonth,
+  getMonthDates,
+} from "../src/lib/payroll/dates.ts";
 import { findExistingPayrollEmployees } from "../src/lib/payroll/duplicate.ts";
 import { hashPassword, verifyPassword } from "../src/lib/passwords.ts";
 import {
@@ -339,6 +344,13 @@ test("default business date and month follow India time", () => {
   const nearMidnightUtc = new Date("2026-01-01T20:00:00.000Z");
   assert.equal(getIndiaDate(nearMidnightUtc), "2026-01-02");
   assert.equal(getIndiaMonth(nearMidnightUtc), "2026-01");
+});
+
+test("approval dates use the configured business timezone", () => {
+  assert.equal(
+    getDateInTimezone(new Date("2026-11-25T18:45:00.000Z"), "Asia/Kolkata"),
+    "2026-11-26",
+  );
 });
 
 test("30-day salary divisor pays every present and week-off day", () => {

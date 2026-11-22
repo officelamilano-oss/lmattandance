@@ -54,6 +54,7 @@
   } from "@/lib/models";
   import type {
     AttendanceCounts,
+    AdvanceView,
     DashboardOutlet,
     DesignationView,
     EmployeeView,
@@ -204,6 +205,28 @@
         clientRequestCache.invalidateUrl("/api/designations");
     }
     return payload as T;
+  }
+
+  async function fetchAllEmployees(signal?: AbortSignal): Promise<EmployeeView[]> {
+    const pageSize = 100;
+    const firstPage = await request<WorkspaceData>(
+      `/api/employees?page=1&pageSize=${pageSize}`,
+      { signal },
+    );
+    const total = firstPage.total ?? firstPage.employees?.length ?? 0;
+    const remainingPages = await Promise.all(
+      Array.from(
+        { length: Math.max(0, Math.ceil(total / pageSize) - 1) },
+        (_, index) =>
+          request<WorkspaceData>(
+            `/api/employees?page=${index + 2}&pageSize=${pageSize}`,
+            { signal },
+          ),
+      ),
+    );
+    return [firstPage, ...remainingPages].flatMap(
+      (page) => page.employees ?? [],
+    );
   }
 
   type ExportFormat = "xlsx" | "csv";
@@ -363,6 +386,8 @@
     const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(
       null,
     );
+    const [advanceToDelete, setAdvanceToDelete] =
+      useState<AdvanceView | null>(null);
     const [employeeToEdit, setEmployeeToEdit] = useState<Employee | null>(null);
     const [data, setData] = useState<WorkspaceData>({});
     const [date, setDate] = useState(() => getIndiaDate());
@@ -539,10 +564,7 @@
               `/api/advances?${advanceParams.toString()}`,
               { signal },
             ),
-            request<WorkspaceData>(
-              "/api/employees?pageSize=100",
-              { signal },
-            ),
+            fetchAllEmployees(signal),
             clientRequestCache
               .get(user.email, "/api/outlets", 120_000, fetchOutletList)
               .catch((caught: unknown) => {
@@ -557,7 +579,7 @@
           ]);
           commitData({
             ...advances,
-            employees: employees.employees,
+            employees,
             outlets,
           });
         }
@@ -2447,6 +2469,17 @@
       if (deleted) setEmployeeToDelete(null);
     }
 
+    async function deleteAdvance() {
+      if (!advanceToDelete) return;
+      const deleted = await mutate(
+        `/api/advances/${advanceToDelete._id}`,
+        undefined,
+        "DELETE",
+        "Advance deleted.",
+      );
+      if (deleted) setAdvanceToDelete(null);
+    }
+
     if (section === "employees")
       return (
         <div className="content-area">
@@ -2821,7 +2854,9 @@
                   >
                     <option value="" disabled>
                       {advanceOutletId
-                        ? "Select employee"
+                        ? `Select employee · ${(data.employees ?? []).filter(
+                            (employee) => employee.outletId === advanceOutletId,
+                          ).length} available`
                         : "Select outlet first"}
                     </option>
                     {(data.employees ?? [])
@@ -2971,6 +3006,20 @@
                         </button>
                       </>
                     )}
+                  {!item.payrollRecordId &&
+                    user.permissions.includes("advances.write") && (
+                      <button
+                        type="button"
+                        className="button button-small button-danger advance-delete-button"
+                        disabled={busy}
+                        onClick={() => {
+                          setError("");
+                          setAdvanceToDelete(item);
+                        }}
+                      >
+                        <Trash2 size={14} /> Delete
+                      </button>
+                    )}
                   {item.status === "REJECTED" &&
                     user.permissions.includes("advances.approve") && (
                       <>
@@ -3020,6 +3069,50 @@
               total={data.total ?? 0}
               onPageChange={setPage}
             />
+          )}
+          {advanceToDelete && (
+            <ModalPortal>
+              <div className="access-modal-backdrop">
+                <section
+                  className="access-modal employee-delete-modal"
+                  role="alertdialog"
+                  aria-modal="true"
+                  aria-labelledby="advance-delete-title"
+                  aria-describedby="advance-delete-description"
+                >
+                  <div className="access-modal-heading">
+                    <div>
+                      <h2 id="advance-delete-title">Delete advance?</h2>
+                      <p id="advance-delete-description">
+                        Are you sure you want to delete the{" "}
+                        {currency(advanceToDelete.amount)} advance for{" "}
+                        {advanceToDelete.employeeName ?? "this employee"} dated{" "}
+                        {advanceToDelete.date}? This action cannot be undone.
+                      </p>
+                    </div>
+                  </div>
+                  {error && <Notice error={error} success="" />}
+                  <div className="employee-row-actions employee-delete-actions">
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      disabled={busy}
+                      onClick={() => setAdvanceToDelete(null)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-danger"
+                      disabled={busy}
+                      onClick={() => void deleteAdvance()}
+                    >
+                      <Trash2 size={14} /> {busy ? "Deleting…" : "Delete"}
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </ModalPortal>
           )}
         </div>
       );

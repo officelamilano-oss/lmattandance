@@ -1,6 +1,6 @@
-export function getIndiaDate(now = new Date()) {
+export function getDateInTimezone(now: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -11,6 +11,10 @@ export function getIndiaDate(now = new Date()) {
       .map((part) => [part.type, part.value]),
   );
   return `${values.year}-${values.month}-${values.day}`;
+}
+
+export function getIndiaDate(now = new Date()) {
+  return getDateInTimezone(now, "Asia/Kolkata");
 }
 
 export function getIndiaMonth(now = new Date()) {

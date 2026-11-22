@@ -909,22 +909,49 @@ async function getRows(
         countsByEmployee.set(employeeId, counts);
       }
     }
-    const unclaimedAdvances = await db
-      .collection<AdvanceDocument>("advances")
-      .find({
-        outletId: outlet._id,
-        status: "APPROVED",
-        date: { $gte: monthStart, $lte: monthEnd },
-        payrollRecordId: { $exists: false },
-      })
-      .toArray();
+    const payrollRecordIds = records.map((record) => record._id);
+    const [payrollAdvances, unclaimedAdvances] = await Promise.all([
+      payrollRecordIds.length
+        ? db
+            .collection<AdvanceDocument>("advances")
+            .find({
+              outletId: outlet._id,
+              status: "APPROVED",
+              payrollRecordId: { $in: payrollRecordIds },
+            })
+            .toArray()
+        : Promise.resolve([]),
+      db
+        .collection<AdvanceDocument>("advances")
+        .find({
+          outletId: outlet._id,
+          status: "APPROVED",
+          date: { $gte: monthStart, $lte: monthEnd },
+          payrollRecordId: { $exists: false },
+        })
+        .toArray(),
+    ]);
     const advancesByEmployee = new Map<string, number>();
+    const unclaimedAdvancesByEmployee = new Map<string, AdvanceDocument[]>();
     for (const advance of unclaimedAdvances) {
       const employeeId = advance.employeeId.toHexString();
       advancesByEmployee.set(
         employeeId,
         (advancesByEmployee.get(employeeId) ?? 0) + advance.amount,
       );
+      unclaimedAdvancesByEmployee.set(employeeId, [
+        ...(unclaimedAdvancesByEmployee.get(employeeId) ?? []),
+        advance,
+      ]);
+    }
+    const advancesByPayrollRecord = new Map<string, AdvanceDocument[]>();
+    for (const advance of payrollAdvances) {
+      if (!advance.payrollRecordId) continue;
+      const payrollRecordId = advance.payrollRecordId.toHexString();
+      advancesByPayrollRecord.set(payrollRecordId, [
+        ...(advancesByPayrollRecord.get(payrollRecordId) ?? []),
+        advance,
+      ]);
     }
     return [
       ...records.map((record) => {
@@ -955,6 +982,9 @@ async function getRows(
           "Monthly base salary INR": employee?.monthlyBaseSalary ?? 0,
           "Gross INR": Number(record.calculation.grossEarnings ?? 0),
           "Advances INR": Number(record.calculation.advances ?? 0),
+          "Advance Approval Details (Date / Amount INR)": formatAdvanceApprovalDetails(
+            advancesByPayrollRecord.get(record._id.toHexString()) ?? [],
+          ),
           "Employee ESI INR": Number(record.calculation.esi ?? 0),
           "Employee PF (deduction) INR": Number(
             record.calculation.employeePf ?? 0,
@@ -1003,6 +1033,12 @@ async function getRows(
             "Gross INR": "",
             "Advances INR":
               advancesByEmployee.get(employee._id.toHexString()) ?? 0,
+            "Advance Approval Details (Date / Amount INR)":
+              formatAdvanceApprovalDetails(
+                unclaimedAdvancesByEmployee.get(
+                  employee._id.toHexString(),
+                ) ?? [],
+              ),
             "Employee ESI INR": 0,
             "Employee PF (deduction) INR": 0,
             "Employer PF (tracked) INR": 0,
@@ -1017,11 +1053,21 @@ async function getRows(
   if (type === "advances") {
     const advances = await db
       .collection<AdvanceDocument>("advances")
-      .find({ outletId: outlet._id, date: { $gte: from, $lte: to } })
-      .sort({ date: 1 })
+      .find({
+        outletId: outlet._id,
+        $or: [
+          { approvedDate: { $gte: from, $lte: to } },
+          {
+            approvedDate: { $exists: false },
+            date: { $gte: from, $lte: to },
+          },
+        ],
+      })
+      .sort({ approvedDate: 1, date: 1 })
       .toArray();
     return advances.map((advance) => ({
       Date: advance.date,
+      "Approval Date": advance.approvedDate ?? "",
       "Employee Code":
         employeeById.get(advance.employeeId.toHexString())?.employeeCode ??
         "Unknown",
@@ -1062,6 +1108,15 @@ function safeCell(value: unknown): string | number | boolean | null {
   const text = formatExportDates(String(value));
   // Formula injection se bachao
   return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+}
+
+function formatAdvanceApprovalDetails(advances: AdvanceDocument[]) {
+  return advances
+    .map(
+      (advance) =>
+        `${advance.approvedDate ?? "Approval date unavailable"}: ${advance.amount.toFixed(2)} INR`,
+    )
+    .join("; ");
 }
 
 function csvCell(value: unknown): string {
@@ -1275,6 +1330,7 @@ function emptyHeaders(
       "Monthly base salary INR",
       "Gross INR",
       "Advances INR",
+      "Advance Approval Details (Date / Amount INR)",
       "Employee ESI INR",
       "Employee PF (deduction) INR",
       "Employer PF (tracked) INR",
@@ -1302,6 +1358,7 @@ function emptyHeaders(
   if (type === "advances")
     return [
       "Date",
+      "Approval Date",
       "Employee Code",
       "Employee",
       "Amount INR",

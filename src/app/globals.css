@@ -2911,11 +2911,12 @@ td strong {
 .content-area .toolbar>button.button.button-small.advance-restore-button {
     border-color: var(--status-half)!important;
     background: var(--status-half)!important;
-    color: var(--status-half)!important
+    color: #1A1A1A!important
 }
 
 .content-area .toolbar>button.button.button-small.advance-restore-button:hover:not(:disabled) {
-    background: var(--status-half)!important
+    background: var(--status-half)!important;
+    color: #1A1A1A!important
 }
 
 .dashboard-charts {

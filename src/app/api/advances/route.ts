@@ -7,6 +7,7 @@ import { monthSchema, paginationSchema } from "@/lib/validation/common";
 import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
 import type { AdvanceDocument, EmployeeDocument } from "@/lib/models";
+import { getDateInTimezone } from "@/lib/payroll/dates";
 
 export async function GET(request: Request) {
   try {
@@ -132,9 +133,20 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     const now = new Date();
+    let approvedDate: string | undefined;
+    if (actor.role === "MAIN_ADMIN") {
+      const settings = await db
+        .collection<{ _id: string; timezone?: string }>("settings")
+        .findOne({ _id: "payroll" });
+      approvedDate = getDateInTimezone(
+        now,
+        settings?.timezone || process.env.BUSINESS_TIMEZONE || "Asia/Kolkata",
+      );
+    }
     const advance: AdvanceDocument = {
       _id: new ObjectId(),
       ...input,
+      ...(approvedDate ? { approvedDate } : {}),
       employeeId,
       outletId,
       status: actor.role === "MAIN_ADMIN" ? "APPROVED" : "PENDING",

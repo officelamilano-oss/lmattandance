@@ -180,7 +180,7 @@ export async function GET(request: Request) {
             ...(actor.role === "OUTLET_USER" ? { mobile: 0 } : {}),
           },
         })
-        .sort({ fullName: 1 })
+        .sort({ employeeCode: 1, _id: 1 })
         .skip((page.page - 1) * page.pageSize)
         .limit(page.pageSize)
         .toArray(),

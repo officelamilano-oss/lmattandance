@@ -148,6 +148,7 @@ export interface AdvanceDocument {
   employeeId: ObjectId;
   outletId: ObjectId;
   date: string;
+  approvedDate?: string;
   amount: number;
   status: "PENDING" | "APPROVED" | "REJECTED";
   editCount?: number;
