@@ -4322,6 +4322,19 @@
                     }
                   />
                   <UserPasswordControl item={item} />
+                  <UserDeleteControl
+                    item={item}
+                    disabled={
+                      item.email.toLowerCase() === user.email.toLowerCase()
+                    }
+                    onDelete={async () => {
+                      await request(`/api/users/${item._id}`, {
+                        method: "DELETE",
+                      });
+                      await reload();
+                      setSuccess("User deleted.");
+                    }}
+                  />
                 </div>,
               ])}
               empty="No provisioned users."
@@ -7323,6 +7336,103 @@
               </form>
             </section>
           </div></ModalPortal>
+        )}
+      </>
+    );
+  }
+
+  function UserDeleteControl({
+    item,
+    disabled,
+    onDelete,
+  }: {
+    item: UserView;
+    disabled: boolean;
+    onDelete: () => Promise<void>;
+  }) {
+    const [isOpen, setIsOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState("");
+
+    async function confirmDelete() {
+      setBusy(true);
+      setError("");
+      try {
+        await onDelete();
+        setIsOpen(false);
+      } catch (caught) {
+        setError(
+          caught instanceof Error ? caught.message : "Unable to delete user.",
+        );
+      } finally {
+        setBusy(false);
+      }
+    }
+
+    return (
+      <>
+        <button
+          className="button button-danger"
+          type="button"
+          disabled={disabled}
+          title={disabled ? "You cannot delete your own account." : undefined}
+          onClick={() => {
+            setError("");
+            setIsOpen(true);
+          }}
+        >
+          <Trash2 size={14} /> Delete
+        </button>
+        {isOpen && (
+          <ModalPortal>
+            <div className="access-modal-backdrop">
+              <section
+                className="access-modal employee-delete-modal"
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby={`user-delete-title-${item._id}`}
+                aria-describedby={`user-delete-description-${item._id}`}
+              >
+                <div className="access-modal-heading">
+                  <div>
+                    <h2 id={`user-delete-title-${item._id}`}>Delete user?</h2>
+                    <p id={`user-delete-description-${item._id}`}>
+                      Are you sure you want to delete {item.name} ({item.email})?
+                      This action cannot be undone.
+                    </p>
+                  </div>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label="Close delete confirmation"
+                    disabled={busy}
+                    onClick={() => setIsOpen(false)}
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                {error && <Notice error={error} success="" />}
+                <div className="employee-row-actions employee-delete-actions">
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    disabled={busy}
+                    onClick={() => setIsOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="button button-danger"
+                    disabled={busy}
+                    onClick={() => void confirmDelete()}
+                  >
+                    {busy ? "Deleting…" : "Delete user"}
+                  </button>
+                </div>
+              </section>
+            </div>
+          </ModalPortal>
         )}
       </>
     );

@@ -4068,11 +4068,11 @@ tbody tr:hover {
 .dashboard-insights>.dashboard-insight-pending {
     border-color: var(--status-half);
     background: var(--status-half);
-    color: var(--status-half)
+    color: var(--ink)
 }
 
 .dashboard-insights>.dashboard-insight-pending svg {
-    color: var(--status-half)
+    color: var(--ink)
 }
 
 .dashboard-hero-actions {
@@ -5949,7 +5949,7 @@ select {
 
 .dashboard-insights>.dashboard-insight-pending {
     background: var(--status-half);
-    color: var(--status-half);
+    color: var(--ink);
     border-color: var(--status-half);
 }
 

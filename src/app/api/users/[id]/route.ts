@@ -3,10 +3,73 @@ import { NextResponse } from "next/server";
 import { getActor } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { userProvisionSchema } from "@/lib/validation/business";
-import { apiError, readJson } from "@/lib/http";
+import { apiError, assertSameOrigin, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
 import type { DesignationDocument, UserDocument } from "@/lib/models";
 import { hashPassword } from "@/lib/passwords";
+
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ id: string }> },
+) {
+  try {
+    assertSameOrigin(request);
+    const actor = await getActor();
+    if (!actor)
+      return NextResponse.json(
+        { error: "Authentication required." },
+        { status: 401 },
+      );
+    if (actor.role !== "MAIN_ADMIN")
+      return NextResponse.json(
+        { error: "Only MAIN_ADMIN can manage users." },
+        { status: 403 },
+      );
+    const { id } = await context.params;
+    if (!ObjectId.isValid(id))
+      return NextResponse.json({ error: "Invalid user ID." }, { status: 400 });
+    const targetId = new ObjectId(id);
+    if (targetId.equals(actor.id))
+      return NextResponse.json(
+        { error: "You cannot delete your own account." },
+        { status: 400 },
+      );
+
+    const db = await getDb();
+    const users = db.collection<UserDocument>("users");
+    const current = await users.findOne({ _id: targetId });
+    if (!current) throw new Error("NOT_FOUND");
+    if (current.role === "MAIN_ADMIN" && current.active) {
+      const activeAdmins = await users.countDocuments({
+        role: "MAIN_ADMIN",
+        active: true,
+      });
+      if (activeAdmins <= 1)
+        return NextResponse.json(
+          { error: "The last active MAIN_ADMIN cannot be deleted." },
+          { status: 409 },
+        );
+    }
+
+    const deletion = await users.deleteOne({ _id: targetId });
+    if (deletion.deletedCount !== 1) throw new Error("NOT_FOUND");
+    await writeAudit({
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: "USER_DELETED",
+      entityType: "user",
+      entityId: id,
+      changes: {
+        name: { before: current.name, after: null },
+        email: { before: current.email, after: null },
+        role: { before: current.role, after: null },
+      },
+    });
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return apiError(error);
+  }
+}
 
 export async function PATCH(
   request: Request,
