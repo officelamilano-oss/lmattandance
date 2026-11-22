@@ -249,6 +249,9 @@ export async function GET(request: Request) {
           uniformItems,
         ),
       });
+    if (query.type === "advances" && query.format === "xlsx")
+      for (const item of byOutlet)
+        item.rows = item.rows.filter((row) => row.Status === "APPROVED");
     const globalAuditRows: ExportRow[] =
       query.type === "audit" && actor.role === "MAIN_ADMIN" && !query.outletId
         ? (

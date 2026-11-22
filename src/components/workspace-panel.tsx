@@ -2979,7 +2979,7 @@
                 </div>,
               ]}
               rows={(data.advances ?? []).map((item) => [
-                item.date,
+                formatDate(item.date),
                 item.employeeName ?? String(item.employeeId),
                 currency(item.amount),
                 item.givenBy,
@@ -3114,6 +3114,7 @@
                   )}
                 </div>,
               ])}
+              rowKeys={(data.advances ?? []).map((item) => item._id)}
               empty="No advances recorded for this period."
               page={page}
               pageSize={25}
@@ -4612,10 +4613,10 @@
     const editLimitReached =
       userRole === "OUTLET_USER" && (item.editCount ?? 0) >= 2;
 
-    function submitEdit(event: FormEvent<HTMLFormElement>) {
+    async function submitEdit(event: FormEvent<HTMLFormElement>) {
       event.preventDefault();
       const values = new FormData(event.currentTarget);
-      void onSave({
+      const saved = await onSave({
         employeeId: item.employeeId,
         outletId: item.outletId,
         date: values.get("date"),
@@ -4624,6 +4625,7 @@
         reference: values.get("reference"),
         notes: values.get("notes"),
       });
+      if (saved) setIsOpen(false);
     }
     return (
       <>
@@ -6294,10 +6296,12 @@
     onPageChange,
     onPageSizeChange,
     paginateRows = false,
+    rowKeys,
   }: {
     className?: string;
     headers: React.ReactNode[];
     rows: React.ReactNode[][];
+    rowKeys?: Array<string | number>;
     rowClassNames?: string[];
     empty: string;
     page?: number;
@@ -6339,7 +6343,10 @@
             </thead>
             <tbody>
               {visibleRows.map((row, index) => (
-                <tr key={index} className={rowClassNames?.[index]}>
+                <tr
+                  key={rowKeys?.[index] ?? index}
+                  className={rowClassNames?.[index]}
+                >
                   {row.map((cell, cellIndex) => (
                     <td key={cellIndex}>{cell}</td>
                   ))}
@@ -7944,7 +7951,7 @@
                                 <div className="attendance-date-list">
                                   {group.dates.map((date) => (
                                     <time dateTime={date} key={date}>
-                                      {date}
+                                      {formatDate(date)}
                                     </time>
                                   ))}
                                 </div>
