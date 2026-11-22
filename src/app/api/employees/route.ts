@@ -192,6 +192,8 @@ export async function GET(request: Request) {
         actor.role === "MAIN_ADMIN",
         actor.role !== "OUTLET_USER",
       ),
+    
+    
     );
     return NextResponse.json({
       employees: visibleEmployees,
