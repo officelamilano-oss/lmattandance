@@ -56,6 +56,97 @@ const defaultSalaryRules: SalarySettings = {
   advanceDeductionPolicy: "UNPAID_ONLY",
 };
 
+// Outlets shown separately from the MFW subtotal (match against lowercase outlet name)
+const SEPARATE_OUTLET_KEYWORDS = ["shyamal", "krishna hospitality"];
+const MAIN_GROUP_LABEL = "MFW";
+
+// Only APPROVED advances are counted in totals
+function advanceTotal(rows: ExportRow[]) {
+  return Number(
+    rows
+      .filter((row) => row.Status === "APPROVED")
+      .reduce((sum, row) => sum + Number(row["Amount INR"] ?? 0), 0)
+      .toFixed(2),
+  );
+}
+
+function styleTotalRow(row: ExcelJS.Row, columnCount: number, strong = true) {
+  for (let c = 1; c <= columnCount; c += 1) {
+    const cell = row.getCell(c);
+    cell.font = { bold: true, size: strong ? 12 : 11 };
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: strong ? "FFD9EAD3" : "FFE8EDE8" },
+    };
+    cell.border = thinBorder;
+    if (typeof cell.value === "number") {
+      cell.numFmt = '"₹"#,##0.00';
+      cell.alignment = { vertical: "middle", horizontal: "right" };
+    }
+  }
+}
+
+function addAdvancesMasterSheet(
+  workbook: ExcelJS.Workbook,
+  items: Array<{ outlet: OutletDocument; rows: ExportRow[] }>,
+  allItems: Array<{ outlet: OutletDocument; rows: ExportRow[] }>,
+) {
+  const sheet = workbook.addWorksheet(sheetName("Master", workbook));
+  const headers = ["Outlet", "Outlet Name", ...emptyHeaders("advances")];
+  sheet.addRow(headers);
+  for (const { outlet, rows } of items)
+    for (const row of rows)
+      sheet.addRow(
+        headers.map((header) =>
+          header === "Outlet"
+            ? outlet.code
+            : header === "Outlet Name"
+              ? outlet.name
+              : safeCell(row[header]),
+        ),
+      );
+  styleSheet(sheet, false);
+
+  const labelCol = headers.indexOf("Employee") + 1;
+  const amountCol = headers.indexOf("Amount INR") + 1;
+  const addLine = (label: string, amount: number | null, strong = false) => {
+    const values: Array<string | number | null> = headers.map(() => null);
+    values[labelCol - 1] = label;
+    values[amountCol - 1] = amount;
+    const row = sheet.addRow(values);
+    if (amount === null || strong) styleTotalRow(row, headers.length, strong);
+    else {
+      row.getCell(labelCol).border = thinBorder;
+      const amountCell = row.getCell(amountCol);
+      amountCell.border = thinBorder;
+      amountCell.numFmt = '"₹"#,##0.00';
+      amountCell.alignment = { vertical: "middle", horizontal: "right" };
+    }
+  };
+
+  const totals = allItems.map(({ outlet, rows }) => ({
+    name: outlet.name.toUpperCase(),
+    total: advanceTotal(rows),
+  }));
+  const isSeparate = (name: string) =>
+    SEPARATE_OUTLET_KEYWORDS.some((key) => name.toLowerCase().includes(key));
+  const mainGroup = totals.filter((total) => !isSeparate(total.name));
+  const separate = totals.filter((total) => isSeparate(total.name));
+  const sum = (list: typeof totals) =>
+    Number(list.reduce((total, item) => total + item.total, 0).toFixed(2));
+
+  sheet.addRow([]);
+  sheet.addRow([]);
+  addLine("ALL OUTLET TOTAL", null);
+  for (const total of mainGroup) addLine(total.name, total.total);
+  if (separate.length) {
+    addLine(`${MAIN_GROUP_LABEL} TOTAL`, sum(mainGroup), true);
+    for (const total of separate) addLine(total.name, total.total);
+  }
+  addLine("TOTAL", sum(totals), true);
+}
+
 export async function GET(request: Request) {
   try {
     await connection();
@@ -221,6 +312,9 @@ export async function GET(request: Request) {
     const outletsToWrite = outletsWithData.length
       ? outletsWithData
       : byOutlet.slice(0, 1);
+    if (query.type === "advances" && outletsWithData.length > 1)
+      addAdvancesMasterSheet(workbook, outletsWithData, byOutlet);
+
     for (const item of outletsToWrite) {
       const sheet = workbook.addWorksheet(
         sheetName(`${item.outlet.code} ${item.outlet.name}`, workbook),
@@ -246,6 +340,15 @@ export async function GET(request: Request) {
         });
       }
       styleSheet(sheet, item.rows.length === 0);
+      if (query.type === "advances" && item.rows.length) {
+        const employeeCol = headers.indexOf("Employee");
+        const amountCol = headers.indexOf("Amount INR");
+        const values: Array<string | number | null> = headers.map(() => null);
+        values[employeeCol] = "NET PAY FOR THIS OUTLET";
+        values[amountCol] = advanceTotal(item.rows);
+        const totalRow = sheet.addRow(values);
+        styleTotalRow(totalRow, headers.length, true);
+      }
     }
     if (globalAuditRows.length) {
       const sheet = workbook.addWorksheet(sheetName("Global audit", workbook));

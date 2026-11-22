@@ -2896,6 +2896,15 @@ td strong {
     color: var(--on-cherry)!important
 }
 
+.content-area .toolbar>button.button.button-small.advance-approve-all-button,
+.content-area .toolbar>button.button.button-small.advance-approve-all-button:hover:not(:disabled),
+.content-area .toolbar>button.button.button-small.advance-approve-all-button:focus {
+    box-shadow: 0 0 10px var(--glow-present) !important;
+    background: var(--pill-present-bg) !important;
+    border-color: var(--pill-present-border) !important;
+    color: var(--pill-present-text) !important
+}
+
 .content-area .toolbar>button.button.button-small.advance-reject-button {
     border-color: var(--cherry)!important;
     background: var(--cherry)!important;

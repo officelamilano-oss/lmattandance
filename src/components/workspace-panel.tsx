@@ -388,6 +388,8 @@
     );
     const [advanceToDelete, setAdvanceToDelete] =
       useState<AdvanceView | null>(null);
+    const [isApproveAllConfirmationOpen, setIsApproveAllConfirmationOpen] =
+      useState(false);
     const [employeeToEdit, setEmployeeToEdit] = useState<Employee | null>(null);
     const [data, setData] = useState<WorkspaceData>({});
     const [date, setDate] = useState(() => getIndiaDate());
@@ -2480,6 +2482,38 @@
       if (deleted) setAdvanceToDelete(null);
     }
 
+    async function approveAllAdvances() {
+      setBusy(true);
+      setError("");
+      setSuccess("");
+      try {
+        const result = await request<{ approvedCount: number }>(
+          "/api/advances/bulk-approve",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              ...(selectedOutlet ? { outletId: selectedOutlet } : {}),
+            }),
+          },
+        );
+        setIsApproveAllConfirmationOpen(false);
+        setSuccess(
+          result.approvedCount
+            ? `${result.approvedCount} pending advance(s) approved.`
+            : "There are no pending advances to approve.",
+        );
+        await reload();
+      } catch (caught) {
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "Unable to approve pending advances.",
+        );
+      } finally {
+        setBusy(false);
+      }
+    }
+
     if (section === "employees")
       return (
         <div className="content-area">
@@ -2925,7 +2959,24 @@
                 "Given by",
                 "Reference",
                 "Status",
-                "Actions",
+                <div className="toolbar" key="actions-header">
+                  <span>Actions</span>
+                  {user.permissions.includes("advances.approve") &&
+                    (advanceStatus === "ALL" || advanceStatus === "PENDING") &&
+                    (data.pendingCount ?? 0) > 0 && (
+                      <button
+                        type="button"
+                        className="button button-small advance-approve-all-button"
+                        disabled={busy}
+                        onClick={() => {
+                          setError("");
+                          setIsApproveAllConfirmationOpen(true);
+                        }}
+                      >
+                        <Check size={14} /> Approve All
+                      </button>
+                    )}
+                </div>,
               ]}
               rows={(data.advances ?? []).map((item) => [
                 item.date,
@@ -3108,6 +3159,60 @@
                       onClick={() => void deleteAdvance()}
                     >
                       <Trash2 size={14} /> {busy ? "Deleting…" : "Delete"}
+                    </button>
+                  </div>
+                </section>
+              </div>
+            </ModalPortal>
+          )}
+          {isApproveAllConfirmationOpen && (
+            <ModalPortal>
+              <div className="access-modal-backdrop">
+                <section
+                  className="access-modal employee-delete-modal"
+                  role="alertdialog"
+                  aria-modal="true"
+                  aria-labelledby="advance-approve-all-title"
+                  aria-describedby="advance-approve-all-description"
+                >
+                  <div className="access-modal-heading">
+                    <div>
+                      <h2 id="advance-approve-all-title">
+                        Approve all pending advances?
+                      </h2>
+                      <p id="advance-approve-all-description">
+                        There are currently {data.pendingCount ?? 0} pending
+                        advance(s) for{" "}
+                        {selectedOutlet
+                          ? data.outlets?.find(
+                              (outlet) => outlet._id === selectedOutlet,
+                            )?.name ?? "the selected outlet"
+                          : "all accessible outlets"}
+                        . Approve all eligible pending advances? Rejected and
+                        payroll-assigned advances will not be changed.
+                      </p>
+                    </div>
+                  </div>
+                  {error && <Notice error={error} success="" />}
+                  <div className="employee-row-actions employee-delete-actions">
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      disabled={busy}
+                      onClick={() =>
+                        setIsApproveAllConfirmationOpen(false)
+                      }
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-primary"
+                      disabled={busy || !(data.pendingCount ?? 0)}
+                      onClick={() => void approveAllAdvances()}
+                    >
+                      <Check size={14} />{" "}
+                      {busy ? "Approving…" : "Approve All"}
                     </button>
                   </div>
                 </section>
@@ -6191,7 +6296,7 @@
     paginateRows = false,
   }: {
     className?: string;
-    headers: string[];
+    headers: React.ReactNode[];
     rows: React.ReactNode[][];
     rowClassNames?: string[];
     empty: string;
@@ -6227,8 +6332,8 @@
           <table>
             <thead>
               <tr>
-                {headers.map((header) => (
-                  <th key={header}>{header}</th>
+                {headers.map((header, index) => (
+                  <th key={index}>{header}</th>
                 ))}
               </tr>
             </thead>
