@@ -2855,7 +2855,12 @@
                   step="0.01"
                   required
                 />
-                <Field label="Given by" name="givenBy" required />
+                <Field
+                  label="Given by"
+                  name="givenBy"
+                  defaultValue="Head office"
+                  required
+                />
                 <Field
                   label="Reference / transaction"
                   name="reference"
