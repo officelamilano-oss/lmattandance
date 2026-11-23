@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { dateOnlySchema, monthSchema, objectIdSchema } from "./common";
 import {
+  allPermissionValues,
   staffPermissionSet,
   staffPermissionValues,
 } from "@/lib/access-control";
@@ -242,32 +243,7 @@ export const userProvisionSchema = z
     outletIds: z.array(objectIdSchema).max(100).default([]),
     designationId: objectIdSchema.optional(),
     permissions: z
-      .array(
-        z.enum([
-          "dashboard.read",
-          "outlets.manage",
-          "employees.read",
-          "employees.create",
-          "employees.update",
-          "employees.deactivate",
-          "attendance.read",
-          "attendance.write",
-          "attendance.submit",
-          "attendance.unlock",
-          "advances.read",
-          "advances.write",
-          "advances.approve",
-          "salary.read",
-          "salary.generate",
-          "salary.adjust",
-          "salary.approve",
-          "salary.pay",
-          "settings.manage",
-          "access.manage",
-          "reports.export",
-          "audit.read",
-        ]),
-      )
+      .array(z.enum(allPermissionValues))
       .max(30)
       .default([]),
     active: z.boolean(),

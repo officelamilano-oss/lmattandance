@@ -7145,7 +7145,7 @@
             <fieldset className="admin-only-permissions">
               <legend>Admin-only pages</legend>
               {adminOnlyPages.map((page) => (
-                <div key={page.permission}>
+                <div key={page.title}>
                   <span>{page.title}</span>
                   <small>MAIN_ADMIN only</small>
                 </div>
@@ -7328,7 +7328,7 @@
               {" "}permissions sync automatically when the designation is edited.
             </small>
           )}
-          {!designationId && role !== "MAIN_ADMIN" && (
+          {!designationId && (
             <div className="user-permission-groups">
               {designationPermissionGroups.map((group) => (
                 <fieldset key={group.title}>
@@ -7337,7 +7337,11 @@
                     <label key={permission.value}>
                       <input
                         type="checkbox"
-                        checked={permissions.includes(permission.value)}
+                        checked={
+                          role === "MAIN_ADMIN" ||
+                          permissions.includes(permission.value)
+                        }
+                        disabled={role === "MAIN_ADMIN"}
                         onChange={(event) =>
                           setPermissions((current) =>
                             event.target.checked
@@ -7353,6 +7357,17 @@
                   ))}
                 </fieldset>
               ))}
+              {role === "MAIN_ADMIN" && (
+                <fieldset className="admin-only-permissions">
+                  <legend>Admin-only pages</legend>
+                  {adminOnlyPages.map((page) => (
+                    <div key={page.title}>
+                      <span>{page.title}</span>
+                      <small>MAIN_ADMIN only</small>
+                    </div>
+                  ))}
+                </fieldset>
+              )}
             </div>
           )}
           <label className="toggle-row">
@@ -7960,6 +7975,7 @@
                         </div>
                       </details>
                     )}
+                    
                     {row.unsubmittedDays > 0 && (
                       <span className="sub-cell">
                         Pending submission: {row.unsubmittedDays} day(s)

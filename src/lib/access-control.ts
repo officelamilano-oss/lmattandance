@@ -65,6 +65,18 @@ export const staffPermissionValues = designationPermissionGroups.flatMap(
 
 export const staffPermissionSet = new Set<Permission>(staffPermissionValues);
 
+export const mainAdminPermissionValues = [
+  "outlets.manage",
+  "access.manage",
+  "settings.manage",
+  "audit.read",
+] as const satisfies readonly [Permission, ...Permission[]];
+
+export const allPermissionValues = [
+  ...staffPermissionValues,
+  ...mainAdminPermissionValues,
+] as [Permission, ...Permission[]];
+
 export const legacyOutletDefaultPermissions: Permission[] = [
   "dashboard.read",
   "attendance.read",
@@ -73,6 +85,8 @@ export const legacyOutletDefaultPermissions: Permission[] = [
 ];
 
 export const adminOnlyPages = [
+  { title: "Loans" },
+  { title: "Active logs" },
   { title: "Outlets", permission: "outlets.manage" },
   { title: "Access management", permission: "access.manage" },
   { title: "Settings", permission: "settings.manage" },

@@ -83,7 +83,7 @@ export async function GET(request: Request) {
                   active: 1,
                 },
               })
-            .sort({ outletId: 1, fullName: 1 })
+            .sort({ outletId: 1, employeeCode: 1 })
             .toArray()
         : [];
       const outletById = new Map(
@@ -185,7 +185,7 @@ export async function GET(request: Request) {
             ...(actor.role === "OUTLET_USER" ? {} : { mobile: 1 }),
           },
         })
-      .sort({ fullName: 1 })
+      .sort({ employeeCode: 1 })
       .toArray();
     const entries = new Map(
       (day?.entries ?? []).map((entry) => [

@@ -6,7 +6,10 @@ import { cache } from "react";
 import { authOptions } from "@/lib/auth";
 import { getDb } from "@/lib/mongodb";
 import type { Permission, UserDocument, UserRole } from "@/lib/models";
-import { legacyOutletDefaultPermissions } from "@/lib/access-control";
+import {
+  allPermissionValues,
+  legacyOutletDefaultPermissions,
+} from "@/lib/access-control";
 
 export interface Actor { id: ObjectId; email: string; name: string; role: UserRole; outletIds: ObjectId[]; permissions: Permission[] }
 
@@ -19,7 +22,7 @@ export const getActor = cache(async (): Promise<Actor | null> => {
   const user = await db.collection<UserDocument>("users").findOne({ emailNormalized: email, active: true });
   if (!user) return null;
   const permissions = user.role === "MAIN_ADMIN"
-    ? ["dashboard.read", "outlets.manage", "employees.read", "employees.create", "employees.update", "employees.deactivate", "attendance.read", "attendance.write", "attendance.submit", "attendance.unlock", "advances.read", "advances.write", "advances.approve", "salary.read", "salary.generate", "salary.adjust", "salary.approve", "salary.pay", "settings.manage", "access.manage", "reports.export", "audit.read", "uniforms.manage"] as Permission[]
+    ? allPermissionValues
     : user.designationId || user.permissionsCustomized
       ? user.permissions ?? []
       : user.role === "OUTLET_USER"
