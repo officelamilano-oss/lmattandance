@@ -89,6 +89,7 @@ export async function GET(
             aadhaarNumber: 1,
             drivingLicenceNumber: 1,
             active: 1,
+            approvalStatus: 1,
             notes: 1,
           },
         },
@@ -251,6 +252,14 @@ export async function PATCH(
       if (raw.active === current.active)
         return NextResponse.json({ ok: true });
       if (raw.active) {
+        if (
+          current.approvalStatus === "PENDING" ||
+          current.approvalStatus === "REJECTED"
+        )
+          return NextResponse.json(
+            { error: "Pending or rejected requests cannot be activated directly." },
+            { status: 409 },
+          );
         await db.collection<EmployeeDocument>("employees").updateOne(
           { _id: current._id },
           {

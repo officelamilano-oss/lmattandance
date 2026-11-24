@@ -1,8 +1,11 @@
-import { ObjectId, type Collection } from "mongodb";
+import { ObjectId, type Filter } from "mongodb";
 import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb, getMongoClient } from "@/lib/mongodb";
-import { employeeSchema } from "@/lib/validation/business";
+import {
+  employeeSchema,
+  outletEmployeeRequiredDetailsSchema,
+} from "@/lib/validation/business";
 import { paginationSchema } from "@/lib/validation/common";
 import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
@@ -24,6 +27,10 @@ import {
   uniformEntriesSchema,
 } from "@/lib/uniform-deductions";
 import { getIndiaMonth } from "@/lib/payroll/dates";
+import {
+  getEmployeeCodePrefix,
+  getNextEmployeeCode,
+} from "@/lib/employee-code";
 
 const employeeCreateSchema = employeeSchema.safeExtend({
   employeeCode: z
@@ -43,6 +50,7 @@ export async function GET(request: Request) {
     const wantsNextCode = url.searchParams.get("nextCode") === "true";
     if (
       (wantsNextCode &&
+        actor.role !== "OUTLET_USER" &&
         !actor.permissions.includes("employees.create") &&
         !actor.permissions.includes("employees.update")) ||
       (!wantsNextCode &&
@@ -97,6 +105,7 @@ export async function GET(request: Request) {
       const employeeCode = await getNextEmployeeCode(
         db.collection<EmployeeDocument>("employees"),
         prefix,
+        new ObjectId(outletId),
         excludedEmployee?._id,
       );
       if (!employeeCode)
@@ -134,57 +143,101 @@ export async function GET(request: Request) {
           : undefined
         : actor.outletIds;
     if (requested) assertOutletAccess(actor, requested);
-    const query = {
-      ...(allowed ? { outletId: { $in: allowed } } : {}),
-      ...(url.searchParams.get("active") === "all"
-        ? {}
-        : {
-            active: url.searchParams.get("active") === "false" ? false : true,
-          }),
-      ...(page.q
+    const activeFilter: Filter<EmployeeDocument> | null =
+      actor.role === "OUTLET_USER"
         ? {
             $or: [
-              { fullName: { $regex: escapeRegex(page.q), $options: "i" } },
-              { employeeCode: { $regex: escapeRegex(page.q), $options: "i" } },
-              { mobile: { $regex: escapeRegex(page.q), $options: "i" } },
+              { active: true },
+              {
+                approvalStatus: { $in: ["PENDING", "REJECTED"] },
+                createdBy: actor.id,
+              },
             ],
+          }
+        : url.searchParams.get("active") === "all"
+          ? null
+          : {
+              active: url.searchParams.get("active") === "false" ? false : true,
+            };
+    const searchFilter: Filter<EmployeeDocument> | null = page.q
+      ? {
+          $or: [
+            { fullName: { $regex: escapeRegex(page.q), $options: "i" } },
+            { employeeCode: { $regex: escapeRegex(page.q), $options: "i" } },
+            { mobile: { $regex: escapeRegex(page.q), $options: "i" } },
+          ],
+        }
+      : null;
+    const query: Filter<EmployeeDocument> = {
+      ...(allowed ? { outletId: { $in: allowed } } : {}),
+      ...([activeFilter, searchFilter].filter(
+        (filter): filter is Filter<EmployeeDocument> => filter !== null,
+      ).length
+        ? {
+            $and: [activeFilter, searchFilter].filter(
+              (filter): filter is Filter<EmployeeDocument> =>
+                filter !== null,
+            ),
           }
         : {}),
     };
+    const projection = {
+      beneficiaryName: 0,
+      bankName: 0,
+      branchName: 0,
+      accountNumber: 0,
+      ifscCode: 0,
+      panNumber: 0,
+      aadhaarNumber: 0,
+      drivingLicenceNumber: 0,
+      acceptedAt: 0,
+      acceptedBy: 0,
+      ...(actor.role === "MAIN_ADMIN"
+        ? {}
+        : {
+            monthlyBaseSalary: 0,
+            salaryMethod: 0,
+            pfEnabled: 0,
+            employeePfPercent: 0,
+            employerPfPercent: 0,
+            esiEnabled: 0,
+            esiPercent: 0,
+          }),
+      ...(actor.role === "OUTLET_USER" ? { mobile: 0 } : {}),
+    };
+    const employeeCollection =
+      db.collection<EmployeeDocument>("employees");
     const [employees, total] = await Promise.all([
-      db
-        .collection<EmployeeDocument>("employees")
-        .find(query, {
-          projection: {
-            beneficiaryName: 0,
-            bankName: 0,
-            branchName: 0,
-            accountNumber: 0,
-            ifscCode: 0,
-            panNumber: 0,
-            aadhaarNumber: 0,
-            drivingLicenceNumber: 0,
-            acceptedAt: 0,
-            acceptedBy: 0,
-            ...(actor.role === "MAIN_ADMIN"
-              ? {}
-              : {
-                  monthlyBaseSalary: 0,
-                  salaryMethod: 0,
-                  pfEnabled: 0,
-                  employeePfPercent: 0,
-                  employerPfPercent: 0,
-                  esiEnabled: 0,
-                  esiPercent: 0,
-                }),
-            ...(actor.role === "OUTLET_USER" ? { mobile: 0 } : {}),
-          },
-        })
-        .sort({ employeeCode: 1, _id: 1 })
-        .skip((page.page - 1) * page.pageSize)
-        .limit(page.pageSize)
-        .toArray(),
-      db.collection<EmployeeDocument>("employees").countDocuments(query),
+      actor.role === "MAIN_ADMIN" &&
+      url.searchParams.get("active") === "all"
+        ? employeeCollection
+            .aggregate<EmployeeDocument>([
+              { $match: query },
+              {
+                $addFields: {
+                  pendingApprovalOrder: {
+                    $cond: [
+                      { $eq: ["$approvalStatus", "PENDING"] },
+                      0,
+                      1,
+                    ],
+                  },
+                },
+              },
+              { $sort: { pendingApprovalOrder: 1, employeeCode: 1, _id: 1 } },
+              { $unset: "pendingApprovalOrder" },
+              { $project: projection },
+              { $skip: (page.page - 1) * page.pageSize },
+              { $limit: page.pageSize },
+            ])
+            .toArray()
+        : employeeCollection
+            .find(query, { projection })
+            .sort({ employeeCode: 1, _id: 1 })
+            .skip((page.page - 1) * page.pageSize)
+            .limit(page.pageSize)
+            .toArray(),
+      employeeCollection.countDocuments(query),
     ]);
     const visibleEmployees = employees.map((employee) =>
       employeeResponse(
@@ -214,7 +267,10 @@ export async function POST(request: Request) {
         { error: "Authentication required." },
         { status: 401 },
       );
-    if (!actor.permissions.includes("employees.create"))
+    if (
+      !actor.permissions.includes("employees.create") &&
+      actor.role !== "OUTLET_USER"
+    )
       return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     const body = await readJson<unknown>(request);
     if (typeof body !== "object" || body === null || Array.isArray(body))
@@ -256,16 +312,7 @@ export async function POST(request: Request) {
     ];
     const restrictedOutletFields = [
       "dateOfBirth",
-      "gender",
       ...compensationFields,
-      "beneficiaryName",
-      "bankName",
-      "branchName",
-      "accountNumber",
-      "ifscCode",
-      "panNumber",
-      "aadhaarNumber",
-      "drivingLicenceNumber",
       "documents",
     ];
     if (isOutletUser && restrictedOutletFields.some((field) => field in payload))
@@ -318,11 +365,13 @@ export async function POST(request: Request) {
     const employeeCode =
       payload.autoGenerate === true ||
       payload.autoGenerate === "true" ||
+      isOutletUser ||
       typeof payload.employeeCode !== "string" ||
       !payload.employeeCode.trim()
         ? await getNextEmployeeCode(
             db.collection<EmployeeDocument>("employees"),
             prefix,
+            outletId,
           )
         : payload.employeeCode;
     if (!employeeCode)
@@ -368,9 +417,10 @@ export async function POST(request: Request) {
         { error: "Outlet users must select an outlet designation." },
         { status: 400 },
       );
+    if (isOutletUser)
+      outletEmployeeRequiredDetailsSchema.parse(payload);
     const normalizedPayload = normalizeSensitiveFields(payload);
     if (
-      !isOutletUser &&
       isDeliveryRiderDesignation({
         designationKey,
         designation:
@@ -416,7 +466,11 @@ export async function POST(request: Request) {
       acceptedBy: actor.id,
       employeeCodeNormalized: input.employeeCode.trim().toUpperCase(),
       outletId,
-      active: true,
+      active: !isOutletUser,
+      approvalStatus: isOutletUser ? "PENDING" : "APPROVED",
+      ...(isOutletUser
+        ? { approvalRequestedAt: now }
+        : { approvedAt: now, approvedBy: actor.id }),
       createdBy: actor.id,
       createdAt: now,
       updatedAt: now,
@@ -471,7 +525,7 @@ export async function POST(request: Request) {
     await writeAudit({
       actorId: actor.id,
       actorEmail: actor.email,
-      action: "EMPLOYEE_CREATED",
+      action: isOutletUser ? "EMPLOYEE_REQUESTED" : "EMPLOYEE_CREATED",
       entityType: "employee",
       entityId: document._id.toHexString(),
       outletId,
@@ -502,38 +556,6 @@ export async function POST(request: Request) {
   } catch (error) {
     return apiError(error);
   }
-}
-
-async function getNextEmployeeCode(
-  employees: Collection<EmployeeDocument>,
-  prefix: string,
-  excludeEmployeeId?: ObjectId,
-) {
-  const rows = await employees
-    .find(
-      {
-        employeeCode: { $regex: new RegExp(`^${prefix}\\d{4}$`, "i") },
-        ...(excludeEmployeeId ? { _id: { $ne: excludeEmployeeId } } : {}),
-      },
-      { projection: { employeeCode: 1 } },
-    )
-    .toArray();
-  const maximum = rows.reduce((highest, employee) => {
-    const value = Number(employee.employeeCode.slice(prefix.length));
-    return Number.isInteger(value) ? Math.max(highest, value) : highest;
-  }, 0);
-  return maximum < 9999
-    ? `${prefix}${String(maximum + 1).padStart(4, "0")}`
-    : null;
-}
-
-function getEmployeeCodePrefix(outletName: string) {
-  return outletName
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z]/gi, "")
-    .slice(0, 3)
-    .toUpperCase();
 }
 
 function escapeRegex(value: string) {

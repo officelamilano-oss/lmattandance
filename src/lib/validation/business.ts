@@ -87,6 +87,10 @@ export const employeeSchema = z.object({
     });
 });
 
+export const outletEmployeeRequiredDetailsSchema = z.object({
+  gender: z.enum(["MALE", "FEMALE"]),
+});
+
 export const attendanceSchema = z.object({
   outletId: objectIdSchema,
   date: dateOnlySchema,

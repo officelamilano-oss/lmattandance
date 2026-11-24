@@ -719,13 +719,26 @@ export function EmployeeDetail({
               </div>
               <h1>{employee.fullName}</h1>
               <p>
-                {employee.designation} · {employee.active ? "Active" : "Inactive"}
+                {employee.designation} ·{" "}
+                {employee.approvalStatus === "PENDING"
+                  ? "Pending approval"
+                  : employee.approvalStatus === "REJECTED"
+                    ? "Request rejected"
+                    : employee.active
+                      ? "Active"
+                      : "Inactive"}
               </p>
             </div>
             <span
               className={`badge ${employee.active ? "badge-green" : "badge-muted"}`}
             >
-              {employee.active ? "Active employee" : "Historical record"}
+              {employee.approvalStatus === "PENDING"
+                ? "Pending approval"
+                : employee.approvalStatus === "REJECTED"
+                  ? "Request rejected"
+                  : employee.active
+                    ? "Active employee"
+                    : "Historical record"}
             </span>
             {(employee.licencePending ??
               (isDeliveryRiderDesignation(employee) &&
@@ -851,7 +864,11 @@ export function EmployeeDetail({
                 </option>
               ))}
             </select>
-            <small>{designationLabel}</small>
+            <small>
+              {designationKey === "LEGACY"
+                ? "Existing designation stays on this employee."
+                : designationLabel}
+            </small>
             {fieldErrorMessage(fieldErrors, "designationKey")}
             {fieldErrorMessage(fieldErrors, "designation")}
           </label>
@@ -1417,7 +1434,8 @@ function documentTypeLabel(type: EmployeeDocumentType) {
     PAN: "PAN",
     BANK_PROOF: "Bank passbook / cheque",
     DRIVING_LICENCE: "Driving licence",
-    PHOTO: "Photo",
+    PHOTO: "Passport-size photo",
+    SIGNATURE: "Digital signature",
     OTHER: "Other",
   }[type];
 }

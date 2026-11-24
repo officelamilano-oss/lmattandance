@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { employeeSchema } from "../src/lib/validation/business.ts";
+import {
+  employeeSchema,
+  outletEmployeeRequiredDetailsSchema,
+} from "../src/lib/validation/business.ts";
+import {
+  OPTIONAL_EMPLOYEE_DOCUMENT_TYPES,
+  requiredEmployeeDocumentTypes,
+} from "../src/lib/employee-documents-config.ts";
 
 const employee = {
   employeeCode: "OUT0001",
@@ -72,4 +79,33 @@ test("employee profile rejects malformed account and identity numbers", () => {
   });
 
   assert.equal(result.success, false);
+});
+
+test("outlet employee requests require gender but allow bank and identity details to be omitted", () => {
+  const result = outletEmployeeRequiredDetailsSchema.safeParse({
+    gender: "FEMALE",
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(employeeSchema.safeParse(employee).success, true);
+  assert.equal(
+    outletEmployeeRequiredDetailsSchema.safeParse({ gender: "FEMALE" })
+      .success,
+    true,
+  );
+});
+
+test("PAN upload is optional and Rider licence remains required", () => {
+  assert.deepEqual(requiredEmployeeDocumentTypes(false), [
+    "AADHAAR",
+    "PHOTO",
+    "SIGNATURE",
+  ]);
+  assert.deepEqual(OPTIONAL_EMPLOYEE_DOCUMENT_TYPES, ["PAN"]);
+  assert.deepEqual(requiredEmployeeDocumentTypes(true), [
+    "AADHAAR",
+    "PHOTO",
+    "SIGNATURE",
+    "DRIVING_LICENCE",
+  ]);
 });

@@ -78,7 +78,10 @@ export async function POST(
         { error: "Authentication required." },
         { status: 401 },
       );
-    if (actor.role === "OUTLET_USER" || !actor.permissions.includes("employees.update"))
+    if (
+      actor.role !== "OUTLET_USER" &&
+      !actor.permissions.includes("employees.update")
+    )
       return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     const { id } = await context.params;
     if (!ObjectId.isValid(id))
@@ -88,6 +91,13 @@ export async function POST(
       .collection<EmployeeDocument>("employees")
       .findOne({ _id: new ObjectId(id) });
     if (!employee) throw new Error("NOT_FOUND");
+    if (
+      actor.role === "OUTLET_USER" &&
+      (!employee.approvalStatus ||
+        employee.approvalStatus !== "PENDING" ||
+        !employee.createdBy.equals(actor.id))
+    )
+      return NextResponse.json({ error: "Forbidden." }, { status: 403 });
     assertOutletAccess(actor, employee.outletId);
     const outlet = await db
       .collection<OutletDocument>("outlets")
@@ -144,6 +154,14 @@ export async function POST(
             error:
               "Only JPG, JPEG, PNG, WEBP, PDF, and DOCX documents are allowed.",
           },
+          { status: 400 },
+        );
+      if (
+        (documentType === "PHOTO" || documentType === "SIGNATURE") &&
+        !expectedMime.startsWith("image/")
+      )
+        return NextResponse.json(
+          { error: `${documentType} documents must be image files.` },
           { status: 400 },
         );
       const bytes = new Uint8Array(await file.arrayBuffer());

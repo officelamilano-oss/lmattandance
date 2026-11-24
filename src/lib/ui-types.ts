@@ -81,6 +81,7 @@ export interface EmployeeView {
   panNumber?: string | null;
   aadhaarNumber?: string | null;
   drivingLicenceNumber?: string | null;
+  approvalStatus?: "PENDING" | "APPROVED" | "REJECTED";
   termsAccepted?: boolean;
   licencePending?: boolean;
   monthlyBaseSalary?: number;

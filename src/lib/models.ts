@@ -86,6 +86,12 @@ export interface EmployeeDocument {
   panNumber?: string | null;
   aadhaarNumber?: string | null;
   drivingLicenceNumber?: string | null;
+  approvalStatus?: "PENDING" | "APPROVED" | "REJECTED";
+  approvalRequestedAt?: Date;
+  approvedAt?: Date;
+  approvedBy?: ObjectId;
+  rejectedAt?: Date;
+  rejectedBy?: ObjectId;
   termsAccepted?: boolean;
   termsVersion?: string;
   acceptedAt?: Date;
@@ -104,6 +110,7 @@ export type EmployeeDocumentType =
   | "BANK_PROOF"
   | "DRIVING_LICENCE"
   | "PHOTO"
+  | "SIGNATURE"
   | "OTHER";
 
 export interface EmployeeFileDocument {

@@ -386,6 +386,8 @@
     const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(
       null,
     );
+    const [employeeToApprove, setEmployeeToApprove] =
+      useState<Employee | null>(null);
     const [advanceToDelete, setAdvanceToDelete] =
       useState<AdvanceView | null>(null);
     const [isApproveAllConfirmationOpen, setIsApproveAllConfirmationOpen] =
@@ -2460,6 +2462,63 @@
       );
     }
 
+    async function processEmployeeApproval(
+      action: "APPROVE" | "REJECT",
+      formData?: FormData,
+    ) {
+      if (!employeeToApprove) return;
+      if (
+        action === "REJECT" &&
+        !window.confirm(
+          `Reject the employee request for ${employeeToApprove.fullName}?`,
+        )
+      )
+        return;
+      setBusy(true);
+      setError("");
+      setSuccess("");
+      try {
+        await request(`/api/employees/${employeeToApprove._id}/approval`, {
+          method: "POST",
+          body: JSON.stringify(
+            action === "APPROVE"
+              ? {
+                  action,
+                  monthlyBaseSalary: Number(
+                    formData?.get("monthlyBaseSalary"),
+                  ),
+                  salaryMethod: formData?.get("salaryMethod"),
+                  pfEnabled: formData?.get("pfEnabled") === "true",
+                  employeePfPercent: Number(
+                    formData?.get("employeePfPercent"),
+                  ),
+                  employerPfPercent: Number(
+                    formData?.get("employerPfPercent"),
+                  ),
+                  esiEnabled: formData?.get("esiEnabled") === "true",
+                  esiPercent: Number(formData?.get("esiPercent")),
+                }
+              : { action },
+          ),
+        });
+        setEmployeeToApprove(null);
+        setSuccess(
+          action === "APPROVE"
+            ? "Employee request approved."
+            : "Employee request rejected.",
+        );
+        await reload();
+      } catch (caught) {
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "Unable to process the employee request.",
+        );
+      } finally {
+        setBusy(false);
+      }
+    }
+
     async function deleteEmployee() {
       if (!employeeToDelete) return;
       const deleted = await mutate(
@@ -2569,7 +2628,11 @@
                 "Actions",
               ]}
               rowClassNames={(data.employees ?? []).map((employee: Employee) =>
-                employee.active ? "" : "employee-inactive-row",
+                employee.approvalStatus === "PENDING"
+                  ? ""
+                  : employee.active
+                    ? ""
+                    : "employee-inactive-row",
               )}
               rows={(data.employees ?? []).map((employee: Employee) => {
                 const cells: React.ReactNode[] = [
@@ -2590,19 +2653,43 @@
                   cells.push(employee.mobile ?? "—");
                 if (user.role === "MAIN_ADMIN")
                   cells.push(currency(employee.monthlyBaseSalary));
+                const approvalPending =
+                  employee.approvalStatus === "PENDING";
                 cells.push(
                   <span
                     key="status"
-                    className={`badge ${employee.active ? "badge-green" : "badge-muted"}`}
+                    className={`badge ${approvalPending ? "badge-amber" : employee.active ? "badge-green" : "badge-muted"}`}
                   >
-                    {employee.active ? "Active" : "Inactive"}
+                    {approvalPending
+                      ? "Pending approval"
+                      : employee.approvalStatus === "REJECTED"
+                        ? "Rejected"
+                        : employee.active
+                          ? "Active"
+                          : "Inactive"}
                   </span>,
                 );
                 cells.push(
                   user.role === "MAIN_ADMIN" ||
                     user.permissions.includes("employees.update") ? (
                     <span key="actions" className="employee-row-actions">
-                      {user.permissions.includes("employees.update") && (
+                      {user.role === "MAIN_ADMIN" && approvalPending && (
+                        <button
+                          type="button"
+                          className="button button-small button-primary"
+                          onClick={() => {
+                            setError("");
+                            setEmployeeToApprove(employee);
+                          }}
+                        >
+                          Review &amp; approve
+                        </button>
+                      )}
+                      {user.permissions.includes("employees.update") &&
+                        !(
+                          user.role === "OUTLET_USER" &&
+                          approvalPending
+                        ) && (
                         <button
                           type="button"
                           className="button button-small"
@@ -2634,16 +2721,22 @@
                       )}
                       {user.role === "MAIN_ADMIN" && (
                         <>
-                          <button
-                            type="button"
-                            className="button button-small"
-                            disabled={busy}
-                            onClick={() =>
-                              void setEmployeeActive(employee, !employee.active)
-                            }
-                          >
-                            {employee.active ? "Deactivate" : "Activate"}
-                          </button>
+                          {!approvalPending &&
+                            employee.approvalStatus !== "REJECTED" && (
+                            <button
+                              type="button"
+                              className="button button-small"
+                              disabled={busy}
+                              onClick={() =>
+                                void setEmployeeActive(
+                                  employee,
+                                  !employee.active,
+                                )
+                              }
+                            >
+                              {employee.active ? "Deactivate" : "Activate"}
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="button button-small button-danger"
@@ -2669,6 +2762,164 @@
               total={data.total ?? 0}
               onPageChange={setPage}
             />
+          )}
+          {employeeToApprove && (
+            <ModalPortal>
+              <div className="access-modal-backdrop">
+                <section
+                  className="access-modal employee-approval-modal"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="employee-approval-title"
+                >
+                  <div className="access-modal-heading">
+                    <div>
+                      <h2 id="employee-approval-title">
+                        Approve {employeeToApprove.fullName}
+                      </h2>
+                      <p>
+                        {employeeToApprove.employeeCode} ·{" "}
+                        {outlets.find(
+                          (outlet) =>
+                            outlet._id === employeeToApprove.outletId,
+                        )?.code ?? "Outlet"} ·{" "}
+                        {employeeToApprove.designation}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      aria-label="Close employee approval"
+                      disabled={busy}
+                      onClick={() => setEmployeeToApprove(null)}
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                  <Notice error={error} success="" />
+                  <p className="employee-approval-instructions">
+                    Required documents are checked automatically. Review the
+                    documents, then enter compensation to approve and activate.
+                  </p>
+                  <form
+                    className="form-grid employee-approval-form"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void processEmployeeApproval(
+                        "APPROVE",
+                        new FormData(event.currentTarget),
+                      );
+                    }}
+                  >
+                    <label className="field">
+                      <span>Monthly base salary (INR)</span>
+                      <input
+                        name="monthlyBaseSalary"
+                        type="number"
+                        min="0.01"
+                        max="100000000"
+                        step="0.01"
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Salary method</span>
+                      <select name="salaryMethod" defaultValue="FIXED_30_DAYS">
+                        <option value="FIXED_30_DAYS">Fixed 30 days</option>
+                        <option value="CALENDAR_DAYS">Calendar days</option>
+                        <option value="WORKING_DAYS_26">Working days (26)</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>PF enabled</span>
+                      <select name="pfEnabled" defaultValue="false">
+                        <option value="false">No</option>
+                        <option value="true">Yes</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Employee PF %</span>
+                      <input
+                        name="employeePfPercent"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        defaultValue="0"
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Employer PF %</span>
+                      <input
+                        name="employerPfPercent"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        defaultValue="0"
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>ESI enabled</span>
+                      <select name="esiEnabled" defaultValue="false">
+                        <option value="false">No</option>
+                        <option value="true">Yes</option>
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Employee ESI %</span>
+                      <input
+                        name="esiPercent"
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        defaultValue="0.75"
+                        required
+                      />
+                    </label>
+                    <div className="form-actions employee-approval-actions">
+                      <button
+                        type="button"
+                        className="button button-secondary"
+                        disabled={busy}
+                        onClick={() => {
+                          const employee = employeeToApprove;
+                          setEmployeeToApprove(null);
+                          prefetchEmployeeDetail(
+                            employee._id,
+                            true,
+                            user.email,
+                          );
+                          setEmployeeToEdit(employee);
+                        }}
+                      >
+                        Review documents
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-danger"
+                        disabled={busy}
+                        onClick={() =>
+                          void processEmployeeApproval("REJECT")
+                        }
+                      >
+                        Reject request
+                      </button>
+                      <button
+                        type="submit"
+                        className="button button-primary"
+                        disabled={busy}
+                      >
+                        {busy ? "Processing…" : "Approve & activate"}
+                      </button>
+                    </div>
+                  </form>
+                </section>
+              </div>
+            </ModalPortal>
           )}
           {employeeToEdit && (
             <ModalPortal>

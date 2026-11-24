@@ -1,32 +1,6 @@
 @import "tailwindcss";
 @import "./advance-modal.css";
 @config "../../tailwind.config.js";
-:root {
-    --paper: var(--on-cherry);
-    --surface: var(--on-cherry);
-    --ink: var(--ink);
-    --muted: var(--muted);
-    --line: var(--on-cherry);
-    --red: var(--cherry);
-    --red-dark: var(--cherry);
-    --green: var(--status-present);
-    --gold: var(--status-half);
-    --rail: var(--ink);
-    --rail-muted: var(--cream-dark);
-    --font-sans: var(--font-outfit);
-    --status-present: var(--present);
-    --status-present-glow: var(--glow-present);
-    --status-absent: var(--absent);
-    --status-absent-glow: var(--glow-absent);
-    --status-half: var(--half);
-    --status-half-glow: var(--glow-half);
-    --status-weekoff: var(--weekoff);
-    --status-weekoff-glow: var(--glow-weekoff);
-    --status-unmarked: var(--unmarked);
-    --status-unmarked-glow: var(--glow-unmarked);
-    --status-late: var(--late);
-    --shadow: 0 14px 34px color-mix(in srgb, var(--ink) 6%, transparent)
-}
     
 * {
     box-sizing: border-box
@@ -3368,8 +3342,8 @@ td strong {
 
 .about-toc-links button:hover,
 .about-toc-links .about-toc-active {
-    background: #e3e3e3;
-    color: #242424
+    background: var(--hover-bg);
+    color: var(--text)
 }
 
 .about-toc-links button span {
@@ -3486,7 +3460,7 @@ td strong {
     flex: 0 0 auto;
     place-items: center;
     border-radius: 8px;
-    background: #00be2026;
+    background: var(--pill-present-bg);
     color: var(--status-present);
     font-size: 9px;
     font-weight: 700
@@ -3618,12 +3592,12 @@ td strong {
 }
 
 .about-tip {
-    background: #00be2026;
+    background: var(--pill-present-bg);
     color: var(--muted)
 }
 
 .about-warning {
-    background: #ebc61f78;
+    background: var(--pill-half-bg);
     color: var(--status-half)
 }
 
@@ -5514,7 +5488,7 @@ tbody tr:hover {
 :root[data-theme="dark"] .dashboard-team-detail strong,
 :root[data-theme="dark"] .dashboard-payroll-values strong,
 :root[data-theme="dark"] .dashboard-suggestion strong {
-    color: wheat;
+    color: var(--text);
 }
 
 :root[data-theme="dark"] .dashboard-ranking-row:hover,
@@ -7136,12 +7110,54 @@ tbody tr:nth-child(3) .dashboard-employee-avatar {
     padding: 0
 }
 
-.employee-modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    grid-column: 1 / -1
+.employee-required-documents {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px
 }
+
+.employee-required-document {
+    display: grid;
+    min-width: 0;
+    gap: 7px
+}
+
+.employee-required-document-file {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 5px 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 11px
+}
+
+.employee-required-document-file>span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap
+}
+
+.employee-approval-instructions {
+    margin: 0 0 14px;
+    color: var(--muted);
+    font-size: 12px
+}
+
+.employee-approval-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px
+}
+
+.employee-approval-actions {
+    grid-column: 1 / -1;
+    justify-content: space-between
+}
+
+
 
 .employee-upload-item {
     display: grid;
@@ -7317,6 +7333,12 @@ tbody tr:nth-child(3) .dashboard-employee-avatar {
         padding-left: 16px
     }
     .employee-create-form {
+        grid-template-columns: minmax(0, 1fr)
+    }
+    .employee-approval-form {
+        grid-template-columns: minmax(0, 1fr)
+    }
+    .employee-required-documents {
         grid-template-columns: minmax(0, 1fr)
     }
     .employee-upload-item {
@@ -9178,13 +9200,10 @@ select option:disabled {
     transition: border-color .16s ease, background .16s ease, color .16s ease;
 }
 
-.employee-document-dropzone:hover,
-.employee-document-dropzone:focus-visible,
 .employee-document-dropzone.is-active {
     border-color: var(--green);
     background: color-mix(in srgb, var(--status-present) 75%, transparent);
     color: var(--green-dark);
-    outline: none;
 }
 
 .employee-document-dropzone strong {
@@ -9378,8 +9397,6 @@ select option:disabled {
     background: color-mix(in srgb, var(--muted) 82%, transparent);
 }
 
-:root[data-theme="dark"] .employee-document-dropzone:hover,
-:root[data-theme="dark"] .employee-document-dropzone:focus-visible,
 :root[data-theme="dark"] .employee-document-dropzone.is-active {
     border-color: var(--status-present);
     background: color-mix(in srgb, var(--status-present) 88%, transparent);
@@ -9437,7 +9454,11 @@ select option:disabled {
  :root,
  :root[data-theme="light"],
  :root[data-theme="dark"] {
-    color-scheme: light;
+     --ink: light-dark(#1A1A1A, #F3E9E0);
+     --muted: light-dark(#5F5752, #B9A296);
+     --line: var(--cream-dark);
+     --rail: var(--cherry);
+     color-scheme: light;
     --cherry: light-dark(#9A0002, #B3070B);
     --cherry-dark: light-dark(#6B0001, #8A0004);
     --cherry-light: #C4161C;
@@ -9494,7 +9515,7 @@ select option:disabled {
     --status-unmarked-label: var(--pill-unmarked-text);
     --status-late: var(--late);
     --status-late-bg: var(--pill-half-bg);
-    --status-cell-text: #FFFFFF;
+    --status-cell-text: #101010;
     --chart-inner-glow: rgba(255, 255, 255, 0.8);
     --chart-status-glow-size: 7px;
     --paper: var(--cream);
@@ -9544,8 +9565,8 @@ select option:disabled {
 }
 
 html {
-    background: var(--cream);
-    color-scheme: light;
+    background: var(--bg);
+    color-scheme: inherit;
     scrollbar-color: var(--cherry) var(--cream-dark);
     scrollbar-width: thin;
 }
@@ -10338,8 +10359,8 @@ tbody tr:nth-child(even):hover,
 }
 
 .about-toc-links button:hover:not(.about-toc-active) {
-    background: #e3e3e3 !important;
-    color: #242424 !important;
+    background: var(--hover-bg) !important;
+    color: var(--text) !important
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -10347,14 +10368,6 @@ tbody tr:nth-child(even):hover,
         background: color-mix(in srgb, var(--status-present) 9%, var(--cream-light)) !important;
         color: var(--status-present-label) !important;
     }
-}
-
-.employee-document-dropzone:hover,
-.employee-document-dropzone:focus-visible,
- :root[data-theme="dark"] .employee-document-dropzone:hover,
- :root[data-theme="dark"] .employee-document-dropzone:focus-visible {
-    background: var(--cream-light) !important;
-    border-color: var(--cream-dark) !important;
 }
 
  :root[data-theme="dark"] {
@@ -11503,5 +11516,587 @@ select:hover:not(:focus-visible) {
         grid-template-areas:
             "search search"
             "date outlet";
+    }
+}
+
+.employee-create-modal .employee-required-document {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 7px;
+}
+
+.employee-create-modal .employee-required-document-label {
+    display: block;
+    color: var(--muted) !important;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+.employee-create-modal .employee-required-document-dropzone {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+    min-height: 104px;
+    box-sizing: border-box;
+    align-content: center;
+    justify-items: center;
+    gap: 7px;
+    padding: 14px 12px;
+    border: 1px dashed color-mix(in srgb, var(--ink) 18%, var(--surface)) !important;
+    border-radius: 10px;
+    background: var(--surface) !important;
+    color: var(--muted) !important;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease;
+}
+
+.employee-create-modal .employee-required-document-dropzone.is-active {
+    border-color: var(--cherry) !important;
+    background: color-mix(in srgb, var(--cherry) 8%, var(--surface)) !important;
+}
+
+.employee-create-modal .employee-required-document-dropzone:focus-visible {
+    outline: 1px solid var(--line);
+    outline-offset: 2px;
+}
+
+.employee-create-modal .employee-required-document-dropzone > svg {
+    color: var(--muted) !important;
+}
+
+.employee-create-modal .employee-required-document-dropzone > strong {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--ink) !important;
+    font-size: 12px;
+    line-height: 1.4;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.employee-create-modal .employee-required-document-dropzone > span {
+    display: block;
+    color: var(--muted) !important;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.employee-create-modal .employee-required-document-input {
+    display: none !important;
+}
+
+.employee-create-modal .employee-required-document-help {
+    display: block;
+    margin: 0;
+    color: var(--muted) !important;
+    font-size: 10px;
+}
+
+:root[data-theme="dark"] .employee-create-modal .employee-required-document-dropzone.is-active {
+    border-color: var(--status-present) !important;
+    background: color-mix(in srgb, var(--status-present) 14%, var(--surface)) !important;
+}
+
+:root[data-theme="dark"] .employee-create-modal .employee-required-document-dropzone:not(.is-active) {
+    border-color: color-mix(in srgb, var(--on-cherry) 24%, var(--surface)) !important;
+}
+
+.employee-document-dropzone,
+.employee-required-document-dropzone,
+.employee-create-modal .employee-required-document-dropzone {
+    background: transparent !important;
+}
+
+.employee-document-dropzone.is-active,
+.employee-required-document-dropzone.is-active,
+.employee-create-modal .employee-required-document-dropzone.is-active {
+    border-color: var(--status-present) !important;
+    background: transparent !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .employee-document-dropzone:hover,
+    .employee-required-document-dropzone:hover,
+    .employee-create-modal .employee-required-document-dropzone:hover {
+        border-color: var(--status-present) !important;
+        background: transparent !important;
+    }
+}
+
+.sidebar .logout-button {
+    background: var(--on-accent) !important;
+    border-color: var(--on-accent) !important;
+    color: var(--accent) !important;
+}
+
+.sidebar .logout-button svg {
+    color: currentColor;
+    stroke: currentColor;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .sidebar .logout-button:hover:not(:disabled) {
+        background: var(--on-accent) !important;
+        border-color: var(--on-accent) !important;
+        color: var(--cherry-dark) !important;
+    }
+}
+
+.employee-required-document-file {
+    min-width: 0;
+}
+
+.employee-upload-preview-link {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--pill-present-text) !important;
+    font: inherit;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: currentColor;
+    text-underline-offset: 2px;
+}
+
+.employee-create-modal .employee-upload-preview-link {
+    background-color: transparent !important;
+    color: var(--pill-present-text) !important;
+}
+
+.employee-create-modal button.employee-upload-preview-link:not(.button-primary):not(:disabled):hover {
+    background-color: transparent !important;
+    color: var(--pill-present-text) !important;
+}
+
+.employee-required-document-file .employee-upload-preview-link {
+    flex: 1 1 auto;
+}
+
+.employee-upload-thumbnail-button {
+    display: grid;
+    width: 42px;
+    height: 42px;
+    padding: 0;
+    overflow: hidden;
+    place-items: center;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    cursor: pointer;
+}
+
+.employee-upload-preview-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1600;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    background: var(--overlay);
+}
+
+.employee-upload-preview-modal {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: min(900px, 100%);
+    max-height: 90dvh;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 24px 80px var(--shadow-color);
+}
+
+.employee-upload-preview-header {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.employee-upload-preview-header > div {
+    min-width: 0;
+}
+
+.employee-upload-preview-header h2 {
+    overflow: hidden;
+    margin: 0;
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.employee-upload-preview-header p {
+    margin: 4px 0 0;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.employee-upload-preview-body {
+    display: grid;
+    min-height: 180px;
+    overflow: auto;
+    place-items: center;
+    padding: 16px;
+    background: #0B0B0B;
+}
+
+.employee-upload-preview-body img {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 74dvh;
+    object-fit: contain;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .employee-create-modal .employee-upload-preview-link:hover {
+        color: var(--pill-present-text) !important;
+    }
+}
+
+@media (max-width: 760px) {
+    .employee-upload-preview-backdrop {
+        padding: 12px;
+    }
+
+    .employee-upload-preview-modal {
+        max-height: 94dvh;
+    }
+}
+
+.employee-create-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.employee-create-modal-footer {
+    display: flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 24px;
+    border-top: 1px solid var(--border);
+    background: var(--surface-2);
+}
+
+.employee-create-modal-footer .draft-restored-note {
+    min-width: 0;
+    justify-content: space-between;
+    color: var(--text-muted);
+}
+
+.employee-create-modal-footer > .button-primary {
+    flex: 0 0 auto;
+}
+
+@media (max-width: 600px) {
+    .employee-create-modal-footer {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px 16px;
+    }
+
+    .employee-create-modal-footer .draft-restored-note {
+        width: 100%;
+    }
+
+    .employee-create-modal-footer > .button-primary {
+        width: 100%;
+        justify-content: center;
+    }
+}
+
+.content-area > .back-link {
+    display: inline-flex;
+    width: fit-content;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 14px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+    transition: background-color .16s ease, border-color .16s ease, color .16s ease;
+}
+
+.content-area > .back-link svg {
+    flex: 0 0 auto;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .content-area > .back-link:hover {
+        border-color: var(--accent);
+        background: var(--hover-bg);
+        color: var(--accent-text);
+    }
+}
+
+/* Theme contract: one source of truth for surfaces, text, overlays and status contrast. */
+:root,
+:root[data-theme="light"],
+:root[data-theme="dark"] {
+    --paper: var(--cream);
+    --surface: var(--cream-light);
+    --surface-2: light-dark(#F4ECE3, #351A1C);
+    --border: var(--cream-dark);
+    --text: var(--ink);
+    --text-muted: var(--muted);
+    --accent: var(--cherry);
+    --accent-text: light-dark(#9A0002, #FF7A7E);
+    --on-accent: #EFE6DE;
+    --overlay: light-dark(rgba(26,26,26,.55), rgba(0,0,0,.68));
+    --shadow-color: light-dark(rgba(26,26,26,.08), rgba(0,0,0,.5));
+    --hover-bg: light-dark(color-mix(in srgb, var(--cherry) 8%, var(--cream-light)), color-mix(in srgb, #fff 8%, var(--cream-light)));
+    --active-bg: light-dark(color-mix(in srgb, var(--cherry) 14%, var(--cream-light)), color-mix(in srgb, #fff 13%, var(--cream-light)));
+    --input-bg: var(--cream-light);
+    --disabled-bg: light-dark(#EEE5DB, #2F1618);
+    --disabled-text: light-dark(#9A8F88, #8A766C);
+    --bg: var(--cream);
+    --status-cell-text: #101010;
+    --status-cell-absent-text: #FFFFFF;
+    --shadow: 0 14px 34px var(--shadow-color);
+    --glass-shadow: var(--shadow);
+}
+
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+html, body {
+    background: var(--bg);
+    color: var(--text);
+}
+
+.topbar, .panel, .metric-card, .dashboard-kpi-card, .dashboard-hero,
+.outlet-card, .profile-menu-content, .notification-drawer,
+.access-modal, .advance-modal, .employee-create-modal, .employee-edit-modal,
+.employee-terms-modal, .terms-modal, .import-preview-modal,
+.designation-modal, .user-password-modal, .employee-document-preview,
+.dashboard-trend-panel, .dashboard-heatmap-panel, .dashboard-ranking-panel,
+.dashboard-payroll-panel, .dashboard-suggestions-panel {
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--text);
+    box-shadow: 0 14px 34px var(--shadow-color);
+}
+
+.panel-heading, .panel-footer, .import-preview-footer, .terms-actionbar,
+.terms-scroll, .employee-document-preview-header,
+.employee-document-preview-footer {
+    background: var(--surface-2);
+    border-color: var(--border);
+    color: var(--text);
+}
+
+th {
+    background: var(--surface);
+    color: var(--text-muted);
+}
+td, td strong { color: var(--text); }
+tbody tr:nth-child(even) { background: var(--surface-2); }
+
+.attendance-panel tbody tr:has(.attendance-status-option:disabled),
+tbody tr.employee-inactive-row {
+    background: var(--disabled-bg);
+    color: var(--text);
+}
+.attendance-panel tbody tr:has(.attendance-status-option:disabled) { opacity: .8; }
+tbody tr.employee-inactive-row { opacity: .6; }
+
+input, select, textarea,
+.toolbar input, .toolbar select, .field input, .field select, .field textarea,
+.cell-input, .table-wrap select, .table-page-size select {
+    background: var(--input-bg);
+    color: var(--text);
+    border-color: var(--border);
+}
+input::placeholder, textarea::placeholder { color: var(--text-muted); }
+input:disabled, select:disabled, textarea:disabled {
+    background: var(--disabled-bg);
+    color: var(--disabled-text);
+    cursor: not-allowed;
+}
+select option { background: var(--surface); color: var(--text); }
+
+.search-field, .attendance-search-field, .about-search,
+.uniform-employee-search .search-field {
+    background: var(--surface-2);
+    border-color: transparent;
+    color: var(--text);
+}
+.search-field input, .attendance-search-field input,
+.about-search input, .uniform-employee-search input { color: var(--text); }
+
+.button-primary {
+    background: var(--accent);
+    color: var(--on-accent);
+    border-color: var(--accent);
+}
+.button-secondary, .icon-button, .topbar-utility, .pagination .icon-button,
+.google-button {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+}
+.icon-button:disabled, .topbar-utility:disabled, .pagination .icon-button:disabled,
+.button:disabled {
+    background: var(--disabled-bg);
+    color: var(--disabled-text);
+}
+.button-danger { color: var(--pill-absent-text); border-color: var(--pill-absent-text); background: transparent; }
+
+.attendance-date-details summary, .attendance-date-count,
+.attendance-date-list time, .attendance-date-picker, .attendance-count-chip,
+.attendance-single-outlet, .attendance-confirmation-toggle,
+.attendance-outlet-select select, .count-chip, .google-button,
+.dashboard-insights>span, .dashboard-checkin-filters, .about-expand-all {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+}
+.dashboard-checkin-filters { background: var(--surface-2); }
+.dashboard-checkin-filters button.dashboard-filter-active {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.password-hash-note { background: var(--pill-half-bg); color: var(--pill-half-text); }
+.dashboard-pending-chip { background: var(--pill-half-bg); color: var(--pill-half-text); }
+.report-icon { background: var(--cherry); color: var(--on-accent); }
+.dashboard-suggestion>span:first-child,
+.dashboard-team-avatar, .dashboard-kpi-green, .dashboard-kpi-rose,
+.dashboard-kpi-sage, .dashboard-kpi-gold, .about-guide-icon,
+.about-module-icon {
+    background: var(--pill-present-bg);
+    color: var(--pill-present-text);
+}
+
+.eyebrow, .form-panel[open] summary, .profile-menu-content button:hover,
+.field-error, .employee-upload-error, .notification-open-request,
+.uniform-edit-button, .uniform-row-actions>summary,
+.employee-terms-accept, .login-panel a, a:not(.button),
+.unauthorized-page a, .attendance-correction-lock,
+.employee-code-error, .refreshing-notice .spin {
+    color: var(--accent-text);
+}
+
+.terms-accept { background: var(--surface-2); color: var(--text); }
+.terms-accept input { accent-color: var(--accent); }
+.employee-document-preview-body { background: #0B0B0B; color: #fff; }
+.employee-document-preview-pdf { background: #fff; }
+
+.about-toc-links button:hover:not(.about-toc-active),
+.about-toc-links button.about-toc-active {
+    background: var(--hover-bg);
+    color: var(--text);
+}
+.about-toc-links button.about-toc-active { background: var(--active-bg); }
+.about-section-number, .about-tip { background: var(--pill-present-bg); color: var(--pill-present-text); }
+.about-warning { background: var(--pill-half-bg); color: var(--pill-half-text); }
+
+.heatmap-high { background: var(--present); color: #101010; }
+.heatmap-mid { background: var(--half); color: #101010; }
+.heatmap-no-data { background: var(--unmarked); color: #101010; }
+.heatmap-weekoff { background: var(--weekoff); color: #101010; }
+.heatmap-low { background: var(--absent); color: #fff; }
+
+.mobile-scrim, .access-modal-backdrop, .employee-modal-backdrop,
+.employee-terms-backdrop, .import-preview-backdrop, .advance-modal-backdrop,
+.notification-drawer-scrim, .employee-document-preview-backdrop {
+    background: var(--overlay);
+}
+
+.recharts-default-tooltip {
+    background: var(--surface) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+}
+.recharts-tooltip-cursor { fill: var(--surface-2) !important; }
+.recharts-legend-item-text { fill: var(--text) !important; color: var(--text) !important; }
+
+* { -webkit-tap-highlight-color: transparent; }
+button, a, [role="button"], select, summary, label { touch-action: manipulation; }
+* { scrollbar-width: thin; scrollbar-color: var(--accent) var(--surface-2); }
+*::-webkit-scrollbar-track { background: var(--surface-2); }
+*::-webkit-scrollbar-thumb { background: var(--accent); border: 2px solid var(--surface-2); }
+::selection { background: var(--accent); color: var(--on-accent); }
+
+:focus-visible {
+    outline: 2px solid var(--accent-text);
+    outline-offset: 2px;
+}
+
+@media (hover: none) {
+    button:active, a:active, [role="button"]:active, summary:active,
+    .button:active, .icon-button:active {
+        opacity: .85;
+        transform: scale(.98);
+        transition: none;
+    }
+}
+
+@media print {
+    html, body, .terms-modal, .terms-paper, .terms-scroll,
+    .salary-slip, .report-print-area {
+        background: #fff !important;
+        color: #000 !important;
+    }
+}
+
+/* Neutral surfaces must not inherit the light-only cream token. */
+.panel-footer, .count-chip, .attendance-date-picker,
+.attendance-confirmation-toggle, .attendance-single-outlet,
+.google-button, .terms-accept, .about-section-body,
+.policy-note, .dashboard-kpi-card, .toolbar input, .toolbar select,
+.employee-document-preview-pdf, .attendance-all-present {
+    background: var(--surface);
+    color: var(--text);
+    border-color: var(--border);
+}
+
+.attendance-status-option,
+.dashboard-checkin-filters button,
+.attendance-all-present,
+.nav-link {
+    -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: none) {
+    .nav-link:hover, .nav-link.nav-active:hover,
+    .button:hover, .icon-button:hover, .topbar-utility:hover,
+    .dashboard-kpi-card:hover, .metric-card:hover,
+    tbody tr:hover, tbody tr:nth-child(even):hover,
+    .dashboard-team-row:hover, .dashboard-ranking-row:hover,
+    .dashboard-suggestion:hover, .dashboard-checkin-filters button:hover,
+    .attendance-status-option:hover, .attendance-all-present:hover,
+    .profile-menu-content button:hover,
+    .employee-document-dropzone:hover,
+    .employee-document-open-icon:hover,
+    .uniform-employee-options button:hover {
+        background: inherit !important;
+        border-color: inherit !important;
+        box-shadow: none !important;
+        color: inherit !important;
     }
 }

@@ -13,12 +13,14 @@ export function getEmployeeCodePrefix(outletName: string) {
 export async function getNextEmployeeCode(
   employees: Collection<EmployeeDocument>,
   prefix: string,
+  outletId: EmployeeDocument["outletId"],
   excludeEmployeeId?: EmployeeDocument["_id"],
 ) {
   const rows = await employees
     .find(
       {
         employeeCode: { $regex: new RegExp(`^${prefix}\\d{4}$`, "i") },
+        outletId,
         ...(excludeEmployeeId ? { _id: { $ne: excludeEmployeeId } } : {}),
       },
       { projection: { employeeCode: 1 } },
