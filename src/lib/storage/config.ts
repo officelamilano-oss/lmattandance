@@ -65,9 +65,9 @@ export function getStorageSignedUrlExpirySeconds() {
 
 export function getStorageMaxFileSizeBytes() {
   const raw = process.env.MAX_FILE_SIZE_MB?.trim();
-  if (!raw) return 10 * 1024 * 1024;
+  if (!raw) return 3 * 1024 * 1024;
   const sizeMb = Number(raw);
-  if (!Number.isInteger(sizeMb) || sizeMb < 1 || sizeMb > 10)
-    throw new Error("MAX_FILE_SIZE_MB must be an integer from 1 to 10.");
+  if (!Number.isInteger(sizeMb) || sizeMb < 1 || sizeMb > 3)
+    throw new Error("MAX_FILE_SIZE_MB must be an integer from 1 to 3.");
   return sizeMb * 1024 * 1024;
 }

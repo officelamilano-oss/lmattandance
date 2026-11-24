@@ -1,4 +1,4 @@
-export const EMPLOYEE_DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
+export const EMPLOYEE_DOCUMENT_MAX_BYTES = 3 * 1024 * 1024;
 
 export const EMPLOYEE_DOCUMENT_MIME_TYPES = {
   ".jpg": "image/jpeg",

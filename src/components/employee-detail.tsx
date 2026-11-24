@@ -1157,7 +1157,7 @@ export function EmployeeDetail({
                 />
                 <Upload size={23} aria-hidden="true" />
                 <strong>Drag &amp; drop files here or click to browse</strong>
-                <span>JPG, PNG, WEBP, PDF, DOCX · up to 10 MB per file</span>
+                <span>JPG, PNG, WEBP, PDF, DOCX · up to 3 MB per file</span>
               </div>
               {uploadValidationError && (
                 <p className="employee-upload-error" role="alert">
