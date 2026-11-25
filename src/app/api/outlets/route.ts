@@ -5,7 +5,10 @@ import { getDb } from "@/lib/mongodb";
 import { outletSchema } from "@/lib/validation/business";
 import { apiError, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
-import type { OutletDocument } from "@/lib/models";
+import type { EmployeeDocument } from "@/lib/models";
+import { getEmployeeCodePrefix } from "@/lib/employee-code";
+import { updateOutletDocument } from "@/lib/outlet-mutations";
+import type { OutletSettingsDocument } from "@/lib/outlet-settings";
 import { z } from "zod";
 
 const outletCreateSchema = z.object({
@@ -51,23 +54,61 @@ export async function GET(request: Request) {
       );
     const db = await getDb();
     const outlets = await db
-      .collection<OutletDocument>("outlets")
+      .collection<OutletSettingsDocument>("outlets")
       .find(scopedOutletQuery(actor, requestedId))
-      .sort({ code: 1 })
+      .sort({ sort_order: 1, code: 1 })
       .toArray();
-    if (actor.role !== "MAIN_ADMIN") return NextResponse.json(outlets);
-    const users = await db
-      .collection("users")
-      .find(
-        {
-          active: true,
-          outletIds: { $in: outlets.map((outlet) => outlet._id) },
-        },
-        { projection: { name: 1, emailNormalized: 1, role: 1, outletIds: 1 } },
-      )
-      .toArray();
+    const orderedOutlets = outlets.map((outlet, index) => ({
+      ...outlet,
+      weekly_off_count:
+        typeof outlet.weekly_off_count === "number" &&
+        Number.isInteger(outlet.weekly_off_count) &&
+        outlet.weekly_off_count >= 0 &&
+        outlet.weekly_off_count <= 7
+          ? outlet.weekly_off_count
+          : 3,
+      sort_order:
+        typeof outlet.sort_order === "number" &&
+        Number.isInteger(outlet.sort_order)
+          ? outlet.sort_order
+        : index,
+    }));
+    if (actor.role !== "MAIN_ADMIN")
+      return NextResponse.json(
+        orderedOutlets.map((outlet) => {
+          const visibleOutlet = { ...outlet };
+          delete visibleOutlet.draft_sort_order;
+          return visibleOutlet;
+        }),
+      );
+    const [users, employees] = await Promise.all([
+      db
+        .collection("users")
+        .find(
+          {
+            active: true,
+            outletIds: { $in: orderedOutlets.map((outlet) => outlet._id) },
+          },
+          {
+            projection: {
+              name: 1,
+              emailNormalized: 1,
+              role: 1,
+              outletIds: 1,
+            },
+          },
+        )
+        .toArray(),
+      db
+        .collection<EmployeeDocument>("employees")
+        .find(
+          { outletId: { $in: orderedOutlets.map((outlet) => outlet._id) } },
+          { projection: { employeeCode: 1, outletId: 1 } },
+        )
+        .toArray(),
+    ]);
     const assigned = new Map(
-      outlets.map((outlet) => [
+      orderedOutlets.map((outlet) => [
         outlet._id.toHexString(),
         users
           .filter((user) =>
@@ -81,9 +122,16 @@ export async function GET(request: Request) {
       ]),
     );
     return NextResponse.json(
-      outlets.map((outlet) => ({
+      orderedOutlets.map((outlet) => ({
         ...outlet,
         assignedUsers: assigned.get(outlet._id.toHexString()) ?? [],
+        employeeCodeRenameCount: employees.filter((employee) => {
+          if (!employee.outletId.equals(outlet._id)) return false;
+          const prefix = getEmployeeCodePrefix(outlet.name);
+          return new RegExp(`^${prefix}\\d{4}$`, "i").test(
+            employee.employeeCode,
+          );
+        }).length,
       })),
     );
   } catch (error) {
@@ -108,10 +156,21 @@ export async function POST(request: Request) {
     const input = outletCreateSchema.parse(await readJson<unknown>(request));
     const db = await getDb();
     const outlets = db.collection<
-      OutletDocument & { outletCode?: string; outlet_code?: string }
+      OutletSettingsDocument & { outletCode?: string; outlet_code?: string }
     >("outlets");
     const existing = await outlets
-      .find({}, { projection: { code: 1, outletCode: 1, outlet_code: 1 } })
+      .find(
+        {},
+        {
+          projection: {
+            code: 1,
+            outletCode: 1,
+            outlet_code: 1,
+            sort_order: 1,
+            draft_sort_order: 1,
+          },
+        },
+      )
       .toArray();
     const usedCodes = new Set(
       existing.flatMap((outlet) =>
@@ -129,12 +188,39 @@ export async function POST(request: Request) {
         { status: 409 },
       );
 
+    const sortOrder =
+      Math.max(
+        -1,
+        ...existing.map((outlet) =>
+          typeof outlet.sort_order === "number" &&
+          Number.isInteger(outlet.sort_order)
+            ? outlet.sort_order
+            : -1,
+        ),
+      ) + 1;
+    const draftSortOrder = existing.some((outlet) =>
+      Number.isInteger(outlet.draft_sort_order),
+    )
+      ? Math.max(
+          -1,
+          ...existing.map((outlet) =>
+            typeof outlet.draft_sort_order === "number" &&
+            Number.isInteger(outlet.draft_sort_order)
+              ? outlet.draft_sort_order
+              : -1,
+          ),
+        ) + 1
+      : undefined;
     const outlet = {
       _id: new ObjectId(),
       ...outletSchema.parse({
         ...input,
         code,
       }),
+      sort_order: sortOrder,
+      ...(draftSortOrder === undefined
+        ? {}
+        : { draft_sort_order: draftSortOrder }),
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -180,67 +266,30 @@ export async function PUT(request: Request) {
     const payload = body as Record<string, unknown>;
     const outletId = payload.outletId ?? payload._id;
     const outletCollection = db.collection<
-      OutletDocument & { outletCode?: string; outlet_code?: string }
+      OutletSettingsDocument & { outletCode?: string; outlet_code?: string }
     >("outlets");
-    const before =
+    const outlet =
       typeof outletId === "string" && ObjectId.isValid(outletId)
-        ? await outletCollection.findOne({ _id: new ObjectId(outletId) })
+        ? await outletCollection.findOne(
+            { _id: new ObjectId(outletId) },
+            { projection: { _id: 1 } },
+          )
         : typeof payload.code === "string"
-          ? await outletCollection.findOne({ code: payload.code })
+          ? await outletCollection.findOne(
+              { code: payload.code },
+              { projection: { _id: 1 } },
+            )
           : null;
-    if (!before) throw new Error("NOT_FOUND");
-    const code =
-      before.code ?? before.outletCode ?? before.outlet_code ?? payload.code;
-    if (typeof code !== "string")
+    if (!outlet) throw new Error("NOT_FOUND");
+    const result = await updateOutletDocument(outlet._id, payload, actor);
+    if (result.confirmationRequiredCount !== undefined)
       return NextResponse.json(
-        { error: "This outlet is missing its outlet code. Contact support." },
-        { status: 400 },
-      );
-    const currentActive =
-      typeof before.active === "boolean" ? before.active : false;
-    const parsed = outletSchema.parse({
-      code,
-      name: typeof payload.name === "string" ? payload.name : before.name || code,
-      address:
-        typeof payload.address === "string"
-          ? payload.address
-          : before.address ?? "",
-      city: typeof payload.city === "string" ? payload.city : before.city ?? "",
-      managerName:
-        typeof payload.managerName === "string"
-          ? payload.managerName
-          : before.managerName ?? "",
-      contactPhone:
-        typeof payload.contactPhone === "string"
-          ? payload.contactPhone
-          : before.contactPhone ?? "",
-      active:
-        typeof payload.active === "boolean" ? payload.active : currentActive,
-    });
-    await db
-      .collection<OutletDocument>("outlets")
-      .updateOne(
-        { _id: before._id },
-        { $set: { ...parsed, updatedAt: new Date() } },
-      );
-    await writeAudit({
-      actorId: actor.id,
-      actorEmail: actor.email,
-      action: "OUTLET_UPDATED",
-      entityType: "outlet",
-      entityId: before._id.toHexString(),
-      changes: {
-        active: { before: before.active, after: parsed.active },
-        name: { before: before.name, after: parsed.name },
-        address: { before: before.address, after: parsed.address },
-        city: { before: before.city, after: parsed.city },
-        managerName: { before: before.managerName, after: parsed.managerName },
-        contactPhone: {
-          before: before.contactPhone,
-          after: parsed.contactPhone,
+        {
+          error: `Confirm the update of ${result.confirmationRequiredCount} employee codes before renaming this outlet.`,
+          employeeCodeUpdateCount: result.confirmationRequiredCount,
         },
-      },
-    });
+        { status: 409 },
+      );
     return NextResponse.json({ ok: true });
   } catch (error) {
     return apiError(error);

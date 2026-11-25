@@ -23,12 +23,12 @@
     LoanDocument,
     LoanInstallmentDocument,
     LoanTransactionDocument,
-    OutletDocument,
     SalaryRecordDocument,
     SalarySettings,
     UniformDeductionDocument,
     UniformItemDocument,
   } from "@/lib/models";
+  import type { OutletSettingsDocument } from "@/lib/outlet-settings";
   import { z } from "zod";
 
   const querySchema = z.object({
@@ -88,7 +88,7 @@
 
       const db = await getDb();
       const outlets = await db
-        .collection<OutletDocument>("outlets")
+        .collection<OutletSettingsDocument>("outlets")
         .find({
           ...(query.outletId
             ? { _id: new ObjectId(query.outletId) }
@@ -96,7 +96,7 @@
               ? {}
               : { _id: { $in: actor.outletIds } }),
         })
-        .sort({ code: 1 })
+        .sort({ sort_order: 1, code: 1 })
         .toArray();
       const outletById = new Map(
         outlets.map((outlet) => [outlet._id.toHexString(), outlet]),
@@ -427,7 +427,12 @@
                 salaryDeductions.employeePf += Number(saved.calculation.employeePf ?? 0);
                 salaryDeductions.employerPf += Number(saved.calculation.employerPf ?? 0);
                 attendanceSalary.notMarkedDays += Number(saved.calculation.notMarkedDays ?? 0);
-                attendanceSalary.allowedWeekOff += Number(saved.calculation.allowedWeekOff ?? 3);
+                attendanceSalary.allowedWeekOff += Number(
+                  saved.calculation.allowedWeekOff ??
+                    outletById.get(employee.outletId.toHexString())
+                      ?.weekly_off_count ??
+                    3,
+                );
                 attendanceSalary.totalEquivalentDays += Number(saved.calculation.totalEquivalentDays ?? 0);
                 attendanceSalary.chargeableDays += Number(saved.calculation.chargeableDays ?? 0);
                 attendanceSalary.attendanceDeduction += Number(saved.calculation.attendanceDeduction ?? 0);
@@ -500,6 +505,9 @@
                 absentDays: monthData.counts.A,
                 halfDays: monthData.counts.HD,
                 weekOffs: monthData.counts.WO,
+                allowedWeekOff:
+                  outletById.get(employee.outletId.toHexString())
+                    ?.weekly_off_count ?? 3,
                 paidAbsences: settingsRules.paidAbsences,
                 notMarkedDays,
                 uniformDeductions: monthUniformDeduction,

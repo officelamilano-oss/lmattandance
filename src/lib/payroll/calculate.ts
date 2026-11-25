@@ -16,6 +16,7 @@ export interface PayrollInputs {
   absentDays: number;
   halfDays: number;
   weekOffs: number;
+  allowedWeekOff?: number;
   paidAbsences: number;
   settleMonthlySalary?: boolean;
   salaryEntitlementDays?: number;
@@ -265,9 +266,10 @@ export function calculatePayroll(input: PayrollInputs): PayrollCalculation {
   const halfDayDeduction = dailyRate.mul(input.halfDays * 0.5);
   const totalEquivalentDays =
     input.weekOffs + input.halfDays * 0.5 + input.absentDays;
-  const allowanceConsumed = Math.min(3, totalEquivalentDays);
-  const allowanceRemaining = Math.max(0, 3 - allowanceConsumed);
-  const chargeableDays = Math.max(0, totalEquivalentDays - 3);
+  const allowedWeekOff = input.allowedWeekOff ?? 3;
+  const allowanceConsumed = Math.min(allowedWeekOff, totalEquivalentDays);
+  const allowanceRemaining = Math.max(0, allowedWeekOff - allowanceConsumed);
+  const chargeableDays = Math.max(0, totalEquivalentDays - allowedWeekOff);
   const attendanceDeduction = dailyRate.mul(chargeableDays);
   const notMarkedDays = Math.max(0, input.notMarkedDays);
   const notMarkedDeduction = dailyRate.mul(notMarkedDays);
@@ -302,7 +304,7 @@ export function calculatePayroll(input: PayrollInputs): PayrollCalculation {
     overtime: money(overtime), allowances: money(allowances), advances: money(advances),
     loanDeduction: money(loanDeduction), otherDeductions: money(otherDeductions), uniformDeductions: money(uniformDeductions), employeePf: money(employeePf), employerPf: money(employerPf), esi: money(esi),
     netPayable: money(netPayable),
-    allowedWeekOff: 3,
+    allowedWeekOff,
     allowanceConsumed: money(new Decimal(allowanceConsumed)),
     allowanceRemaining: money(new Decimal(allowanceRemaining)),
     totalEquivalentDays: money(new Decimal(totalEquivalentDays)),

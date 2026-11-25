@@ -1064,7 +1064,7 @@ td strong {
 
 .outlet-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     gap: 13px
 }
 
@@ -1081,6 +1081,112 @@ td strong {
     display: flex;
     justify-content: space-between;
     align-items: center
+}
+
+.outlet-card-fields {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px
+}
+
+.outlet-card-fields .field {
+    min-width: 0
+}
+
+.outlet-address {
+    grid-column: 1 / -1
+}
+
+.outlet-card-order {
+    display: flex;
+    align-items: center;
+    gap: 10px
+}
+
+.outlet-order-buttons {
+    display: flex;
+    gap: 3px
+}
+
+.outlet-order-button {
+    width: 27px;
+    height: 27px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface);
+    color: var(--text-muted);
+    cursor: pointer
+}
+
+.outlet-order-button:hover:not(:disabled) {
+    color: var(--accent);
+    border-color: var(--accent)
+}
+
+.outlet-order-button:disabled {
+    opacity: .45;
+    cursor: not-allowed
+}
+
+.assigned-users {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    color: var(--text-muted);
+    font-size: 11px
+}
+
+.assigned-users strong {
+    color: var(--text)
+}
+
+.outlet-saving {
+    margin-left: 8px;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 400
+}
+
+.assigned-users small {
+    padding: 3px 7px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-muted)
+}
+
+.outlet-order-bar {
+    position: sticky;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 8px 24px var(--shadow-color)
+}
+
+.outlet-order-bar-top {
+    top: 75px;
+    grid-column: 1 / -1
+}
+
+.outlet-order-bar-bottom {
+    bottom: 10px;
+    grid-column: 1 / -1
+}
+
+.outlet-order-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px
 }
 
 .outlet-code {
@@ -1499,9 +1605,6 @@ td strong {
     .metric-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr))
     }
-    .outlet-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr))
-    }
 }
 
 @media(max-width:760px) {
@@ -1594,9 +1697,6 @@ td strong {
         width: 100%;
         min-width: 70px
     }
-    .outlet-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr))
-    }
     .report-panel .form-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr))
     }
@@ -1679,9 +1779,6 @@ td strong {
     }
     .form-actions {
         grid-column: 1
-    }
-    .outlet-grid {
-        grid-template-columns: 1fr
     }
     .report-panel .form-grid {
         grid-template-columns: 1fr
@@ -4420,7 +4517,7 @@ tbody tr:hover {
 
 .dashboard-submission-content>div:first-child strong span {
     color: var(--cream-dark);
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 500
 }
 
@@ -4429,24 +4526,9 @@ tbody tr:hover {
     font-size: 8px
 }
 
-.dashboard-submission-ring {
-    display: grid;
-    width: 49px;
-    height: 49px;
-    place-items: center;
-    border-radius: 50%
-}
-
-.dashboard-submission-ring span {
-    display: grid;
-    width: 37px;
-    height: 37px;
-    place-items: center;
-    border-radius: 50%;
-    background: var(--on-cherry);
+.dashboard-submission-icon {
+    flex: 0 0 auto;
     color: var(--status-present);
-    font-size: 8px;
-    font-weight: 700
 }
 
 .dashboard-submission-card .dashboard-kpi-foot {
@@ -5145,21 +5227,6 @@ tbody tr:hover {
     padding: 10px 13px 12px
 }
 
-.dashboard-payroll-progress {
-    display: flex;
-    height: 7px;
-    overflow: hidden;
-    border-radius: 99px;
-    background: var(--on-cherry)
-}
-
-.dashboard-payroll-progress i {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-    background: var(--status-present)
-}
-
 .dashboard-payroll-values {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -5452,7 +5519,6 @@ tbody tr:hover {
 :root[data-theme="dark"] .dashboard-insights>span,
 :root[data-theme="dark"] .dashboard-filter-row .toolbar select,
 :root[data-theme="dark"] .dashboard-filter-row .toolbar input,
-:root[data-theme="dark"] .dashboard-submission-ring span,
 :root[data-theme="dark"] .dashboard-checkin-filters,
 :root[data-theme="dark"] .dashboard-checkin-filters button.dashboard-filter-active,
 :root[data-theme="dark"] .about-expand-all,
@@ -6103,19 +6169,12 @@ select {
     font-weight: 500;
 }
 
+.dashboard-submission-content>div:first-child strong span {
+    font-size: 18px;
+}
+
 .dashboard-submission-content>div:first-child small {
     font-size: 12.5px;
-}
-
-.dashboard-submission-ring {
-    width: 84px;
-    height: 84px;
-}
-
-.dashboard-submission-ring span {
-    width: 64px;
-    height: 64px;
-    font-size: 0;
 }
 
 .badge-green,
@@ -6516,14 +6575,6 @@ tbody tr:nth-child(3) .dashboard-employee-avatar {
 
 .dashboard-payroll-content {
     padding: 14px 26px 24px;
-}
-
-.dashboard-payroll-progress {
-    height: 14px;
-}
-
-.dashboard-payroll-progress i {
-    background: var(--status-present);
 }
 
 .dashboard-payroll-values {
@@ -8023,6 +8074,46 @@ select option:disabled {
     gap: 8px;
 }
 
+.terms-download-menu {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.terms-download-trigger {
+    display: grid;
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    padding: 0;
+    place-items: center;
+    list-style: none;
+    cursor: pointer;
+}
+
+.terms-download-trigger::-webkit-details-marker {
+    display: none;
+}
+
+.terms-download-options {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    z-index: 5;
+    display: grid;
+    min-width: 145px;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.terms-download-options .button {
+    width: 100%;
+    justify-content: flex-start;
+}
+
 .terms-scroll {
     order: 1;
     flex: 1;
@@ -8034,6 +8125,8 @@ select option:disabled {
 }
 
 .terms-paper {
+    --terms-paper-horizontal-padding: 40px;
+    --terms-paper-bottom-padding: 22px;
     display: flex;
     flex-direction: column;
     min-height: 900px;
@@ -8281,6 +8374,8 @@ select option:disabled {
         padding: 12px 8px 24px;
     }
     .terms-paper {
+        --terms-paper-horizontal-padding: 16px;
+        --terms-paper-bottom-padding: 16px;
         min-height: 0;
         padding: 20px 16px 16px;
     }
@@ -11988,6 +12083,57 @@ input:disabled, select:disabled, textarea:disabled {
     cursor: not-allowed;
 }
 select option { background: var(--surface); color: var(--text); }
+
+@media (min-width: 640px) {
+    .outlet-card-fields {
+        grid-template-columns: repeat(2, minmax(0, 1fr))
+    }
+}
+
+@media (min-width: 1280px) {
+    .outlet-card-fields {
+        grid-template-columns: repeat(3, minmax(0, 1fr))
+    }
+}
+
+@media (max-width: 639px) {
+    .outlet-order-bar {
+        align-items: stretch;
+        flex-direction: column
+    }
+
+    .outlet-order-actions {
+        justify-content: flex-end
+    }
+}
+
+@media (hover: none) {
+    .outlet-card .button:hover:not(:disabled),
+    .outlet-order-bar .button:hover:not(:disabled),
+    .outlet-order-button:hover:not(:disabled) {
+        transform: none;
+        filter: none
+    }
+
+    .outlet-card .button-secondary:hover:not(:disabled),
+    .outlet-order-bar .button-secondary:hover:not(:disabled) {
+        color: var(--text);
+        border-color: var(--border);
+        background: var(--surface)
+    }
+
+    .outlet-order-bar .button-primary:hover:not(:disabled) {
+        color: var(--on-accent);
+        background: var(--accent);
+        border-color: var(--accent)
+    }
+
+    .outlet-order-button:hover:not(:disabled) {
+        color: var(--text-muted);
+        border-color: var(--border);
+        background: var(--surface)
+    }
+}
 
 .search-field, .attendance-search-field, .about-search,
 .uniform-employee-search .search-field {

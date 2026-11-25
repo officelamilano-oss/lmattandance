@@ -103,6 +103,33 @@ test("combined three-day allowance and not-marked deductions follow the unified 
   }
 });
 
+test("uses each outlet's configured weekly-off allowance for attendance deductions", () => {
+  const noWeeklyOffAllowance = calculatePayroll({
+    ...base,
+    presentDays: 29,
+    absentDays: 1,
+    halfDays: 0,
+    weekOffs: 0,
+    allowedWeekOff: 0,
+  });
+  assert.equal(noWeeklyOffAllowance.allowedWeekOff, 0);
+  assert.equal(noWeeklyOffAllowance.chargeableDays, 1);
+  assert.equal(noWeeklyOffAllowance.attendanceDeduction, 1000);
+
+  const fiveWeeklyOffAllowance = calculatePayroll({
+    ...base,
+    presentDays: 24,
+    absentDays: 2,
+    halfDays: 0,
+    weekOffs: 4,
+    allowedWeekOff: 5,
+  });
+  assert.equal(fiveWeeklyOffAllowance.allowedWeekOff, 5);
+  assert.equal(fiveWeeklyOffAllowance.allowanceConsumed, 5);
+  assert.equal(fiveWeeklyOffAllowance.chargeableDays, 1);
+  assert.equal(fiveWeeklyOffAllowance.attendanceDeduction, 1000);
+});
+
 test("not-marked counting excludes future, pre-joining, post-leaving, holiday, and marked dates", () => {
   assert.equal(countNotMarkedDays({
     dates: ["2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13"],

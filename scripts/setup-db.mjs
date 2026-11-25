@@ -126,6 +126,28 @@ try {
         { upsert: true },
       );
     }
+  const outletCollection = db.collection("outlets");
+  const existingOutlets = await outletCollection
+    .find({}, { projection: { _id: 1, weekly_off_count: 1 } })
+    .sort({ sort_order: 1, code: 1 })
+    .toArray();
+  for (const [sortOrder, outlet] of existingOutlets.entries()) {
+    const weeklyOffCount =
+      Number.isInteger(outlet.weekly_off_count) &&
+      outlet.weekly_off_count >= 0 &&
+      outlet.weekly_off_count <= 7
+        ? outlet.weekly_off_count
+        : 3;
+    await outletCollection.updateOne(
+      { _id: outlet._id },
+      {
+        $set: {
+          weekly_off_count: weeklyOffCount,
+          sort_order: sortOrder,
+        },
+      },
+    );
+  }
   const indexes = [
     [
       "users",
@@ -157,6 +179,11 @@ try {
       { unique: true, name: "designations_name_normalized_unique" },
     ],
     ["outlets", { code: 1 }, { unique: true, name: "outlets_code_unique" }],
+    [
+      "outlets",
+      { sort_order: 1, code: 1 },
+      { name: "outlets_sort_order_code" },
+    ],
     [
       "employees",
       { employeeCodeNormalized: 1 },

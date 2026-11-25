@@ -20,6 +20,7 @@ import type {
   SalarySettings,
   UniformDeductionDocument,
 } from "@/lib/models";
+import type { OutletSettingsDocument } from "@/lib/outlet-settings";
 import {
   dateOnlySchema,
   monthSchema,
@@ -78,6 +79,11 @@ export async function GET(request: Request) {
         { status: 400 },
       );
     const db = await getDb();
+    const outlet = await db
+      .collection<OutletSettingsDocument>("outlets")
+      .findOne({ _id: outletId });
+    if (!outlet)
+      return NextResponse.json({ error: "Outlet not found." }, { status: 404 });
     const employee = await db
       .collection<EmployeeDocument>("employees")
       .findOne({
@@ -236,6 +242,7 @@ export async function GET(request: Request) {
       absentDays: counts.A,
       halfDays: counts.HD,
       weekOffs: counts.WO,
+      allowedWeekOff: outlet.weekly_off_count ?? 3,
       paidAbsences: rules.paidAbsences,
       notMarkedDays: await getNotMarkedDays(
         employee,

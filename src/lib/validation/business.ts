@@ -230,6 +230,7 @@ export const outletSchema = z.object({
   managerName: z.string().trim().max(120).default(""),
   contactPhone: z.string().trim().max(20).default(""),
   active: z.boolean().default(false),
+  weekly_off_count: z.number().int().min(0).max(7).default(3),
 });
 
 const passwordSchema = z

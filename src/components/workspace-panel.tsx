@@ -24,9 +24,12 @@
     CalendarDays,
     CalendarClock,
     Check,
+    ChevronDown,
+    ClipboardCheck,
     CircleCheck,
     ChevronLeft,
     ChevronRight,
+    ChevronUp,
     Clock3,
     Eye,
     EyeOff,
@@ -74,6 +77,8 @@
   import { useEmployeeAttendanceReport } from "@/lib/use-employee-attendance-report";
   import { clientRequestCache } from "@/lib/client-request-cache";
   import { fetchOutletList } from "@/lib/outlets-client";
+  import { moveOutletOrder } from "@/lib/outlet-order";
+  import { getEmployeeCodePrefix } from "@/lib/employee-code";
   import { EmployeeImportPanel } from "@/components/employee-import-panel";
   import { EmployeeCreatePanel } from "@/components/employee-create-panel";
   import {
@@ -169,7 +174,7 @@
     return isClient ? createPortal(children, document.body) : null;
   }
 
-  function dashboardPercentClass(value: number, prefix: "dashboard-width" | "dashboard-rate") {
+  function dashboardPercentClass(value: number, prefix: "dashboard-width") {
     const percent = Math.max(0, Math.min(100, Math.round(value)));
     return `${prefix}-${percent}`;
   }
@@ -1020,12 +1025,6 @@
     const dashboardActiveOutlets = data.metrics?.activeOutlets ?? 0;
     const dashboardSubmittedOutlets =
       data.metrics?.submittedOutlets ?? 0;
-    const dashboardSubmissionRate =
-      dashboardActiveOutlets > 0
-        ? Math.round(
-            (dashboardSubmittedOutlets / dashboardActiveOutlets) * 100,
-          )
-        : 0;
     const rateChange = data.metrics?.attendanceRateChange ?? null;
 
     if (section === "dashboard")
@@ -1137,21 +1136,20 @@
                 </article>
                 <article className="dashboard-kpi-card">
                   <div className="dashboard-kpi-top">
-                    <span>Net payroll</span>
+                    <span>Net payroll · all employees</span>
                     <span className="dashboard-kpi-icon dashboard-kpi-rose"><Banknote size={17} /></span>
                   </div>
                   <strong>{data.metrics?.netPayable == null ? "—" : currency(data.metrics.netPayable)}</strong>
                   <div className="dashboard-kpi-foot">
-                    <span>{data.metrics?.netPayable == null ? "Salary permission required" : `Accrued through ${formatDate(dashboardDate)}`}</span>
+                    <span>{data.metrics?.netPayable == null ? "Salary permission required" : `After attendance and deductions through ${formatDate(dashboardDate)}`}</span>
                     {user.permissions.includes("salary.read") && <Link href="/salary" className="dashboard-kpi-link">View payroll <ArrowUpRight size={13} /></Link>}
                   </div>
-                  {data.metrics?.grossSalary != null && (
-                    <div className="dashboard-kpi-extra">Gross earnings <strong>{currency(data.metrics.grossSalary)}</strong></div>
+                  {data.metrics?.approvedAdvancesPendingPayroll != null && (
+                    <div className="dashboard-kpi-extra">Approved advances <strong>{currency(data.metrics.approvedAdvancesPendingPayroll)}</strong></div>
                   )}
-                  {data.metrics?.projectedMonthEndBase != null && (
-                    <div className="dashboard-kpi-extra">Projected month-end base <strong>{currency(data.metrics.projectedMonthEndBase)}</strong></div>
+                  {data.metrics?.netPayable != null && (
+                    <div className="dashboard-kpi-extra">Net pay after advances &amp; deductions <strong>{currency(data.metrics.netPayable)}</strong></div>
                   )}
-                  <small>Projection uses monthly base salaries before attendance and deductions</small>
                 </article>
                 <article className="dashboard-kpi-card">
                   <div className="dashboard-kpi-top">
@@ -1175,21 +1173,27 @@
                 </article>
                 <article className="dashboard-kpi-card dashboard-submission-card">
                   <div className="dashboard-kpi-top">
-                    <span>Outlet submissions</span>
-                    <span className="dashboard-kpi-icon dashboard-kpi-gold"><CircleCheck size={17} /></span>
+                    <span>Attendance submissions</span>
                   </div>
                   <div className="dashboard-submission-content">
                     <div>
-                      <strong>{dashboardSubmittedOutlets}<span>/{dashboardActiveOutlets}</span></strong>
-                      <small>outlets submitted</small>
+                      <strong>{dashboardSubmittedOutlets}<span> of {dashboardActiveOutlets}</span></strong>
+                      <small>outlets submitted for selected date</small>
                     </div>
-                    <div className={`dashboard-submission-ring ${dashboardPercentClass(dashboardSubmissionRate, "dashboard-rate")}`} aria-label={`${dashboardSubmissionRate}% outlets submitted`}>
-                      <span>{dashboardSubmissionRate}%</span>
-                    </div>
+                    <ClipboardCheck
+                      className="dashboard-submission-icon"
+                      size={42}
+                      strokeWidth={1.6}
+                      aria-hidden="true"
+                    />
                   </div>
                   <div className="dashboard-kpi-foot">
-                    <span>{data.metrics?.missingSubmissions ?? 0} awaiting submission</span>
-                    <span className="dashboard-kpi-neutral">{dashboardSubmissionRate}% complete</span>
+                    <span>
+                      {data.metrics?.missingSubmissions ?? 0}{" "}
+                      {data.metrics?.missingSubmissions === 1
+                        ? "outlet still needs to submit"
+                        : "outlets still need to submit"}
+                    </span>
                   </div>
                 </article>
               </div>
@@ -4627,20 +4631,30 @@
             <Loading />
           ) : (
             <div className="outlet-grid">
-              {(data.outlets ?? []).map((outlet: Outlet) => (
-                <OutletCard
-                  key={outlet._id}
-                  outlet={outlet}
-                  onSave={(fields) =>
-                    mutate(
-                      "/api/outlets",
-                      { outletId: outlet._id, ...fields },
-                      "PUT",
-                    )
-                  }
-                  disabled={user.role !== "MAIN_ADMIN" || busy}
-                />
-              ))}
+              <OutletListManager
+                outlets={data.outlets ?? []}
+                canManage={user.role === "MAIN_ADMIN"}
+                busy={busy}
+                onSave={(outlet, fields, confirmEmployeeCodeUpdateCount) =>
+                  mutate(
+                    `/api/outlets/${encodeURIComponent(outlet._id)}`,
+                    { ...fields, confirmEmployeeCodeUpdateCount },
+                    "PATCH",
+                    `${outlet.code} updated.`,
+                  )
+                }
+                onWeekOffChange={(outlet, weekly_off_count) =>
+                  mutate(
+                    `/api/outlets/${encodeURIComponent(outlet._id)}`,
+                    { weekly_off_count },
+                    "PATCH",
+                    `${outlet.name}: week off ${weekly_off_count} par set ho gaya`,
+                  )
+                }
+                onOrderAction={(body, successMessage) =>
+                  mutate("/api/outlets/order", body, "PATCH", successMessage)
+                }
+              />
             </div>
           )}
         </div>
@@ -6455,9 +6469,7 @@
     employeeCount: number;
     accrualDate: string;
   }) {
-    const gross = metrics?.grossSalary ?? 0;
     const net = metrics?.netPayable ?? 0;
-    const progress = gross > 0 ? Math.max(0, Math.min(100, (net / gross) * 100)) : 0;
     const periodStart = `${accrualDate.slice(0, 7)}-01`;
     return (
       <section className="panel dashboard-payroll-panel">
@@ -6469,23 +6481,18 @@
           <Link className="dashboard-panel-link" href="/salary">Review payroll <ArrowUpRight size={14} /></Link>
         </div>
         <div className="dashboard-payroll-content">
-          {metrics?.grossSalary == null ? (
+          {metrics?.netPayable == null ? (
             <Empty>Salary permission is required to view payroll totals.</Empty>
           ) : (
             <>
-              <div className="dashboard-payroll-progress" aria-label={`${progress.toFixed(0)} percent of gross earnings remains net payable`}>
-                <i className={dashboardPercentClass(progress, "dashboard-width")} />
-              </div>
               <div className="dashboard-payroll-values">
-                <div><span>Gross accrued</span><strong>{currency(gross)}</strong></div>
-                <div><span>Advances awaiting payroll</span><strong>{metrics.approvedAdvancesPendingPayroll == null ? "—" : currency(metrics.approvedAdvancesPendingPayroll)}</strong></div>
+                <div><span>Approved advances</span><strong>{metrics.approvedAdvancesPendingPayroll == null ? "—" : currency(metrics.approvedAdvancesPendingPayroll)}</strong><small>Approved this month</small></div>
                 <div><span>Loan deductions in generated payroll</span><strong>{metrics.payrollCount ? currency(metrics.recordedLoanDeductions ?? 0) : "No payroll records"}</strong></div>
-                <div><span>Net accrued</span><strong className="payroll-value-net">{currency(net)}</strong></div>
-                <div><span>Projected month-end base</span><strong>{metrics.projectedMonthEndBase == null ? "—" : currency(metrics.projectedMonthEndBase)}</strong><small>Before attendance and deductions</small></div>
-                <div><span>Average net / active employee</span><strong>{employeeCount ? currency(net / employeeCount) : currency(0)}</strong><small>Current accrued amount</small></div>
+                <div><span>Net payroll · all employees</span><strong className="payroll-value-net">{currency(net)}</strong><small>After attendance and deductions through {formatDate(accrualDate)}</small></div>
+                <div><span>Average net / active employee</span><strong>{employeeCount ? currency(net / employeeCount) : currency(0)}</strong><small>Current month-to-date amount</small></div>
               </div>
               <p className="dashboard-payroll-note">
-                Accrual uses submitted attendance and current payroll rules. Live accrual does not include loan deductions; those are shown from generated payroll records.
+                Net payroll uses submitted attendance and current payroll rules, including approved advances and configured deductions. The loan figure above is from generated payroll records.
               </p>
             </>
           )}
@@ -7081,14 +7088,237 @@
     ) ?? 1;
   }
 
+  type OutletEditableFields = Pick<
+    Outlet,
+    | "name"
+    | "active"
+    | "address"
+    | "city"
+    | "managerName"
+    | "contactPhone"
+  >;
+  type OutletOrderAction =
+    | { action: "SAVE_DRAFT"; outletIds: string[] }
+    | { action: "PUBLISH" }
+    | { action: "DISCARD" };
+
+  function sameOutletOrder(left: readonly string[], right: readonly string[]) {
+    return (
+      left.length === right.length &&
+      left.every((outletId, index) => outletId === right[index])
+    );
+  }
+
+  function OutletListManager({
+    outlets,
+    canManage,
+    busy,
+    onSave,
+    onWeekOffChange,
+    onOrderAction,
+  }: {
+    outlets: Outlet[];
+    canManage: boolean;
+    busy: boolean;
+    onSave: (
+      outlet: Outlet,
+      fields: OutletEditableFields,
+      confirmEmployeeCodeUpdateCount: number,
+    ) => Promise<boolean>;
+    onWeekOffChange: (outlet: Outlet, count: number) => Promise<boolean>;
+    onOrderAction: (
+      body: OutletOrderAction,
+      successMessage: string,
+    ) => Promise<boolean>;
+  }) {
+    const liveOrder = outlets.map((outlet) => outlet._id);
+    const hasSavedDraft = outlets.some(
+      (outlet) => typeof outlet.draft_sort_order === "number",
+    );
+    const savedDraftOrder = hasSavedDraft
+      ? [
+          ...outlets.filter(
+            (outlet) => typeof outlet.draft_sort_order === "number",
+          ),
+        ]
+          .sort(
+            (left, right) =>
+              (left.draft_sort_order ?? Number.MAX_SAFE_INTEGER) -
+              (right.draft_sort_order ?? Number.MAX_SAFE_INTEGER),
+          )
+          .map((outlet) => outlet._id)
+      : liveOrder;
+    const completeSavedDraft = [
+      ...savedDraftOrder,
+      ...liveOrder.filter((outletId) => !savedDraftOrder.includes(outletId)),
+    ];
+    const [localOrder, setLocalOrder] = useState<string[] | null>(null);
+    const [activeOrderAction, setActiveOrderAction] = useState<
+      OutletOrderAction["action"] | null
+    >(null);
+    const baseOrder = completeSavedDraft;
+    const candidateOrder = localOrder ?? baseOrder;
+    const displayedOrder = [
+      ...candidateOrder.filter((outletId) => liveOrder.includes(outletId)),
+      ...liveOrder.filter((outletId) => !candidateOrder.includes(outletId)),
+    ];
+    const unsavedChanges =
+      localOrder !== null && !sameOutletOrder(displayedOrder, baseOrder);
+    const outletsById = new Map(
+      outlets.map((outlet) => [outlet._id, outlet] as const),
+    );
+    const orderedOutlets = displayedOrder
+      .map((outletId) => outletsById.get(outletId))
+      .filter((outlet): outlet is Outlet => outlet !== undefined);
+
+    useEffect(() => {
+      if (!unsavedChanges) return;
+      function warnBeforeLeaving(event: BeforeUnloadEvent) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+      window.addEventListener("beforeunload", warnBeforeLeaving);
+      return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+    }, [unsavedChanges]);
+
+    function move(index: number, direction: -1 | 1) {
+      const next = moveOutletOrder(displayedOrder, index, direction);
+      setLocalOrder(
+        sameOutletOrder(next, baseOrder) ? null : next,
+      );
+    }
+
+    async function runOrderAction(
+      body: OutletOrderAction,
+      successMessage: string,
+    ) {
+      setActiveOrderAction(body.action);
+      try {
+        return await onOrderAction(body, successMessage);
+      } finally {
+        setActiveOrderAction(null);
+      }
+    }
+
+    async function saveDraft() {
+      if (
+        await runOrderAction(
+          { action: "SAVE_DRAFT", outletIds: displayedOrder },
+          "Outlet order draft saved.",
+        )
+      )
+        setLocalOrder(null);
+    }
+
+    async function discardDraft() {
+      if (
+        !window.confirm("Discard the saved outlet order draft?")
+      )
+        return;
+      if (
+        await runOrderAction(
+          { action: "DISCARD" },
+          "Outlet order draft discarded.",
+        )
+      )
+        setLocalOrder(null);
+    }
+
+    return (
+      <>
+        {canManage && hasSavedDraft && (
+          <div className="outlet-order-bar outlet-order-bar-top">
+            <strong>Draft ready</strong>
+            <div className="outlet-order-actions">
+              <button
+                className="button button-secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => void discardDraft()}
+              >
+                {activeOrderAction === "DISCARD"
+                  ? "Discarding..."
+                  : "Discard draft"}
+              </button>
+              <button
+                className="button button-primary"
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void runOrderAction(
+                    { action: "PUBLISH" },
+                    "Outlet order published.",
+                  )
+                }
+              >
+                {activeOrderAction === "PUBLISH" ? "Publishing..." : "Publish"}
+              </button>
+            </div>
+          </div>
+        )}
+        {orderedOutlets.map((outlet, index) => (
+          <OutletCard
+            key={outlet._id}
+            outlet={outlet}
+            canManage={canManage}
+            busy={busy}
+            orderIndex={index}
+            orderCount={orderedOutlets.length}
+            onMove={(direction) => move(index, direction)}
+            onSave={(fields, confirmEmployeeCodeUpdateCount) =>
+              onSave(outlet, fields, confirmEmployeeCodeUpdateCount)
+            }
+            onWeekOffChange={(count) => onWeekOffChange(outlet, count)}
+          />
+        ))}
+        {canManage && unsavedChanges && (
+          <div className="outlet-order-bar outlet-order-bar-bottom">
+            <strong>Unsaved changes</strong>
+            <div className="outlet-order-actions">
+              <button
+                className="button button-secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => setLocalOrder(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button-primary"
+                type="button"
+                disabled={busy}
+                onClick={() => void saveDraft()}
+              >
+                {activeOrderAction === "SAVE_DRAFT" ? "Saving..." : "Save draft"}
+              </button>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  }
+
   function OutletCard({
     outlet,
+    canManage,
+    busy,
+    orderIndex,
+    orderCount,
+    onMove,
     onSave,
-    disabled,
+    onWeekOffChange,
   }: {
     outlet: Outlet;
-    onSave: (fields: Partial<Outlet>) => void;
-    disabled: boolean;
+    canManage: boolean;
+    busy: boolean;
+    orderIndex: number;
+    orderCount: number;
+    onMove: (direction: -1 | 1) => void;
+    onSave: (
+      fields: OutletEditableFields,
+      confirmEmployeeCodeUpdateCount: number,
+    ) => Promise<boolean>;
+    onWeekOffChange: (count: number) => Promise<boolean>;
   }) {
     const [name, setName] = useState(outlet.name ?? outlet.code);
     const [active, setActive] = useState(outlet.active ?? false);
@@ -7096,64 +7326,170 @@
     const [city, setCity] = useState(outlet.city ?? "");
     const [managerName, setManagerName] = useState(outlet.managerName ?? "");
     const [contactPhone, setContactPhone] = useState(outlet.contactPhone ?? "");
+    const [weeklyOffCount, setWeeklyOffCount] = useState(
+      outlet.weekly_off_count ?? 3,
+    );
+    const [savingWeekOff, setSavingWeekOff] = useState(false);
+    const [savingOutlet, setSavingOutlet] = useState(false);
+    const weekOffTimer = useRef<number | null>(null);
+    const persistedWeekOff = useRef(outlet.weekly_off_count ?? 3);
+    const latestWeekOff = useRef(outlet.weekly_off_count ?? 3);
+    useEffect(() => {
+      const persisted = outlet.weekly_off_count ?? 3;
+      persistedWeekOff.current = persisted;
+      if (!savingWeekOff && weekOffTimer.current === null) {
+        latestWeekOff.current = persisted;
+        setWeeklyOffCount(persisted);
+      }
+    }, [outlet.weekly_off_count, savingWeekOff]);
+    useEffect(
+      () => () => {
+        if (weekOffTimer.current !== null)
+          window.clearTimeout(weekOffTimer.current);
+      },
+      [],
+    );
+
+    function scheduleWeekOffSave(value: number) {
+      latestWeekOff.current = value;
+      setWeeklyOffCount(value);
+      if (weekOffTimer.current !== null)
+        window.clearTimeout(weekOffTimer.current);
+      weekOffTimer.current = window.setTimeout(async () => {
+        weekOffTimer.current = null;
+        setSavingWeekOff(true);
+        const saved = await onWeekOffChange(value);
+        if (saved) {
+          persistedWeekOff.current = value;
+        } else if (latestWeekOff.current === value) {
+          latestWeekOff.current = persistedWeekOff.current;
+          setWeeklyOffCount(persistedWeekOff.current);
+        }
+        setSavingWeekOff(false);
+      }, 350);
+    }
+
+    async function saveOutlet(
+      fields: OutletEditableFields,
+      confirmEmployeeCodeUpdateCount: number,
+    ) {
+      setSavingOutlet(true);
+      try {
+        await onSave(fields, confirmEmployeeCodeUpdateCount);
+      } finally {
+        setSavingOutlet(false);
+      }
+    }
+
+    const normalizedName = name.trim();
     const changed =
-      name !== outlet.name ||
-      active !== outlet.active ||
+      normalizedName !== (outlet.name ?? outlet.code) ||
+      active !== (outlet.active ?? false) ||
       address !== (outlet.address ?? "") ||
       city !== (outlet.city ?? "") ||
       managerName !== (outlet.managerName ?? "") ||
       contactPhone !== (outlet.contactPhone ?? "");
+    const editable = canManage && !busy;
     return (
       <article className="outlet-card">
         <div className="outlet-card-head">
-          <span className="outlet-code">{outlet.code}</span>
+          <div className="outlet-card-order">
+            {canManage && (
+              <div className="outlet-order-buttons" aria-label="Reorder outlet">
+                <button
+                  className="outlet-order-button"
+                  type="button"
+                  aria-label={`Move ${outlet.name} up`}
+                  title="Move up"
+                  disabled={!editable || orderIndex === 0}
+                  onClick={() => onMove(-1)}
+                >
+                  <ChevronUp size={15} />
+                </button>
+                <button
+                  className="outlet-order-button"
+                  type="button"
+                  aria-label={`Move ${outlet.name} down`}
+                  title="Move down"
+                  disabled={!editable || orderIndex === orderCount - 1}
+                  onClick={() => onMove(1)}
+                >
+                  <ChevronDown size={15} />
+                </button>
+              </div>
+            )}
+            <span className="outlet-code">{outlet.code}</span>
+          </div>
           <span className={`badge ${active ? "badge-green" : "badge-muted"}`}>
             {active ? "Active" : "Inactive"}
           </span>
         </div>
-        <label className="field">
-          <span>Outlet name</span>
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            disabled={disabled}
-          />
-        </label>
-        <label className="field">
-          <span>Address</span>
-          <input
-            value={address}
-            onChange={(event) => setAddress(event.target.value)}
-            disabled={disabled}
-          />
-        </label>
-        <label className="field">
-          <span>City</span>
-          <input
-            value={city}
-            onChange={(event) => setCity(event.target.value)}
-            disabled={disabled}
-          />
-        </label>
-        <label className="field">
-          <span>Manager</span>
-          <input
-            value={managerName}
-            onChange={(event) => setManagerName(event.target.value)}
-            disabled={disabled}
-          />
-        </label>
-        <label className="field">
-          <span>Contact phone</span>
-          <input
-            value={contactPhone}
-            onChange={(event) => setContactPhone(event.target.value)}
-            disabled={disabled}
-          />
-        </label>
+        <div className="outlet-card-fields">
+          <label className="field">
+            <span>Outlet name</span>
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              disabled={!editable}
+            />
+          </label>
+          <label className="field outlet-address">
+            <span>Address</span>
+            <input
+              value={address}
+              onChange={(event) => setAddress(event.target.value)}
+              disabled={!editable}
+            />
+          </label>
+          <label className="field">
+            <span>City</span>
+            <input
+              value={city}
+              onChange={(event) => setCity(event.target.value)}
+              disabled={!editable}
+            />
+          </label>
+          <label className="field">
+            <span>Manager</span>
+            <input
+              value={managerName}
+              onChange={(event) => setManagerName(event.target.value)}
+              disabled={!editable}
+            />
+          </label>
+          <label className="field">
+            <span>Contact phone</span>
+            <input
+              value={contactPhone}
+              onChange={(event) => setContactPhone(event.target.value)}
+              disabled={!editable}
+            />
+          </label>
+          <label className="field">
+            <span>
+              Week offs (salary deduction)
+              {savingWeekOff && (
+                <small className="outlet-saving">Saving...</small>
+              )}
+            </span>
+            <select
+              value={weeklyOffCount}
+              onChange={(event) =>
+                scheduleWeekOffSave(Number(event.target.value))
+              }
+              disabled={!editable || savingWeekOff}
+            >
+              {Array.from({ length: 8 }, (_, count) => (
+                <option key={count} value={count}>
+                  {count}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         {!!outlet.assignedUsers?.length && (
           <div className="assigned-users">
-            <span>Assigned users</span>
+            <strong>Assigned users</strong>
             {outlet.assignedUsers.map((user) => (
               <small key={user.email}>
                 {user.name} · {user.role.replaceAll("_", " ")}
@@ -7167,12 +7503,13 @@
             type="checkbox"
             checked={active}
             onChange={(event) => setActive(event.target.checked)}
-            disabled={disabled}
+            disabled={!editable}
           />
         </label>
         <button
           className="button button-secondary button-full"
-          disabled={disabled || !changed}
+          type="button"
+          disabled={!editable || !changed || savingOutlet}
           onClick={() => {
             if (
               outlet.active &&
@@ -7182,10 +7519,33 @@
               )
             )
               return;
-            onSave({ name, active, address, city, managerName, contactPhone });
+            const previousName = outlet.name ?? outlet.code;
+            const codePrefixChanged =
+              getEmployeeCodePrefix(previousName) !==
+              getEmployeeCodePrefix(normalizedName);
+            const employeeCodeUpdateCount =
+              codePrefixChanged ? outlet.employeeCodeRenameCount ?? 0 : 0;
+            if (
+              employeeCodeUpdateCount > 0 &&
+              !window.confirm(
+                `Is outlet ke ${employeeCodeUpdateCount} employees ke code update honge. Continue?`,
+              )
+            )
+              return;
+            void saveOutlet(
+              {
+                name: normalizedName,
+                active,
+                address,
+                city,
+                managerName,
+                contactPhone,
+              },
+              employeeCodeUpdateCount,
+            );
           }}
         >
-          <Check size={15} /> Save outlet
+          <Check size={15} /> {savingOutlet ? "Saving..." : "Save outlet"}
         </button>
       </article>
     );
@@ -8123,7 +8483,6 @@
                     <th rowSpan={2}>Attendance deduction</th>
                     <th rowSpan={2}>Not marked deduction</th>
                     <th rowSpan={2}>Allowance consumed</th>
-                    <th rowSpan={2}>Gross accrued</th>
                     <th rowSpan={2}>Fixed salary</th>
                     <th rowSpan={2}>Advances</th>
                     <th rowSpan={2}>Employee ESI</th>
@@ -8258,9 +8617,6 @@
                     </>
                   )}
                   {canReadSalary && (
-                    <td>{currency(row.grossEarnings ?? 0)}</td>
-                  )}
-                  {canReadSalary && (
                     <td>{currency(row.monthlyBaseSalary ?? 0)}</td>
                   )}
                   {canReadSalary && <td>{currency(row.advances ?? 0)}</td>}
@@ -8323,7 +8679,6 @@
                       {sum((row) => row.allowanceConsumed ?? 0)} of{" "}
                       {sum((row) => row.allowedWeekOff ?? 0)}
                     </td>
-                    <td>{currency(sum((row) => row.grossEarnings ?? 0))}</td>
                     <td>{currency(sum((row) => row.monthlyBaseSalary ?? 0))}</td>
                     <td>{currency(sum((row) => row.advances ?? 0))}</td>
                     <td>{currency(sum((row) => row.esi ?? 0))}</td>

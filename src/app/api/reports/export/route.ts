@@ -29,12 +29,12 @@ import type {
   LoanDocument,
   LoanInstallmentDocument,
   LoanTransactionDocument,
-  OutletDocument,
   SalaryRecordDocument,
   SalarySettings,
   UniformDeductionDocument,
   UniformItemDocument,
 } from "@/lib/models";
+import type { OutletSettingsDocument } from "@/lib/outlet-settings";
 import { z } from "zod";
 
 const querySchema = z.object({
@@ -89,8 +89,8 @@ function styleTotalRow(row: ExcelJS.Row, columnCount: number, strong = true) {
 
 function addAdvancesMasterSheet(
   workbook: ExcelJS.Workbook,
-  items: Array<{ outlet: OutletDocument; rows: ExportRow[] }>,
-  allItems: Array<{ outlet: OutletDocument; rows: ExportRow[] }>,
+  items: Array<{ outlet: OutletSettingsDocument; rows: ExportRow[] }>,
+  allItems: Array<{ outlet: OutletSettingsDocument; rows: ExportRow[] }>,
 ) {
   const sheet = workbook.addWorksheet(sheetName("Master", workbook));
   const headers = ["Outlet", "Outlet Name", ...emptyHeaders("advances")];
@@ -219,7 +219,7 @@ export async function GET(request: Request) {
           )
         : [];
     const outlets = await db
-      .collection<OutletDocument>("outlets")
+      .collection<OutletSettingsDocument>("outlets")
       .find({
         ...(query.outletId
           ? { _id: new ObjectId(query.outletId) }
@@ -227,14 +227,17 @@ export async function GET(request: Request) {
             ? {}
             : { _id: { $in: actor.outletIds } }),
       })
-      .sort({ code: 1 })
+      .sort({ sort_order: 1, code: 1 })
       .toArray();
     if (query.outletId && !outlets.length) throw new Error("NOT_FOUND");
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "La Milano Attendance Management System";
     workbook.created = new Date();
     workbook.subject = `${query.type} export ${query.from} to ${query.to}`;
-    const byOutlet: Array<{ outlet: OutletDocument; rows: ExportRow[] }> = [];
+    const byOutlet: Array<{
+      outlet: OutletSettingsDocument;
+      rows: ExportRow[];
+    }> = [];
     for (const outlet of outlets)
       byOutlet.push({
         outlet,
@@ -389,7 +392,7 @@ async function getRows(
   type: string,
   from: string,
   to: string,
-  outlet: OutletDocument,
+  outlet: OutletSettingsDocument,
   db: Awaited<ReturnType<typeof getDb>>,
   employeeId?: string,
   canReadSalary = false,
@@ -760,7 +763,7 @@ async function getRows(
         "Attendance Filled Days":
           counts.P + counts.A + counts.HD + counts.WO,
         "Not Marked": 0,
-        "Allowed Week Off (3)": 0,
+        "Allowed Week Off": 0,
         "Total Equivalent Days": 0,
         "Chargeable Days": 0,
         "Attendance Deduction INR": 0,
@@ -822,7 +825,11 @@ async function getRows(
             );
             netPayable += Number(saved.calculation.netPayable ?? 0);
             notMarkedDaysTotal += Number(saved.calculation.notMarkedDays ?? 0);
-            allowedWeekOffTotal += Number(saved.calculation.allowedWeekOff ?? 3);
+            allowedWeekOffTotal += Number(
+              saved.calculation.allowedWeekOff ??
+                outlet.weekly_off_count ??
+                3,
+            );
             totalEquivalentDaysTotal += Number(saved.calculation.totalEquivalentDays ?? 0);
             chargeableDaysTotal += Number(saved.calculation.chargeableDays ?? 0);
             attendanceDeductionTotal += Number(saved.calculation.attendanceDeduction ?? 0);
@@ -892,6 +899,7 @@ async function getRows(
             absentDays: monthDayCounts.counts.A,
             halfDays: monthDayCounts.counts.HD,
             weekOffs: monthDayCounts.counts.WO,
+            allowedWeekOff: outlet.weekly_off_count ?? 3,
             paidAbsences: salaryRules.paidAbsences,
             notMarkedDays,
             settleMonthlySalary:
@@ -935,7 +943,7 @@ async function getRows(
           netPayable += calculation.netPayable;
         }
         result["Not Marked"] = notMarkedDaysTotal;
-        result["Allowed Week Off (3)"] = allowedWeekOffTotal;
+        result["Allowed Week Off"] = allowedWeekOffTotal;
         result["Total Equivalent Days"] = totalEquivalentDaysTotal;
         result["Chargeable Days"] = chargeableDaysTotal;
         result["Attendance Deduction INR"] = attendanceDeductionTotal;
@@ -1079,7 +1087,11 @@ async function getRows(
           "Days P / A / HD / WO": `${present} / ${absent} / ${halfDays} / ${weekOffs}`,
           "Days filled": present + absent + halfDays + weekOffs,
           "Not Marked": Number(record.calculation.notMarkedDays ?? 0),
-          "Allowed Week Off (3)": Number(record.calculation.allowedWeekOff ?? 3),
+          "Allowed Week Off": Number(
+            record.calculation.allowedWeekOff ??
+              outlet.weekly_off_count ??
+              3,
+          ),
           "Total Equivalent Days": Number(record.calculation.totalEquivalentDays ?? 0),
           "Chargeable Days": Number(record.calculation.chargeableDays ?? 0),
           "Attendance Deduction INR": Number(record.calculation.attendanceDeduction ?? 0),
@@ -1129,7 +1141,7 @@ async function getRows(
             "Days P / A / HD / WO": `${counts.P} / ${counts.A} / ${counts.HD} / ${counts.WO}`,
             "Days filled": counts.P + counts.A + counts.HD + counts.WO,
             "Not Marked": "",
-            "Allowed Week Off (3)": 3,
+            "Allowed Week Off": outlet.weekly_off_count ?? 3,
             "Total Equivalent Days": "",
             "Chargeable Days": "",
             "Attendance Deduction INR": "",

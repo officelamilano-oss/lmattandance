@@ -22,8 +22,8 @@ import {
 import type {
   AttendanceDayDocument,
   EmployeeDocument,
-  OutletDocument,
 } from "@/lib/models";
+import type { OutletSettingsDocument } from "@/lib/outlet-settings";
 
 export async function GET(request: Request) {
   try {
@@ -46,9 +46,9 @@ export async function GET(request: Request) {
     const db = await getDb();
     if (!outletId) {
       const outlets = await db
-        .collection<OutletDocument>("outlets")
+        .collection<OutletSettingsDocument>("outlets")
         .find({ ...scopedOutletQuery(actor), active: true })
-        .sort({ code: 1 })
+        .sort({ sort_order: 1, code: 1 })
         .toArray();
       const outletIds = outlets.map((outlet) => outlet._id);
       const days = await db
@@ -157,7 +157,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Invalid outlet ID." }, { status: 400 });
     assertOutletAccess(actor, outletId);
     const outlet = await db
-      .collection<OutletDocument>("outlets")
+      .collection<OutletSettingsDocument>("outlets")
       .findOne({ _id: new ObjectId(outletId) });
     if (!outlet) throw new Error("NOT_FOUND");
     const day = await db
@@ -289,7 +289,7 @@ async function handleAttendancePut(
         { status: 400 },
       );
     const outlet = await db
-      .collection<OutletDocument>("outlets")
+      .collection<OutletSettingsDocument>("outlets")
       .findOne({ _id: outletId });
     if (!outlet)
       return NextResponse.json(

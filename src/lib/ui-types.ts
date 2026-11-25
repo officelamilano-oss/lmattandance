@@ -18,6 +18,10 @@ export interface DashboardOutlet {
   code: string;
   name: string;
   active: boolean;
+  weekly_off_count?: number;
+  sort_order?: number;
+  draft_sort_order?: number;
+  employeeCodeRenameCount?: number;
   address?: string;
   city?: string;
   managerName?: string;
@@ -323,9 +327,7 @@ export interface WorkspaceData {
     pendingPayroll?: number | null;
     pendingApprovals?: number;
     pendingAdvanceApprovals?: number;
-    grossSalary?: number | null;
     netPayable?: number | null;
-    projectedMonthEndBase?: number | null;
     approvedAdvancesPendingPayroll?: number | null;
     recordedLoanDeductions?: number | null;
     recordedPayrollGross?: number | null;

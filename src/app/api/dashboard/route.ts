@@ -19,11 +19,11 @@ import type {
   AttendanceDayDocument,
   EmployeeDocument,
   LoanDocument,
-  OutletDocument,
   SalaryRecordDocument,
   SalarySettings,
   UniformDeductionDocument,
 } from "@/lib/models";
+import type { OutletSettingsDocument } from "@/lib/outlet-settings";
 
 type DashboardPart =
   | "summary"
@@ -156,11 +156,17 @@ export async function GET(request: Request) {
     const wantsOutlets = wants("outlets");
     const wantsAttendance = wants("attendance");
     const outlets = await db
-      .collection<OutletDocument>("outlets")
+      .collection<OutletSettingsDocument>("outlets")
       .find({ ...(allowed ? { _id: { $in: allowed } } : {}), active: true })
-      .sort({ code: 1 })
+      .sort({ sort_order: 1, code: 1 })
       .toArray();
     const outletIds = outlets.map((outlet) => outlet._id);
+    const weeklyOffCountByOutletId = new Map(
+      outlets.map((outlet) => [
+        outlet._id.toHexString(),
+        outlet.weekly_off_count ?? 3,
+      ]),
+    );
     const [activeEmployees, fullTimeEmployees, partTimeEmployees, todayDays, salaryRecords, pendingAdvances, employees, monthDays, attendanceSubmissionEmployees] =
       await Promise.all([
         wantsSummary
@@ -534,6 +540,10 @@ export async function GET(request: Request) {
             absentDays: counts.A,
             halfDays: counts.HD,
             weekOffs: counts.WO,
+            allowedWeekOff:
+              weeklyOffCountByOutletId.get(
+                employee.outletId.toHexString(),
+              ) ?? 3,
             paidAbsences: settings?.paidAbsences ?? 0,
             notMarkedDays: countNotMarkedDaysForEmployee(employee),
             settleMonthlySalary: completeAttendance,

@@ -32,6 +32,27 @@ export function apiError(error: unknown) {
     );
   if (error instanceof Error && error.message === "NOT_FOUND")
     return NextResponse.json({ error: "Record not found." }, { status: 404 });
+  if (error instanceof Error && error.message === "OUTLET_CODE_REQUIRED")
+    return NextResponse.json(
+      { error: "This outlet is missing its outlet code. Contact support." },
+      { status: 400 },
+    );
+  if (error instanceof Error && error.message === "EMPLOYEE_CODE_CONFLICT")
+    return NextResponse.json(
+      {
+        error:
+          "The new outlet name would create a duplicate employee code. No changes were saved.",
+      },
+      { status: 409 },
+    );
+  if (error instanceof Error && error.message === "OUTLET_ORDER_DRAFT_INVALID")
+    return NextResponse.json(
+      {
+        error:
+          "The saved outlet order draft is incomplete. Discard it and save a new draft.",
+      },
+      { status: 409 },
+    );
   if (
     typeof error === "object" &&
     error !== null &&

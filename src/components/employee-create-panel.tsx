@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import Image from "next/image";
-import { Check, FileText, LoaderCircle, Plus, X } from "lucide-react";
+import { Check, Download, FileText, LoaderCircle, Plus, X } from "lucide-react";
 import type { UserRole } from "@/lib/models";
 import type { DashboardOutlet } from "@/lib/ui-types";
 import {
@@ -31,6 +31,7 @@ import {
 import { UniformDetailsFields } from "@/components/uniform-details-fields";
 import { uniformEntriesFromForm } from "@/lib/uniform-deductions";
 import { formatDate } from "@/lib/date-format";
+import { downloadTermsPdf, downloadTermsWord } from "@/lib/employee-terms-export";
 import { AutoDismissNotice } from "@/components/auto-dismiss-notice";
 import { processSignature, rotateSignature } from "@/lib/signature-image";
 
@@ -191,6 +192,7 @@ export function EmployeeCreatePanel({
   const [termsEmployeeName, setTermsEmployeeName] = useState("");
   const [termsJoiningDate, setTermsJoiningDate] = useState("");
   const [termsSalary, setTermsSalary] = useState("");
+  const [termsExporting, setTermsExporting] = useState(false);
   const [logoFailed, setLogoFailed] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -899,6 +901,43 @@ export function EmployeeCreatePanel({
   const signatureUpload = uploads.find(
     (upload) => upload.documentType === "SIGNATURE",
   );
+  async function handleTermsDownload(format: "pdf" | "docx") {
+    setTermsExporting(true);
+    setError("");
+    const employeeFileName =
+      termsEmployeeName
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/gi, "-")
+        .replace(/^-|-$/g, "")
+        .toLowerCase() || "employee";
+    const filename = `${employeeFileName}-employment-terms`;
+    try {
+      if (format === "pdf") {
+        const papers = Array.from(
+          termsScrollRef.current?.querySelectorAll<HTMLElement>(
+            ".terms-paper",
+          ) ?? [],
+        );
+        await downloadTermsPdf(papers, `${filename}.pdf`);
+      } else {
+        const papers = Array.from(
+          termsScrollRef.current?.querySelectorAll<HTMLElement>(
+            ".terms-paper",
+          ) ?? [],
+        );
+        await downloadTermsWord(papers, `${filename}.doc`);
+      }
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? `Could not download terms: ${caught.message}`
+          : "Could not download the terms document.",
+      );
+    } finally {
+      setTermsExporting(false);
+    }
+  }
 
   // Page 1: header + title + intro + SAB rules. Page 2: Declaration + Signatures.
   // (Rules ko do pages me baantna ho to TERMS_PAGE_SPLIT = 14 kar do)
@@ -965,10 +1004,39 @@ export function EmployeeCreatePanel({
   );
   const termsLetterfoot = (
     <footer className="terms-letterfoot">
-      {EMPLOYEE_TERMS.address} E-mail: {EMPLOYEE_TERMS.email}{" "}
-      {EMPLOYEE_TERMS.website}
-      <br />
-      CIN NO.: {EMPLOYEE_TERMS.cin}
+      <div
+        style={{
+          display: "grid",
+          gap: 2,
+          justifyItems: "center",
+          textAlign: "center",
+        }}
+      >
+        <span>{EMPLOYEE_TERMS.address}</span>
+        <span>
+          E-mail : {EMPLOYEE_TERMS.email} &nbsp;&nbsp; {EMPLOYEE_TERMS.website}
+        </span>
+        <strong>CIN NO. : {EMPLOYEE_TERMS.cin}</strong>
+      </div>
+      <div
+        aria-hidden="true"
+        style={{
+          display: "block",
+          width:
+            "calc(100% + var(--terms-paper-horizontal-padding) + var(--terms-paper-horizontal-padding))",
+          height: 14,
+          minHeight: 14,
+          flex: "none",
+          marginTop: 12,
+          marginLeft: "calc(0px - var(--terms-paper-horizontal-padding))",
+          marginRight: "calc(0px - var(--terms-paper-horizontal-padding))",
+          marginBottom: "calc(0px - var(--terms-paper-bottom-padding))",
+          background:
+            "linear-gradient(to right, #169a3c 0%, #169a3c 33.33%, #fbc45c 33.33%, #fbc45c 66.66%, #dc2f1f 66.66%, #dc2f1f 100%)",
+          WebkitPrintColorAdjust: "exact",
+          printColorAdjust: "exact",
+        }}
+      />
     </footer>
   );
 
@@ -1663,6 +1731,47 @@ export function EmployeeCreatePanel({
               </label>
               {error && <AutoDismissNotice message={error} variant="error" />}
               <div className="terms-actions">
+                <details className="terms-download-menu">
+                  <summary
+                    className="button button-secondary terms-download-trigger"
+                    aria-label="Download terms and conditions"
+                    title="Download terms and conditions"
+                  >
+                    {termsExporting ? (
+                      <LoaderCircle className="spin" size={16} />
+                    ) : (
+                      <Download size={16} />
+                    )}
+                  </summary>
+                  <div className="terms-download-options">
+                    <button
+                      type="button"
+                      className="button button-secondary button-small"
+                      disabled={termsExporting}
+                      onClick={(event) => {
+                        event.currentTarget
+                          .closest("details")
+                          ?.removeAttribute("open");
+                        void handleTermsDownload("pdf");
+                      }}
+                    >
+                      PDF
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-secondary button-small"
+                      disabled={termsExporting}
+                      onClick={(event) => {
+                        event.currentTarget
+                          .closest("details")
+                          ?.removeAttribute("open");
+                        void handleTermsDownload("docx");
+                      }}
+                    >
+                      Word (.doc)
+                    </button>
+                  </div>
+                </details>
                 <button
                   type="button"
                   className="button button-secondary"

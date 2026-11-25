@@ -25,11 +25,11 @@ import type {
   EmployeeDocument,
   LoanDocument,
   LoanInstallmentDocument,
-  OutletDocument,
   SalaryRecordDocument,
   SalarySettings,
   UniformDeductionDocument,
 } from "@/lib/models";
+import type { OutletSettingsDocument } from "@/lib/outlet-settings";
 import { z } from "zod";
 
 const generateSchema = z.object({
@@ -93,7 +93,7 @@ export async function GET(request: Request) {
         .sort({ outletId: 1, employeeId: 1, periodEnd: 1 })
         .toArray(),
       db
-        .collection<OutletDocument>("outlets")
+        .collection<OutletSettingsDocument>("outlets")
         .find(outletIds ? { _id: { $in: outletIds } } : {})
         .toArray(),
       db
@@ -377,6 +377,9 @@ export async function GET(request: Request) {
         absentDays: counts.A,
         halfDays: counts.HD,
         weekOffs: counts.WO,
+        allowedWeekOff:
+          outletById.get(employee.outletId.toHexString())?.weekly_off_count ??
+          3,
         paidAbsences: payrollSettings?.paidAbsences ?? 0,
         notMarkedDays: await getNotMarkedDays(
           employee,
@@ -496,7 +499,7 @@ export async function POST(request: Request) {
     assertOutletAccess(actor, outletId);
     const db = await getDb();
     const outlet = await db
-      .collection<OutletDocument>("outlets")
+      .collection<OutletSettingsDocument>("outlets")
       .findOne({ _id: outletId });
     if (!outlet) throw new Error("NOT_FOUND");
     const monthStart = `${input.month}-01`;
@@ -709,6 +712,7 @@ export async function POST(request: Request) {
             absentDays: counts.A,
             halfDays: counts.HD,
             weekOffs: counts.WO,
+            allowedWeekOff: outlet.weekly_off_count ?? 3,
             paidAbsences: rules.paidAbsences,
             notMarkedDays: await getNotMarkedDays(
               employee,
