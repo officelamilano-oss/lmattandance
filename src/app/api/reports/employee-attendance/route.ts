@@ -1,0 +1,729 @@
+  import { ObjectId } from "mongodb";
+  import { NextResponse } from "next/server";
+  import { getActor, assertOutletAccess } from "@/lib/permissions";
+  import { getDb } from "@/lib/mongodb";
+  import { apiError } from "@/lib/http";
+  import {
+    calculateLoanInstallment,
+    calculatePayroll,
+    getLatestAttendanceEntry,
+  } from "@/lib/payroll/calculate";
+  import { getNotMarkedDays } from "@/lib/payroll/not-marked-days";
+  import { dateAfter, getMonthDates } from "@/lib/payroll/dates";
+  import {
+    getUniformReportItems,
+    summarizeUniformDeductions,
+  } from "@/lib/uniform-deductions";
+  import { dateOnlySchema, objectIdSchema } from "@/lib/validation/common";
+  import type {
+    AdvanceDocument,
+    AttendanceDayDocument,
+    AttendanceStatus,
+    EmployeeDocument,
+    LoanDocument,
+    LoanInstallmentDocument,
+    LoanTransactionDocument,
+    SalaryRecordDocument,
+    SalarySettings,
+    UniformDeductionDocument,
+    UniformItemDocument,
+  } from "@/lib/models";
+  import type { OutletSettingsDocument } from "@/lib/outlet-settings";
+  import { z } from "zod";
+
+  const querySchema = z.object({
+    from: dateOnlySchema,
+    to: dateOnlySchema,
+    outletId: objectIdSchema.optional(),
+    employeeId: objectIdSchema.optional(),
+  });
+
+  const defaultRules: SalarySettings = {
+    timezone: "Asia/Kolkata",
+    defaultSalaryMethod: "FIXED_30_DAYS",
+    workingDaysDivisor: 30,
+    paidAbsences: 0,
+    currency: "INR",
+    advanceDeductionPolicy: "UNPAID_ONLY",
+  };
+
+  type StatusDates = Record<AttendanceStatus, string[]>;
+
+  export async function GET(request: Request) {
+    try {
+      const actor = await getActor();
+      if (!actor)
+        return NextResponse.json(
+          { error: "Authentication required." },
+          { status: 401 },
+        );
+      if (
+        !actor.permissions.includes("employees.read") &&
+        !actor.permissions.includes("reports.export")
+      )
+        return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+
+      const url = new URL(request.url);
+      const query = querySchema.parse({
+        from: url.searchParams.get("from"),
+        to: url.searchParams.get("to"),
+        outletId: url.searchParams.get("outletId") || undefined,
+        employeeId: url.searchParams.get("employeeId") || undefined,
+      });
+      if (query.from > query.to)
+        return NextResponse.json(
+          { error: "Start date must be on or before end date." },
+          { status: 400 },
+        );
+      const span =
+        (Date.parse(`${query.to}T00:00:00Z`) -
+          Date.parse(`${query.from}T00:00:00Z`)) /
+        86_400_000;
+      if (span > 366)
+        return NextResponse.json(
+          { error: "Report ranges are limited to 367 calendar days." },
+          { status: 400 },
+        );
+      if (query.outletId) assertOutletAccess(actor, query.outletId);
+
+      const db = await getDb();
+      const outlets = await db
+        .collection<OutletSettingsDocument>("outlets")
+        .find({
+          ...(query.outletId
+            ? { _id: new ObjectId(query.outletId) }
+            : actor.role === "MAIN_ADMIN"
+              ? {}
+              : { _id: { $in: actor.outletIds } }),
+        })
+        .sort({ sort_order: 1, code: 1 })
+        .toArray();
+      const outletById = new Map(
+        outlets.map((outlet) => [outlet._id.toHexString(), outlet]),
+      );
+      const outletIds = outlets.map((outlet) => outlet._id);
+      const [employees, days, settings] = await Promise.all([
+        outletIds.length
+          ? db
+              .collection<EmployeeDocument>("employees")
+              .find({ outletId: { $in: outletIds } })
+              .sort({ fullName: 1 })
+              .toArray()
+          : Promise.resolve([]),
+        outletIds.length
+          ? db
+              .collection<AttendanceDayDocument>("attendance")
+              .find({
+                outletId: { $in: outletIds },
+                date: { $gte: query.from, $lte: query.to },
+              })
+              .sort({ date: 1 })
+              .toArray()
+          : Promise.resolve([]),
+        db
+          .collection<SalarySettings & { _id: string }>("settings")
+          .findOne({ _id: "payroll" }),
+      ]);
+      if (query.outletId && !outlets.length) throw new Error("NOT_FOUND");
+      const employeeById = new Map(
+        employees.map((employee) => [employee._id.toHexString(), employee]),
+      );
+      const historicalEmployeeIds = new Set(
+        days.flatMap((day) =>
+          day.entries.map((entry) => entry.employeeId.toHexString()),
+        ),
+      );
+      const employeeOptions = employees
+        .filter(
+          (employee) =>
+            employee.active || historicalEmployeeIds.has(employee._id.toHexString()),
+        )
+        .map((employee) => ({
+          id: employee._id.toHexString(),
+          code: employee.employeeCode,
+          name: employee.fullName,
+          outletId: employee.outletId.toHexString(),
+        }));
+      if (
+        query.employeeId &&
+        !employeeById.has(query.employeeId)
+      )
+        return NextResponse.json(
+          { error: "Employee is not available in the selected outlets." },
+          { status: 404 },
+        );
+
+      const settingsRules = { ...defaultRules, ...settings };
+      const daysByOutletAndDate = new Map(
+        days.map((day) => [
+          `${day.outletId.toHexString()}:${day.date}`,
+          day,
+        ]),
+      );
+      const employeeIds = employees.map((employee) => employee._id);
+      const canReadSalary = actor.permissions.includes("salary.read");
+      const [
+        advances,
+        salaryRecords,
+        loans,
+        loanInstallments,
+        loanTransactions,
+        uniformDeductions,
+        configuredUniformItems,
+      ] = await Promise.all([
+        canReadSalary && employeeIds.length
+          ? db
+              .collection<AdvanceDocument>("advances")
+              .find({
+                employeeId: { $in: employeeIds },
+                status: "APPROVED",
+                date: { $gte: query.from, $lte: query.to },
+              })
+              .toArray()
+          : Promise.resolve([]),
+        canReadSalary && employeeIds.length
+          ? db
+              .collection<SalaryRecordDocument>("salaryRecords")
+              .find({
+                employeeId: { $in: employeeIds },
+                month: {
+                  $gte: query.from.slice(0, 7),
+                  $lte: query.to.slice(0, 7),
+                },
+              })
+              .toArray()
+          : Promise.resolve([]),
+        canReadSalary && employeeIds.length
+          ? db
+              .collection<LoanDocument>("loans")
+              .find({
+                employeeId: { $in: employeeIds },
+                outletId: { $in: outletIds },
+              })
+              .toArray()
+          : Promise.resolve([]),
+        canReadSalary && employeeIds.length
+          ? db
+              .collection<LoanInstallmentDocument>("loanInstallments")
+              .find({
+                employeeId: { $in: employeeIds },
+                payrollMonth: { $lte: query.to.slice(0, 7) },
+              })
+              .toArray()
+          : Promise.resolve([]),
+        canReadSalary && employeeIds.length
+          ? db
+              .collection<LoanTransactionDocument>("loanTransactions")
+              .find({
+                employeeId: { $in: employeeIds },
+                transactionDate: { $lte: query.to },
+              })
+              .toArray()
+          : Promise.resolve([]),
+        canReadSalary && employeeIds.length
+          ? db
+              .collection<UniformDeductionDocument>(
+                "employee_uniform_deductions",
+              )
+              .find({
+                employeeId: { $in: employeeIds },
+                outletId: { $in: outletIds },
+                status: { $in: ["SCHEDULED", "APPLIED"] },
+                deductionMonth: { $gte: query.from.slice(0, 7) },
+              })
+              .toArray()
+          : Promise.resolve([]),
+        canReadSalary
+          ? db
+              .collection<UniformItemDocument>("uniform_items")
+              .find({})
+              .sort({ _id: 1 })
+              .toArray()
+              .then((items) =>
+                items.map((item) => ({ key: item._id, label: item.label })),
+              )
+          : Promise.resolve([]),
+      ]);
+      const advancesByEmployee = groupBy(advances, (advance) =>
+        advance.employeeId.toHexString(),
+      );
+      const salaryByEmployeeAndMonth = new Map(
+        salaryRecords.map((record) => [
+          `${record.employeeId.toHexString()}:${record.month}`,
+          record,
+        ]),
+      );
+      const loansByEmployee = groupBy(loans, (loan) =>
+        loan.employeeId.toHexString(),
+      );
+      const installmentsByLoan = groupBy(loanInstallments, (entry) =>
+        entry.loanId.toHexString(),
+      );
+      const transactionsByLoan = groupBy(loanTransactions, (entry) =>
+        entry.loanId.toHexString(),
+      );
+      const uniformDeductionsByEmployee = groupBy(uniformDeductions, (entry) =>
+        entry.employeeId.toHexString(),
+      );
+      const uniformItems = canReadSalary
+        ? getUniformReportItems(
+            configuredUniformItems,
+            uniformDeductions.map((entry) => entry.item),
+          )
+        : [];
+      const skippedLoanIdsByEmployeeAndMonth = new Map<string, Set<string>>();
+      for (const installment of loanInstallments) {
+        const key = `${installment.employeeId.toHexString()}:${installment.payrollMonth}`;
+        const skipped = skippedLoanIdsByEmployeeAndMonth.get(key) ?? new Set();
+        if (installment.status === "SKIPPED") {
+          skipped.add(installment.loanId.toHexString());
+          skippedLoanIdsByEmployeeAndMonth.set(key, skipped);
+        }
+      }
+      const rows = await Promise.all(employees
+        .filter(
+          (employee) =>
+            (!query.employeeId ||
+              employee._id.toHexString() === query.employeeId) &&
+            (employee.active ||
+              historicalEmployeeIds.has(employee._id.toHexString())),
+        )
+        .map(async (employee) => {
+          const outlet = outletById.get(employee.outletId.toHexString());
+          const start = employee.dateOfJoining > query.from
+            ? employee.dateOfJoining
+            : query.from;
+          const end = employee.deactivatedAt && employee.deactivatedAt < query.to
+            ? employee.deactivatedAt
+            : query.to;
+          const dates: StatusDates = { P: [], A: [], HD: [], WO: [] };
+          const submittedCounts = { P: 0, A: 0, HD: 0, WO: 0 };
+          const missingDates: string[] = [];
+          const unsubmittedDates: string[] = [];
+          const monthCounts = new Map<
+            string,
+            {
+              counts: typeof submittedCounts;
+              eligibleDays: number;
+              complete: boolean;
+            }
+          >();
+          if (start <= end) {
+            for (let date = start; date <= end; date = dateAfter(date, 1)) {
+              const month = date.slice(0, 7);
+              const monthData = getMonthCount(monthCounts, month);
+              monthData.eligibleDays += 1;
+              const day = daysByOutletAndDate.get(
+                `${employee.outletId.toHexString()}:${date}`,
+              );
+              const entry = day
+                ? getLatestAttendanceEntry(
+                    day.entries,
+                    employee._id.toHexString(),
+                    { outletId: employee.outletId.toHexString(), date },
+                  )
+                : undefined;
+              if (!day || !entry) {
+                missingDates.push(date);
+                monthData.complete = false;
+                continue;
+              }
+              dates[entry.status].push(date);
+              if (day.status !== "SUBMITTED") {
+                unsubmittedDates.push(date);
+                monthData.complete = false;
+                continue;
+              }
+              submittedCounts[entry.status] += 1;
+              monthData.counts[entry.status] += 1;
+            }
+          }
+
+          let payableAmount: number | undefined;
+          let payableLabel: string | undefined;
+          const salaryDeductions = {
+            advances: 0,
+            esi: 0,
+            employeePf: 0,
+            employerPf: 0,
+            loanDeduction: 0,
+          };
+          const attendanceSalary = {
+            grossEarnings: 0,
+            notMarkedDays: 0,
+            allowedWeekOff: 0,
+            totalEquivalentDays: 0,
+            chargeableDays: 0,
+            attendanceDeduction: 0,
+            notMarkedDeduction: 0,
+            allowanceConsumed: 0,
+          };
+          const reportCutoff = new Date(`${query.to}T23:59:59.999Z`);
+          const employeeLoans = (
+            loansByEmployee.get(employee._id.toHexString()) ?? []
+          ).filter((loan) => loan.createdAt <= reportCutoff);
+          const uniformSummary = summarizeUniformDeductions(
+            uniformDeductionsByEmployee.get(employee._id.toHexString()) ?? [],
+            query.from.slice(0, 7),
+            query.to.slice(0, 7),
+          );
+          const uniformDeductionsByItem = Object.fromEntries(
+            uniformItems.map((item) => [
+              item.key,
+              uniformSummary.byItem[item.key] ?? 0,
+            ]),
+          );
+          const originalLoanAmount = employeeLoans.reduce(
+            (sum, loan) => sum + loan.totalAmount,
+            0,
+          );
+          const remainingLoanBalance = employeeLoans.reduce(
+            (sum, loan) =>
+              sum +
+              getHistoricalLoanBalance(
+                loan,
+                installmentsByLoan.get(loan._id.toHexString()) ?? [],
+                transactionsByLoan.get(loan._id.toHexString()) ?? [],
+                query.to.slice(0, 7),
+              ),
+            0,
+          );
+          const monthlyLoanDeduction = calculateLoanInstallment(
+            employeeLoans.map((loan) =>
+              loanForMonth(
+                loan,
+                query.to.slice(0, 7),
+                getHistoricalLoanBalance(
+                  loan,
+                  installmentsByLoan.get(loan._id.toHexString()) ?? [],
+                  transactionsByLoan.get(loan._id.toHexString()) ?? [],
+                  query.to.slice(0, 7),
+                  false,
+                ),
+              ),
+            ),
+            query.to.slice(0, 7),
+          );
+          if (actor.permissions.includes("salary.read")) {
+            payableAmount = 0;
+            let hasLiveCalculation = false;
+            let hasSavedPayroll = false;
+            for (const [month, monthData] of monthCounts) {
+              const { daysInMonth } = getMonthDates(month);
+              const monthStart = `${month}-01`;
+              const monthEnd = `${month}-${String(daysInMonth).padStart(2, "0")}`;
+              const saved = salaryByEmployeeAndMonth.get(
+                `${employee._id.toHexString()}:${month}`,
+              );
+              const completeMonthSelected =
+                query.from <= monthStart && query.to >= monthEnd;
+              if (saved && completeMonthSelected) {
+                payableAmount += Number(saved.calculation.netPayable ?? 0);
+                attendanceSalary.grossEarnings += Number(
+                  saved.calculation.grossEarnings ?? 0,
+                );
+                salaryDeductions.advances += Number(saved.calculation.advances ?? 0);
+                salaryDeductions.esi += Number(saved.calculation.esi ?? 0);
+                salaryDeductions.employeePf += Number(saved.calculation.employeePf ?? 0);
+                salaryDeductions.employerPf += Number(saved.calculation.employerPf ?? 0);
+                attendanceSalary.notMarkedDays += Number(saved.calculation.notMarkedDays ?? 0);
+                attendanceSalary.allowedWeekOff += Number(
+                  saved.calculation.allowedWeekOff ??
+                    outletById.get(employee.outletId.toHexString())
+                      ?.weekly_off_count ??
+                    3,
+                );
+                attendanceSalary.totalEquivalentDays += Number(saved.calculation.totalEquivalentDays ?? 0);
+                attendanceSalary.chargeableDays += Number(saved.calculation.chargeableDays ?? 0);
+                attendanceSalary.attendanceDeduction += Number(saved.calculation.attendanceDeduction ?? 0);
+                attendanceSalary.notMarkedDeduction += Number(saved.calculation.notMarkedDeduction ?? 0);
+                attendanceSalary.allowanceConsumed += Number(saved.calculation.allowanceConsumed ?? 0);
+                const postedForMonth = loanInstallments.filter(
+                  (entry) =>
+                    entry.employeeId.equals(employee._id) &&
+                    entry.payrollMonth === month &&
+                    entry.status === "POSTED",
+                );
+                salaryDeductions.loanDeduction += postedForMonth.length
+                  ? postedForMonth.reduce(
+                      (sum, entry) => sum + entry.actualDeduction,
+                      0,
+                    )
+                  : saved.status === "DRAFT"
+                    ? 0
+                    : Number(saved.calculation.loanDeduction ?? 0);
+                hasSavedPayroll = true;
+                continue;
+              }
+              hasLiveCalculation = true;
+              const monthAdvances = (advancesByEmployee.get(
+                employee._id.toHexString(),
+              ) ?? [])
+                .filter((advance) => advance.date.startsWith(`${month}-`))
+                .reduce((sum, advance) => sum + advance.amount, 0);
+              const skippedLoanIds =
+                skippedLoanIdsByEmployeeAndMonth.get(
+                  `${employee._id.toHexString()}:${month}`,
+                ) ?? new Set<string>();
+              const monthLoans = employeeLoans
+                .filter(
+                  (loan) =>
+                    !skippedLoanIds.has(loan._id.toHexString()),
+                )
+                .map((loan) =>
+                  loanForMonth(
+                    loan,
+                    month,
+                    getHistoricalLoanBalance(
+                      loan,
+                      installmentsByLoan.get(loan._id.toHexString()) ?? [],
+                      transactionsByLoan.get(loan._id.toHexString()) ?? [],
+                      month,
+                      false,
+                    ),
+                  ),
+                );
+              const loanDeduction = calculateLoanInstallment(monthLoans, month);
+              const notMarkedDays = await getNotMarkedDays(
+                employee,
+                month,
+                query.to < monthEnd ? query.to : monthEnd,
+                query.from > monthStart ? query.from : monthStart,
+              );
+              const monthUniformDeduction = (
+                uniformDeductionsByEmployee.get(employee._id.toHexString()) ??
+                []
+              )
+                .filter((entry) => entry.deductionMonth === month)
+                .reduce((sum, entry) => sum + entry.amount, 0);
+              const calculation = calculatePayroll({
+                monthlyBaseSalary: employee.monthlyBaseSalary,
+                salaryMethod: "FIXED_30_DAYS",
+                daysInMonth,
+                workingDaysDivisor: 30,
+                presentDays: monthData.counts.P,
+                absentDays: monthData.counts.A,
+                halfDays: monthData.counts.HD,
+                weekOffs: monthData.counts.WO,
+                allowedWeekOff:
+                  outletById.get(employee.outletId.toHexString())
+                    ?.weekly_off_count ?? 3,
+                paidAbsences: settingsRules.paidAbsences,
+                notMarkedDays,
+                uniformDeductions: monthUniformDeduction,
+                settleMonthlySalary:
+                  completeMonthSelected && monthData.complete,
+                salaryEntitlementDays:
+                  completeMonthSelected &&
+                  employee.dateOfJoining <= monthStart &&
+                  (!employee.deactivatedAt || employee.deactivatedAt >= monthEnd)
+                    ? 30
+                    : monthData.eligibleDays,
+                advances: monthAdvances,
+                loanDeduction,
+                overtime: 0,
+                allowances: 0,
+                otherDeductions: 0,
+                pfEnabled: employee.pfEnabled,
+                employeePfPercent: employee.employeePfPercent,
+                employerPfPercent: employee.employerPfPercent,
+                esiEnabled: employee.esiEnabled ?? false,
+                esiPercent: employee.esiPercent ?? 0.75,
+              });
+              payableAmount += calculation.netPayable;
+              attendanceSalary.grossEarnings += calculation.grossEarnings;
+              attendanceSalary.notMarkedDays += calculation.notMarkedDays;
+              attendanceSalary.allowedWeekOff += calculation.allowedWeekOff;
+              attendanceSalary.totalEquivalentDays += calculation.totalEquivalentDays;
+              attendanceSalary.chargeableDays += calculation.chargeableDays;
+              attendanceSalary.attendanceDeduction += calculation.attendanceDeduction;
+              attendanceSalary.notMarkedDeduction += calculation.notMarkedDeduction;
+              attendanceSalary.allowanceConsumed += calculation.allowanceConsumed;
+              salaryDeductions.advances += calculation.advances;
+              salaryDeductions.esi += calculation.esi;
+              salaryDeductions.employeePf += calculation.employeePf;
+              salaryDeductions.employerPf += calculation.employerPf;
+              salaryDeductions.loanDeduction += calculation.loanDeduction;
+            }
+            payableLabel = hasLiveCalculation
+              ? `Live accrued · submitted days (${start} – ${end})`
+              : hasSavedPayroll
+                ? "Payroll record"
+                : "No submitted attendance";
+          }
+
+          return {
+            employeeId: employee._id.toHexString(),
+            employeeCode: employee.employeeCode,
+            employeeName: employee.fullName,
+            designation: employee.designation,
+            outletCode: outlet?.code ?? "",
+            outletName: outlet?.name ?? "",
+            ...(actor.permissions.includes("salary.read")
+              ? {
+                  monthlyBaseSalary: employee.monthlyBaseSalary,
+                  payableAmount,
+                  payableLabel,
+                  ...attendanceSalary,
+                  originalLoanAmount,
+                  remainingLoanBalance,
+                  monthlyLoanDeduction,
+                  ...salaryDeductions,
+                  uniformDeductionsByItem,
+                  totalUniformDeduction: uniformSummary.total,
+                  remainingUniformBalance: uniformSummary.remaining,
+                }
+              : {}),
+            presentDays: dates.P.length,
+            absentDays: dates.A.length,
+            halfDays: dates.HD.length,
+            weekOffs: dates.WO.length,
+            filledDays:
+              dates.P.length +
+              dates.A.length +
+              dates.HD.length +
+              dates.WO.length,
+            missingDays: missingDates.length,
+            unsubmittedDays: unsubmittedDates.length,
+            statusDates: dates,
+            missingDates,
+            unsubmittedDates,
+            reportStart: start <= end ? start : null,
+            reportEnd: start <= end ? end : null,
+          };
+        }));
+
+      return NextResponse.json({
+        from: query.from,
+        to: query.to,
+        employees: employeeOptions,
+        rows,
+        uniformItems,
+        canReadSalary,
+      });
+    } catch (error) {
+      return apiError(error);
+    }
+  }
+
+  function groupBy<T>(items: T[], getKey: (item: T) => string) {
+    const groups = new Map<string, T[]>();
+    for (const item of items) {
+      const key = getKey(item);
+      groups.set(key, [...(groups.get(key) ?? []), item]);
+    }
+    return groups;
+  }
+
+  function getHistoricalLoanBalance(
+    loan: LoanDocument,
+    installments: LoanInstallmentDocument[],
+    transactions: LoanTransactionDocument[],
+    cutoffMonth: string,
+    includeCutoffMonth = true,
+  ): number {
+    type Event = {
+      month: string;
+      createdAt: Date;
+      openingBalance: number;
+      delta: number;
+    };
+    const events: Event[] = [
+      ...installments
+        .filter((entry) => entry.status === "POSTED" || entry.status === "REVERSED")
+        .map((entry) => ({
+          month: entry.payrollMonth,
+          createdAt: entry.createdAt,
+          openingBalance: entry.openingBalance,
+          delta: -entry.actualDeduction,
+        })),
+      ...transactions.map((entry) => ({
+        month: entry.transactionDate.slice(0, 7),
+        createdAt: entry.createdAt,
+        openingBalance: entry.balanceBefore,
+        delta: entry.balanceAfter - entry.balanceBefore,
+      })),
+    ].sort(
+      (left, right) =>
+        left.month.localeCompare(right.month) ||
+        left.createdAt.getTime() - right.createdAt.getTime(),
+    );
+    if (!events.length) return loan.outstandingAmount;
+    const eligible = events.filter(
+      (event) =>
+        includeCutoffMonth
+          ? event.month <= cutoffMonth
+          : event.month < cutoffMonth,
+    );
+    if (!eligible.length) return events[0].openingBalance;
+    let balance = events[0].openingBalance;
+    for (const event of eligible)
+      balance = Math.max(0, Number((balance + event.delta).toFixed(2)));
+    return balance;
+  }
+
+  function loanForMonth(
+    loan: LoanDocument,
+    month: string,
+    outstandingAmount: number,
+  ) {
+    const term = [...(loan.repaymentTermsHistory ?? [])]
+      .filter(
+        (entry) => entry.effectiveAt.toISOString().slice(0, 7) <= month,
+      )
+      .sort(
+        (left, right) =>
+          right.effectiveAt.getTime() - left.effectiveAt.getTime(),
+      )[0];
+    const statusHistory = [...(loan.statusHistory ?? [])]
+      .filter(
+        (entry) => entry.effectiveAt.toISOString().slice(0, 7) <= month,
+      )
+      .sort(
+        (left, right) =>
+          right.effectiveAt.getTime() - left.effectiveAt.getTime(),
+      );
+    const fallbackStatus =
+      loan.statusUpdatedAt &&
+      loan.statusUpdatedAt.toISOString().slice(0, 7) > month
+        ? "ACTIVE"
+        : loan.completedAt &&
+            loan.completedAt.toISOString().slice(0, 7) > month
+          ? "ACTIVE"
+          : loan.status;
+    return {
+      outstandingAmount,
+      monthlyDeductionAmount:
+        term?.monthlyDeductionAmount ?? loan.monthlyDeductionAmount,
+      deductionStartMonth:
+        term?.deductionStartMonth ?? loan.deductionStartMonth,
+      repaymentMethod: term?.method ?? loan.repaymentMethod,
+      installmentCount: term?.installmentCount ?? loan.installmentCount,
+      deductionEndMonth: term?.deductionEndMonth ?? loan.deductionEndMonth,
+      createdAt: loan.createdAt,
+      status: statusHistory[0]?.status ?? fallbackStatus,
+    };
+  }
+
+  function getMonthCount(
+    months: Map<
+      string,
+      {
+        counts: Record<AttendanceStatus, number>;
+        eligibleDays: number;
+        complete: boolean;
+      }
+    >,
+    month: string,
+  ) {
+    let value = months.get(month);
+    if (!value) {
+      value = {
+        counts: { P: 0, A: 0, HD: 0, WO: 0 },
+        eligibleDays: 0,
+        complete: true,
+      };
+      months.set(month, value);
+    }
+    return value;
+  }
