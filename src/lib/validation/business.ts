@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { dateOnlySchema, monthSchema, objectIdSchema } from "./common";
 import {
+  designationOnlyPermissionSet,
   allPermissionValues,
   staffPermissionSet,
   staffPermissionValues,
@@ -263,6 +264,17 @@ export const userProvisionSchema = z
             message: `${permission} is restricted to MAIN_ADMIN.`,
           });
       }
+      if (
+        !input.designationId &&
+        input.permissions.some((permission) =>
+          designationOnlyPermissionSet.has(permission),
+        )
+      )
+        context.addIssue({
+          code: "custom",
+          path: ["permissions"],
+          message: "About Us access can only be granted through a designation.",
+        });
     }
     if (input.role === "MAIN_ADMIN" && input.designationId)
       context.addIssue({

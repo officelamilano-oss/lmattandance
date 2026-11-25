@@ -72,6 +72,7 @@
   import {
     adminOnlyPages,
     designationPermissionGroups,
+    designationOnlyPermissionSet,
     legacyOutletDefaultPermissions,
   } from "@/lib/access-control";
   import { useEmployeeAttendanceReport } from "@/lib/use-employee-attendance-report";
@@ -7944,28 +7945,33 @@
               {designationPermissionGroups.map((group) => (
                 <fieldset key={group.title}>
                   <legend>{group.title}</legend>
-                  {group.permissions.map((permission) => (
-                    <label key={permission.value}>
-                      <input
-                        type="checkbox"
-                        checked={
-                          role === "MAIN_ADMIN" ||
-                          permissions.includes(permission.value)
-                        }
-                        disabled={role === "MAIN_ADMIN"}
-                        onChange={(event) =>
-                          setPermissions((current) =>
-                            event.target.checked
-                              ? [...current, permission.value]
-                              : current.filter(
-                                  (value) => value !== permission.value,
-                                ),
-                          )
-                        }
-                      />
-                      {permission.label}
-                    </label>
-                  ))}
+                  {group.permissions
+                    .filter(
+                      (permission) =>
+                        !designationOnlyPermissionSet.has(permission.value),
+                    )
+                    .map((permission) => (
+                      <label key={permission.value}>
+                        <input
+                          type="checkbox"
+                          checked={
+                            role === "MAIN_ADMIN" ||
+                            permissions.includes(permission.value)
+                          }
+                          disabled={role === "MAIN_ADMIN"}
+                          onChange={(event) =>
+                            setPermissions((current) =>
+                              event.target.checked
+                                ? [...current, permission.value]
+                                : current.filter(
+                                    (value) => value !== permission.value,
+                                  ),
+                            )
+                          }
+                        />
+                        {permission.label}
+                      </label>
+                    ))}
                 </fieldset>
               ))}
               {role === "MAIN_ADMIN" && (

@@ -54,6 +54,10 @@ export const designationPermissionGroups: Array<{
     title: "Reports",
     permissions: [{ value: "reports.export", label: "View and export reports" }],
   },
+  {
+    title: "About Us",
+    permissions: [{ value: "about.read", label: "View About Us" }],
+  },
 ];
 
 export const staffPermissionValues = designationPermissionGroups.flatMap(
@@ -64,6 +68,8 @@ export const staffPermissionValues = designationPermissionGroups.flatMap(
 ];
 
 export const staffPermissionSet = new Set<Permission>(staffPermissionValues);
+
+export const designationOnlyPermissionSet = new Set<Permission>(["about.read"]);
 
 export const mainAdminPermissionValues = [
   "outlets.manage",

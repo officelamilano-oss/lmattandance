@@ -38,7 +38,7 @@ const navigation: Array<{ href: string; label: string; icon: typeof LayoutDashbo
   { href: "/reports", label: "Reports & exports", icon: FileSpreadsheet, permission: "reports.export" },
   { href: "/active-logs", label: "Active logs", icon: ClipboardList, permission: "audit.read" },
   { href: "/settings", label: "Settings", icon: Settings2, permission: "settings.manage" },
-  { href: "/about", label: "About Us", icon: BookOpen, permission: "dashboard.read", always: true },
+  { href: "/about", label: "About Us", icon: BookOpen, permission: "about.read" },
 ];
 
 export function AppShell({ children, user }: { children: React.ReactNode; user: { name: string; email: string; role: UserRole; permissions: Permission[] } }) {

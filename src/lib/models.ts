@@ -6,7 +6,7 @@ export type Permission =
   | "employees.deactivate" | "attendance.read" | "attendance.write" | "attendance.submit"
   | "attendance.unlock" | "advances.read" | "advances.write" | "salary.read" | "salary.generate"
   | "advances.approve" | "salary.adjust" | "salary.approve" | "salary.pay" | "settings.manage" | "access.manage"
-  | "reports.export" | "audit.read" | "uniforms.manage";
+  | "reports.export" | "audit.read" | "uniforms.manage" | "about.read";
 
 export interface UserDocument {
   _id: ObjectId;
