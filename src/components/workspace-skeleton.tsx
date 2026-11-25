@@ -1,4 +1,34 @@
-export function WorkspaceSkeleton() {
+export function WorkspaceSkeleton({ shell = true }: { shell?: boolean }) {
+  const content = (
+    <div
+      className="content-area workspace-skeleton-content"
+      aria-hidden="true"
+    >
+      <div className="workspace-skeleton-heading">
+        <i className="workspace-skeleton-block" />
+        <i className="workspace-skeleton-block" />
+      </div>
+      <div className="workspace-skeleton-panel">
+        {Array.from({ length: 5 }, (_, index) => (
+          <i className="workspace-skeleton-block" key={index} />
+        ))}
+      </div>
+    </div>
+  );
+
+  if (!shell) {
+    return (
+      <div
+        className="workspace-skeleton"
+        role="status"
+        aria-label="Loading page"
+        aria-busy="true"
+      >
+        {content}
+      </div>
+    );
+  }
+
   return (
     <div
       className="app-frame workspace-skeleton"
@@ -27,17 +57,7 @@ export function WorkspaceSkeleton() {
           <i className="workspace-skeleton-block" />
           <i className="workspace-skeleton-block" />
         </header>
-        <div className="content-area workspace-skeleton-content">
-          <div className="workspace-skeleton-heading">
-            <i className="workspace-skeleton-block" />
-            <i className="workspace-skeleton-block" />
-          </div>
-          <div className="workspace-skeleton-panel">
-            <i className="workspace-skeleton-block" />
-            <i className="workspace-skeleton-block" />
-            <i className="workspace-skeleton-block" />
-          </div>
-        </div>
+        {content}
       </main>
     </div>
   );
