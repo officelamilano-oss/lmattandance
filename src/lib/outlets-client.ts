@@ -22,7 +22,12 @@ export function normalizeOutlets(data: unknown): DashboardOutlet[] {
       : isRecord(data) && Array.isArray(data.data)
         ? data.data
         : [];
-  return list.filter(isOutlet);
+  const seenIds = new Set<string>();
+  return list.filter((value): value is DashboardOutlet => {
+    if (!isOutlet(value) || seenIds.has(value._id)) return false;
+    seenIds.add(value._id);
+    return true;
+  });
 }
 
 export async function fetchOutletList(): Promise<DashboardOutlet[]> {

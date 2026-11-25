@@ -4631,7 +4631,7 @@
           {loading ? (
             <Loading />
           ) : (
-            <div className="outlet-grid">
+            <div className="ol-list">
               <OutletListManager
                 outlets={data.outlets ?? []}
                 canManage={user.role === "MAIN_ADMIN"}
@@ -7132,13 +7132,16 @@
       successMessage: string,
     ) => Promise<boolean>;
   }) {
-    const liveOrder = outlets.map((outlet) => outlet._id);
-    const hasSavedDraft = outlets.some(
+    const uniqueOutlets = Array.from(
+      new Map(outlets.map((outlet) => [outlet._id, outlet])).values(),
+    );
+    const liveOrder = uniqueOutlets.map((outlet) => outlet._id);
+    const hasSavedDraft = uniqueOutlets.some(
       (outlet) => typeof outlet.draft_sort_order === "number",
     );
     const savedDraftOrder = hasSavedDraft
       ? [
-          ...outlets.filter(
+          ...uniqueOutlets.filter(
             (outlet) => typeof outlet.draft_sort_order === "number",
           ),
         ]
@@ -7159,14 +7162,19 @@
     >(null);
     const baseOrder = completeSavedDraft;
     const candidateOrder = localOrder ?? baseOrder;
+    const uniqueCandidateOrder = [...new Set(candidateOrder)];
     const displayedOrder = [
-      ...candidateOrder.filter((outletId) => liveOrder.includes(outletId)),
-      ...liveOrder.filter((outletId) => !candidateOrder.includes(outletId)),
+      ...uniqueCandidateOrder.filter((outletId) =>
+        liveOrder.includes(outletId),
+      ),
+      ...liveOrder.filter(
+        (outletId) => !uniqueCandidateOrder.includes(outletId),
+      ),
     ];
     const unsavedChanges =
       localOrder !== null && !sameOutletOrder(displayedOrder, baseOrder);
     const outletsById = new Map(
-      outlets.map((outlet) => [outlet._id, outlet] as const),
+      uniqueOutlets.map((outlet) => [outlet._id, outlet] as const),
     );
     const orderedOutlets = displayedOrder
       .map((outletId) => outletsById.get(outletId))
@@ -7321,6 +7329,7 @@
     ) => Promise<boolean>;
     onWeekOffChange: (count: number) => Promise<boolean>;
   }) {
+    const [expanded, setExpanded] = useState(false);
     const [name, setName] = useState(outlet.name ?? outlet.code);
     const [active, setActive] = useState(outlet.active ?? false);
     const [address, setAddress] = useState(outlet.address ?? "");
@@ -7391,163 +7400,211 @@
       managerName !== (outlet.managerName ?? "") ||
       contactPhone !== (outlet.contactPhone ?? "");
     const editable = canManage && !busy;
+    const panelId = `outlet-details-${outlet._id}`;
     return (
-      <article className="outlet-card">
-        <div className="outlet-card-head">
-          <div className="outlet-card-order">
-            {canManage && (
-              <div className="outlet-order-buttons" aria-label="Reorder outlet">
-                <button
-                  className="outlet-order-button"
-                  type="button"
-                  aria-label={`Move ${outlet.name} up`}
-                  title="Move up"
-                  disabled={!editable || orderIndex === 0}
-                  onClick={() => onMove(-1)}
-                >
-                  <ChevronUp size={15} />
-                </button>
-                <button
-                  className="outlet-order-button"
-                  type="button"
-                  aria-label={`Move ${outlet.name} down`}
-                  title="Move down"
-                  disabled={!editable || orderIndex === orderCount - 1}
-                  onClick={() => onMove(1)}
-                >
-                  <ChevronDown size={15} />
-                </button>
-              </div>
-            )}
-            <span className="outlet-code">{outlet.code}</span>
-          </div>
-          <span className={`badge ${active ? "badge-green" : "badge-muted"}`}>
-            {active ? "Active" : "Inactive"}
-          </span>
-        </div>
-        <div className="outlet-card-fields">
-          <label className="field">
-            <span>Outlet name</span>
-            <input
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              disabled={!editable}
-            />
-          </label>
-          <label className="field outlet-address">
-            <span>Address</span>
-            <input
-              value={address}
-              onChange={(event) => setAddress(event.target.value)}
-              disabled={!editable}
-            />
-          </label>
-          <label className="field">
-            <span>City</span>
-            <input
-              value={city}
-              onChange={(event) => setCity(event.target.value)}
-              disabled={!editable}
-            />
-          </label>
-          <label className="field">
-            <span>Manager</span>
-            <input
-              value={managerName}
-              onChange={(event) => setManagerName(event.target.value)}
-              disabled={!editable}
-            />
-          </label>
-          <label className="field">
-            <span>Contact phone</span>
-            <input
-              value={contactPhone}
-              onChange={(event) => setContactPhone(event.target.value)}
-              disabled={!editable}
-            />
-          </label>
-          <label className="field">
-            <span>
-              Week offs (salary deduction)
-              {savingWeekOff && (
-                <small className="outlet-saving">Saving...</small>
-              )}
-            </span>
-            <select
-              value={weeklyOffCount}
-              onChange={(event) =>
-                scheduleWeekOffSave(Number(event.target.value))
-              }
-              disabled={!editable || savingWeekOff}
-            >
-              {Array.from({ length: 8 }, (_, count) => (
-                <option key={count} value={count}>
-                  {count}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {!!outlet.assignedUsers?.length && (
-          <div className="assigned-users">
-            <strong>Assigned users</strong>
-            {outlet.assignedUsers.map((user) => (
-              <small key={user.email}>
-                {user.name} · {user.role.replaceAll("_", " ")}
-              </small>
-            ))}
-          </div>
-        )}
-        <label className="toggle-row">
-          <span>Available for operations</span>
-          <input
-            type="checkbox"
-            checked={active}
-            onChange={(event) => setActive(event.target.checked)}
-            disabled={!editable}
-          />
-        </label>
-        <button
-          className="button button-secondary button-full"
-          type="button"
-          disabled={!editable || !changed || savingOutlet}
-          onClick={() => {
-            if (
-              outlet.active &&
-              !active &&
-              !window.confirm(
-                `Deactivate ${outlet.code}? Historical records remain accessible.`,
-              )
-            )
-              return;
-            const previousName = outlet.name ?? outlet.code;
-            const codePrefixChanged =
-              getEmployeeCodePrefix(previousName) !==
-              getEmployeeCodePrefix(normalizedName);
-            const employeeCodeUpdateCount =
-              codePrefixChanged ? outlet.employeeCodeRenameCount ?? 0 : 0;
-            if (
-              employeeCodeUpdateCount > 0 &&
-              !window.confirm(
-                `Is outlet ke ${employeeCodeUpdateCount} employees ke code update honge. Continue?`,
-              )
-            )
-              return;
-            void saveOutlet(
-              {
-                name: normalizedName,
-                active,
-                address,
-                city,
-                managerName,
-                contactPhone,
-              },
-              employeeCodeUpdateCount,
-            );
-          }}
+      <article className="ol-card" data-open={expanded}>
+        <div
+          className="ol-row"
+          onClick={() => setExpanded((current) => !current)}
         >
-          <Check size={15} /> {savingOutlet ? "Saving..." : "Save outlet"}
-        </button>
+          {canManage && (
+            <div
+              className="ol-arrows"
+              aria-label="Reorder outlet"
+            >
+              <button
+                className="ol-arrow"
+                type="button"
+                aria-label="Move outlet up"
+                title="Move outlet up"
+                disabled={!editable || orderIndex === 0}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onMove(-1);
+                }}
+              >
+                <ChevronUp size={14} />
+              </button>
+              <button
+                className="ol-arrow"
+                type="button"
+                aria-label="Move outlet down"
+                title="Move outlet down"
+                disabled={!editable || orderIndex === orderCount - 1}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onMove(1);
+                }}
+              >
+                <ChevronDown size={14} />
+              </button>
+            </div>
+          )}
+          <button
+            className="ol-chevron"
+            type="button"
+            aria-expanded={expanded}
+            aria-controls={panelId}
+            aria-label={`${expanded ? "Collapse" : "Expand"} ${name || outlet.code}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              setExpanded((current) => !current);
+            }}
+          >
+            <ChevronRight size={17} />
+          </button>
+          <span className="ol-icon" aria-hidden="true">
+            <Building2 size={17} />
+          </span>
+          <div className="ol-title">
+            <strong>{name || outlet.code}</strong>
+            <span className="ol-code">{outlet.code}</span>
+          </div>
+          <div className="ol-badges">
+            {changed && <span className="ol-badge ol-badge--unsaved">Unsaved</span>}
+            <span className={`ol-badge ${active ? "ol-badge--active" : "ol-badge--inactive"}`}>
+              {active ? "Active" : "Inactive"}
+            </span>
+          </div>
+        </div>
+        <div
+          className="ol-panel"
+          id={panelId}
+          aria-hidden={!expanded}
+          inert={!expanded}
+        >
+          <div className="ol-panel-inner">
+            <div className="ol-panel-body">
+              <div className="ol-grid">
+                <label className="ol-field">
+                  <span>Outlet name</span>
+                  <input
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    disabled={!editable}
+                  />
+                </label>
+                <label className="ol-field">
+                  <span>Address</span>
+                  <input
+                    value={address}
+                    onChange={(event) => setAddress(event.target.value)}
+                    disabled={!editable}
+                  />
+                </label>
+                <label className="ol-field">
+                  <span>City</span>
+                  <input
+                    value={city}
+                    onChange={(event) => setCity(event.target.value)}
+                    disabled={!editable}
+                  />
+                </label>
+                <label className="ol-field">
+                  <span>Manager</span>
+                  <input
+                    value={managerName}
+                    onChange={(event) => setManagerName(event.target.value)}
+                    disabled={!editable}
+                  />
+                </label>
+                <label className="ol-field">
+                  <span>Contact phone</span>
+                  <input
+                    value={contactPhone}
+                    onChange={(event) => setContactPhone(event.target.value)}
+                    disabled={!editable}
+                  />
+                </label>
+                <label className="ol-field">
+                  <span>
+                    Week offs (salary deduction)
+                    {savingWeekOff && (
+                      <small className="ol-saving">Saving...</small>
+                    )}
+                  </span>
+                  <select
+                    value={weeklyOffCount}
+                    onChange={(event) =>
+                      scheduleWeekOffSave(Number(event.target.value))
+                    }
+                    disabled={!editable || savingWeekOff}
+                  >
+                    {Array.from({ length: 8 }, (_, count) => (
+                      <option key={count} value={count}>
+                        {count}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="ol-foot">
+                <div className="ol-users">
+                  <strong>Assigned users</strong>
+                  {outlet.assignedUsers?.map((user) => (
+                    <small key={user.email}>
+                      {user.name} · {user.role.replaceAll("_", " ")}
+                    </small>
+                  ))}
+                </div>
+                <div className="ol-actions">
+                  <label className="ol-check">
+                    <span>Available for operations</span>
+                    <input
+                      type="checkbox"
+                      checked={active}
+                      onChange={(event) => setActive(event.target.checked)}
+                      disabled={!editable}
+                    />
+                  </label>
+                  <button
+                    className="button button-secondary ol-save"
+                    type="button"
+                    disabled={!editable || !changed || savingOutlet}
+                    onClick={() => {
+                      if (
+                        outlet.active &&
+                        !active &&
+                        !window.confirm(
+                          `Deactivate ${outlet.code}? Historical records remain accessible.`,
+                        )
+                      )
+                        return;
+                      const previousName = outlet.name ?? outlet.code;
+                      const codePrefixChanged =
+                        getEmployeeCodePrefix(previousName) !==
+                        getEmployeeCodePrefix(normalizedName);
+                      const employeeCodeUpdateCount = codePrefixChanged
+                        ? (outlet.employeeCodeRenameCount ?? 0)
+                        : 0;
+                      if (
+                        employeeCodeUpdateCount > 0 &&
+                        !window.confirm(
+                          `Is outlet ke ${employeeCodeUpdateCount} employees ke code update honge. Continue?`,
+                        )
+                      )
+                        return;
+                      void saveOutlet(
+                        {
+                          name: normalizedName,
+                          active,
+                          address,
+                          city,
+                          managerName,
+                          contactPhone,
+                        },
+                        employeeCodeUpdateCount,
+                      );
+                    }}
+                  >
+                    <Check size={15} />{" "}
+                    {savingOutlet ? "Saving..." : "Save outlet"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </article>
     );
   }
@@ -7675,118 +7732,118 @@
           </div>
         )}
         {isOpen && <ModalPortal><div className="access-modal-backdrop">
-          <section
-            className="access-modal designation-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="designation-modal-title"
-          >
-            <div className="access-modal-heading">
-              <div>
-                <h2 id="designation-modal-title">
-                  {editingId ? "Edit designation" : "New designation"}
-                </h2>
-                <p>Set page access and save this reusable permission profile.</p>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="Close designation editor"
-                disabled={busy}
-                onClick={closeEditor}
+              <section
+                className="access-modal designation-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="designation-modal-title"
               >
-                <X size={18} />
-              </button>
-            </div>
-            <Notice error={error} success="" />
-            <form className="designation-form" onSubmit={save}>
-          <div className="form-grid">
-            <label className="field">
-              <span>Designation name</span>
-              <input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="e.g. Outlet Manager"
-                minLength={2}
-                maxLength={80}
-                required
-              />
-            </label>
-            <label className="field">
-              <span>Description</span>
-              <input
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder="What this role can do"
-                maxLength={240}
-              />
-            </label>
-          </div>
-          <div className="designation-permissions">
-            <div className="designation-permissions-heading">
-              <strong>App page and action permissions</strong>
+                <div className="access-modal-heading">
+                  <div>
+                    <h2 id="designation-modal-title">
+                      {editingId ? "Edit designation" : "New designation"}
+                    </h2>
+                <p>Set page access and save this reusable permission profile.</p>
+                  </div>
+                  <button
+                    className="icon-button"
+                    type="button"
+                    aria-label="Close designation editor"
+                    disabled={busy}
+                    onClick={closeEditor}
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+                <Notice error={error} success="" />
+                <form className="designation-form" onSubmit={save}>
+                  <div className="form-grid">
+                    <label className="field">
+                      <span>Designation name</span>
+                      <input
+                        value={name}
+                        onChange={(event) => setName(event.target.value)}
+                        placeholder="e.g. Outlet Manager"
+                        minLength={2}
+                        maxLength={80}
+                        required
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Description</span>
+                      <input
+                        value={description}
+                        onChange={(event) => setDescription(event.target.value)}
+                        placeholder="What this role can do"
+                        maxLength={240}
+                      />
+                    </label>
+                  </div>
+                  <div className="designation-permissions">
+                    <div className="designation-permissions-heading">
+                      <strong>App page and action permissions</strong>
               <span>
                 {permissions.length} selected · applies to assigned users
               </span>
-            </div>
-            {designationPermissionGroups.map((group) => (
-              <fieldset key={group.title}>
-                <legend>{group.title}</legend>
-                <div className="permission-toggle-grid">
-                  {group.permissions.map((permission) => (
-                    <label key={permission.value}>
-                      <input
-                        type="checkbox"
-                        checked={permissions.includes(permission.value)}
-                        onChange={(event) =>
-                          setPermissions((current) =>
-                            event.target.checked
-                              ? [...current, permission.value]
-                              : current.filter(
-                                  (value) => value !== permission.value,
-                                ),
-                          )
-                        }
-                      />
-                      <span>{permission.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-            ))}
-            <fieldset className="admin-only-permissions">
-              <legend>Admin-only pages</legend>
-              {adminOnlyPages.map((page) => (
-                <div key={page.title}>
-                  <span>{page.title}</span>
-                  <small>MAIN_ADMIN only</small>
-                </div>
-              ))}
-            </fieldset>
-          </div>
-          <div className="form-actions">
-            <button className="button button-primary" disabled={busy}>
+                    </div>
+                    {designationPermissionGroups.map((group) => (
+                      <fieldset key={group.title}>
+                        <legend>{group.title}</legend>
+                        <div className="permission-toggle-grid">
+                          {group.permissions.map((permission) => (
+                            <label key={permission.value}>
+                              <input
+                                type="checkbox"
+                                checked={permissions.includes(permission.value)}
+                                onChange={(event) =>
+                                  setPermissions((current) =>
+                                    event.target.checked
+                                      ? [...current, permission.value]
+                                      : current.filter(
+                                          (value) => value !== permission.value,
+                                        ),
+                                  )
+                                }
+                              />
+                              <span>{permission.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+                    ))}
+                    <fieldset className="admin-only-permissions">
+                      <legend>Admin-only pages</legend>
+                      {adminOnlyPages.map((page) => (
+                        <div key={page.title}>
+                          <span>{page.title}</span>
+                          <small>MAIN_ADMIN only</small>
+                        </div>
+                      ))}
+                    </fieldset>
+                  </div>
+                  <div className="form-actions">
+                    <button className="button button-primary" disabled={busy}>
               {busy ? <LoaderCircle className="spin" size={16} /> : <Check size={16} />}
-              {editingId ? "Save designation" : "Create designation"}
-            </button>
-            {editingId && (
-              <button
-                className="button button-secondary"
-                type="button"
-                disabled={busy || (selected?.assignedCount ?? 0) > 0}
-                title={
-                  (selected?.assignedCount ?? 0) > 0
-                    ? "Reassign users before deleting this designation."
-                    : undefined
-                }
-                onClick={remove}
-              >
-                Delete
-              </button>
-            )}
-          </div>
-            </form>
-          </section>
+                      {editingId ? "Save designation" : "Create designation"}
+                    </button>
+                    {editingId && (
+                      <button
+                        className="button button-secondary"
+                        type="button"
+                        disabled={busy || (selected?.assignedCount ?? 0) > 0}
+                        title={
+                          (selected?.assignedCount ?? 0) > 0
+                            ? "Reassign users before deleting this designation."
+                            : undefined
+                        }
+                        onClick={remove}
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </section>
         </div></ModalPortal>}
       </section>
     );
