@@ -8812,9 +8812,26 @@
     enabled: boolean;
   }) {
     const [kind, setKind] = useState("attendance");
-    const [outletId, setOutletId] = useState("");
+    const [outletSelection, setOutletSelection] = useState<string[] | null>(
+      null,
+    );
+    const selectedOutletIds =
+      outletSelection ?? outlets.map((outlet) => outlet._id);
     const selectedOutletId =
-      outlets.length === 1 ? outlets[0]._id : outletId;
+      selectedOutletIds.length === 1 ? selectedOutletIds[0] : "";
+    const allOutletsSelected = outletSelection === null;
+    const outletFilterLabel = allOutletsSelected
+      ? "All accessible outlets"
+      : selectedOutletIds.length === 0
+        ? "Select outlets"
+        : selectedOutletIds.length === 1
+          ? (() => {
+              const outlet = outlets.find(
+                (item) => item._id === selectedOutletIds[0],
+              );
+              return outlet ? `${outlet.code} · ${outlet.name}` : "1 outlet selected";
+            })()
+          : `${selectedOutletIds.length} outlets selected`;
     const today = new Intl.DateTimeFormat("en-CA", {
       timeZone: "Asia/Kolkata",
     }).format(new Date());
@@ -8826,10 +8843,12 @@
     const [error, setError] = useState("");
     const [employeeId, setEmployeeId] = useState("");
     const employeeReport = useEmployeeAttendanceReport({
-      enabled: enabled && kind === "attendance",
+      enabled:
+        enabled && kind === "attendance" && selectedOutletIds.length > 0,
       from,
       to,
       outletId: selectedOutletId,
+      outletIds: outletSelection,
       employeeId,
     });
     function applyPreset(value: string) {
@@ -8853,11 +8872,16 @@
       setTo(end.toISOString().slice(0, 10));
     }
     async function exportFile(format: ExportFormat) {
+      if (selectedOutletIds.length === 0) {
+        setError("Select at least one outlet to export.");
+        return;
+      }
       setBusy(format);
       setError("");
       try {
         const params = new URLSearchParams({ type: kind, from, to, format });
-        if (selectedOutletId) params.set("outletId", selectedOutletId);
+        if (outletSelection !== null)
+          selectedOutletIds.forEach((id) => params.append("outletIds", id));
         if (kind === "attendance" && employeeId)
           params.set("employeeId", employeeId);
         await downloadReport(
@@ -8922,25 +8946,64 @@
                 <option value="audit">Audit log</option>
               </select>
             </label>
-            <label className="field">
+            <div className="field report-outlet-filter">
               <span>Outlet</span>
-              <select
-                value={selectedOutletId}
-                onChange={(event) => {
-                  setOutletId(event.target.value);
-                  setEmployeeId("");
-                }}
-              >
-                {outlets.length !== 1 && (
-                  <option value="">All accessible outlets</option>
-                )}
-                {outlets.map((outlet) => (
-                  <option key={outlet._id} value={outlet._id}>
-                    {outlet.code} · {outlet.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+              <details className="report-outlet-picker">
+                <summary className="report-outlet-trigger">
+                  <span>{outletFilterLabel}</span>
+                  <ChevronDown size={16} aria-hidden="true" />
+                </summary>
+                <div
+                  className="report-outlet-options"
+                  role="group"
+                  aria-label="Accessible outlets"
+                >
+                  <label className="report-outlet-option">
+                    <input
+                      type="checkbox"
+                      checked={allOutletsSelected}
+                      onChange={(event) => {
+                        setOutletSelection(event.target.checked ? null : []);
+                        setEmployeeId("");
+                      }}
+                    />
+                    <span>All accessible outlets</span>
+                  </label>
+                  {outlets.map((outlet) => {
+                    const checked =
+                      allOutletsSelected ||
+                      selectedOutletIds.includes(outlet._id);
+                    return (
+                      <label
+                        key={outlet._id}
+                        className="report-outlet-option"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            setOutletSelection((current) => {
+                              const selected =
+                                current ?? outlets.map((item) => item._id);
+                              const next = event.target.checked
+                                ? [...new Set([...selected, outlet._id])]
+                                : selected.filter((id) => id !== outlet._id);
+                              return next.length === outlets.length
+                                ? null
+                                : next;
+                            });
+                            setEmployeeId("");
+                          }}
+                        />
+                        <span>
+                          {outlet.code} · {outlet.name}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </details>
+            </div>
             {kind === "attendance" && (
               <label className="field">
                 <span>Employee</span>
@@ -8987,6 +9050,7 @@
               disabled={
                 busy !== null ||
                 from > to ||
+                selectedOutletIds.length === 0 ||
                 (kind === "attendance" && employeeReport.isFetching)
               }
               onClick={() => void exportFile("xlsx")}
@@ -9004,6 +9068,7 @@
               disabled={
                 busy !== null ||
                 from > to ||
+                selectedOutletIds.length === 0 ||
                 (kind === "attendance" && employeeReport.isFetching)
               }
               onClick={() => void exportFile("csv")}
@@ -9020,7 +9085,11 @@
                 className="button button-secondary"
                 type="button"
                 aria-label="Print attendance report or save as PDF"
-                disabled={from > to || employeeReport.isFetching}
+                disabled={
+                  from > to ||
+                  selectedOutletIds.length === 0 ||
+                  employeeReport.isFetching
+                }
                 onClick={() => window.print()}
               >
                 <Printer size={16} />
@@ -9034,6 +9103,11 @@
             className="reports-attendance-results"
             aria-busy={employeeReport.isFetching}
           >
+              {selectedOutletIds.length === 0 && (
+                <p className="sub-cell" role="status">
+                  Select at least one outlet to preview or export a report.
+                </p>
+              )}
               {employeeReport.canReadSalary && (
                 <p className="sub-cell">
                   Payable shows live accrued salary from submitted attendance for
@@ -9042,12 +9116,16 @@
                 </p>
               )}
               <AttendanceTrendChart
-                rows={employeeReport.rows}
+                rows={
+                  selectedOutletIds.length > 0 ? employeeReport.rows : []
+                }
                 from={from}
                 to={to}
               />
               <EmployeeAttendanceTable
-                rows={employeeReport.rows}
+                rows={
+                  selectedOutletIds.length > 0 ? employeeReport.rows : []
+                }
                 uniformItems={employeeReport.uniformItems}
                 canReadSalary={employeeReport.canReadSalary}
                 title="Employee-wise attendance"

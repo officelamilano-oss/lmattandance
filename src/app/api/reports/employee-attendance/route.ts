@@ -35,6 +35,7 @@
     from: dateOnlySchema,
     to: dateOnlySchema,
     outletId: objectIdSchema.optional(),
+    outletIds: z.array(objectIdSchema).max(100).optional(),
     employeeId: objectIdSchema.optional(),
   });
 
@@ -68,8 +69,16 @@
         from: url.searchParams.get("from"),
         to: url.searchParams.get("to"),
         outletId: url.searchParams.get("outletId") || undefined,
+        outletIds: url.searchParams.getAll("outletIds").length
+          ? url.searchParams.getAll("outletIds")
+          : undefined,
         employeeId: url.searchParams.get("employeeId") || undefined,
       });
+      const requestedOutletIds = query.outletIds?.length
+        ? [...new Set(query.outletIds)]
+        : query.outletId
+          ? [query.outletId]
+          : undefined;
       if (query.from > query.to)
         return NextResponse.json(
           { error: "Start date must be on or before end date." },
@@ -84,14 +93,20 @@
           { error: "Report ranges are limited to 367 calendar days." },
           { status: 400 },
         );
-      if (query.outletId) assertOutletAccess(actor, query.outletId);
+      requestedOutletIds?.forEach((outletId) =>
+        assertOutletAccess(actor, outletId),
+      );
 
       const db = await getDb();
       const outlets = await db
         .collection<OutletSettingsDocument>("outlets")
         .find({
-          ...(query.outletId
-            ? { _id: new ObjectId(query.outletId) }
+          ...(requestedOutletIds
+            ? {
+                _id: {
+                  $in: requestedOutletIds.map((id) => new ObjectId(id)),
+                },
+              }
             : actor.role === "MAIN_ADMIN"
               ? {}
               : { _id: { $in: actor.outletIds } }),
@@ -124,7 +139,8 @@
           .collection<SalarySettings & { _id: string }>("settings")
           .findOne({ _id: "payroll" }),
       ]);
-      if (query.outletId && !outlets.length) throw new Error("NOT_FOUND");
+      if (requestedOutletIds && outlets.length !== requestedOutletIds.length)
+        throw new Error("NOT_FOUND");
       const employeeById = new Map(
         employees.map((employee) => [employee._id.toHexString(), employee]),
       );

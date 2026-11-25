@@ -1108,12 +1108,107 @@ td strong {
 }
 
 .report-panel {
+    position: relative;
+    z-index: 2;
+    overflow: visible;
     padding: 21px
 }
 
 .report-panel .form-grid {
     padding: 8px 0 18px;
     grid-template-columns: repeat(4, minmax(0, 1fr))
+}
+
+.report-outlet-filter {
+    position: relative
+}
+
+.report-outlet-picker {
+    position: relative
+}
+
+.report-outlet-trigger {
+    min-height: 37px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 11px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--input-bg);
+    color: var(--text);
+    font-size: 11px;
+    cursor: pointer;
+    list-style: none
+}
+
+.report-outlet-trigger::-webkit-details-marker {
+    display: none
+}
+
+.report-outlet-trigger span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap
+}
+
+.report-outlet-picker[open] .report-outlet-trigger {
+    border-color: var(--cherry);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--cherry) 10%, transparent)
+}
+
+.report-outlet-options {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 5px);
+    left: 0;
+    width: 100%;
+    max-height: 270px;
+    overflow-y: auto;
+    padding: 5px;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 10px 24px rgb(0 0 0 / 14%)
+}
+
+.report-outlet-option {
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer
+}
+
+.report-outlet-option input {
+    width: 16px;
+    height: 16px;
+    flex: 0 0 auto;
+    margin: 0;
+    padding: 0 !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 4px !important;
+    background: var(--input-bg) !important;
+    accent-color: var(--red)
+}
+
+.report-outlet-option span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .report-outlet-option:hover {
+        background: var(--surface-2)
+    }
 }
 
 .report-icon {

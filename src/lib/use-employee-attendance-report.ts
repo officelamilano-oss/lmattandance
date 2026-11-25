@@ -9,6 +9,7 @@ type EmployeeAttendanceReportFilters = {
   from: string;
   to: string;
   outletId: string;
+  outletIds?: string[] | null;
   employeeId: string;
 };
 
@@ -17,6 +18,7 @@ export function useEmployeeAttendanceReport({
   from,
   to,
   outletId,
+  outletIds,
   employeeId,
 }: EmployeeAttendanceReportFilters) {
   const [rows, setRows] = useState<EmployeeAttendanceReportRow[]>([]);
@@ -30,7 +32,8 @@ export function useEmployeeAttendanceReport({
     key: string;
     message: string;
   } | null>(null);
-  const key = `${from}|${to}|${outletId}|${employeeId}`;
+  const outletIdsKey = outletIds?.join(",") ?? "";
+  const key = `${from}|${to}|${outletId}|${outletIdsKey}|${employeeId}`;
   const validationError =
     enabled && from && to && from > to
       ? "Start date must be on or before end date."
@@ -42,6 +45,7 @@ export function useEmployeeAttendanceReport({
     const controller = new AbortController();
     const params = new URLSearchParams({ from, to });
     if (outletId) params.set("outletId", outletId);
+    if (!outletId) outletIds?.forEach((id) => params.append("outletIds", id));
     if (employeeId) params.set("employeeId", employeeId);
 
     const timeout = window.setTimeout(() => {
@@ -79,7 +83,7 @@ export function useEmployeeAttendanceReport({
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [enabled, from, to, outletId, employeeId, key]);
+  }, [enabled, from, to, outletId, outletIds, outletIdsKey, employeeId, key]);
 
   return {
     rows,

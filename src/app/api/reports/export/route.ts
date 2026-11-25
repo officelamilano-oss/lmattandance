@@ -43,6 +43,7 @@ const querySchema = z.object({
   from: dateOnlySchema,
   to: dateOnlySchema,
   outletId: objectIdSchema.optional(),
+  outletIds: z.array(objectIdSchema).max(100).optional(),
   employeeId: objectIdSchema.optional(),
 });
 
@@ -165,8 +166,16 @@ export async function GET(request: Request) {
       from: url.searchParams.get("from"),
       to: url.searchParams.get("to"),
       outletId: url.searchParams.get("outletId") || undefined,
+      outletIds: url.searchParams.getAll("outletIds").length
+        ? url.searchParams.getAll("outletIds")
+        : undefined,
       employeeId: url.searchParams.get("employeeId") || undefined,
     });
+    const requestedOutletIds = query.outletIds?.length
+      ? [...new Set(query.outletIds)]
+      : query.outletId
+        ? [query.outletId]
+        : undefined;
     if (query.type === "loans" && actor.role !== "MAIN_ADMIN")
       return NextResponse.json(
         { error: "Loan export is restricted to MAIN_ADMIN." },
@@ -204,7 +213,9 @@ export async function GET(request: Request) {
         { error: "Salary export requires payroll access." },
         { status: 403 },
       );
-    if (query.outletId) assertOutletAccess(actor, query.outletId);
+    requestedOutletIds?.forEach((outletId) =>
+      assertOutletAccess(actor, outletId),
+    );
     const db = await getDb();
     const canReadSalary = actor.permissions.includes("salary.read");
     const uniformItems =
@@ -221,15 +232,16 @@ export async function GET(request: Request) {
     const outlets = await db
       .collection<OutletSettingsDocument>("outlets")
       .find({
-        ...(query.outletId
-          ? { _id: new ObjectId(query.outletId) }
+        ...(requestedOutletIds
+          ? { _id: { $in: requestedOutletIds.map((id) => new ObjectId(id)) } }
           : actor.role === "MAIN_ADMIN"
             ? {}
             : { _id: { $in: actor.outletIds } }),
       })
       .sort({ sort_order: 1, code: 1 })
       .toArray();
-    if (query.outletId && !outlets.length) throw new Error("NOT_FOUND");
+    if (requestedOutletIds && outlets.length !== requestedOutletIds.length)
+      throw new Error("NOT_FOUND");
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "La Milano Attendance Management System";
     workbook.created = new Date();
@@ -256,7 +268,7 @@ export async function GET(request: Request) {
       for (const item of byOutlet)
         item.rows = item.rows.filter((row) => row.Status === "APPROVED");
     const globalAuditRows: ExportRow[] =
-      query.type === "audit" && actor.role === "MAIN_ADMIN" && !query.outletId
+      query.type === "audit" && actor.role === "MAIN_ADMIN" && !requestedOutletIds
         ? (
             await db
               .collection<AuditLogDocument>("auditLogs")
