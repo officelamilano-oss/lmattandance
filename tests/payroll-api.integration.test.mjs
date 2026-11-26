@@ -203,12 +203,12 @@ test(
         assert.equal(response.status, 200, JSON.stringify(payload));
         return payload.amounts;
       };
-      const report = async (end) => {
+      const report = async (end, targetEmployeeId = employeeId) => {
         const params = new URLSearchParams({
           from: "2026-11-01",
           to: `2026-11-${String(end).padStart(2, "0")}`,
           outletId: outletId.toHexString(),
-          employeeId: employeeId.toHexString(),
+          employeeId: targetEmployeeId.toHexString(),
         });
         const response = await request(
           `/api/reports/employee-attendance?${params}`,
@@ -228,14 +228,14 @@ test(
         assert.equal(response.status, 200, JSON.stringify(payload));
         return payload.metrics;
       };
-      const exported = async (end) => {
+      const exported = async (end, targetEmployeeId = employeeId) => {
         const params = new URLSearchParams({
           type: "attendance",
           format: "csv",
           from: "2026-11-01",
           to: `2026-11-${String(end).padStart(2, "0")}`,
           outletId: outletId.toHexString(),
-          employeeId: employeeId.toHexString(),
+          employeeId: targetEmployeeId.toHexString(),
         });
         const response = await request(`/api/reports/export?${params}`);
         const text = await response.text();
@@ -243,14 +243,14 @@ test(
         const [headers, ...rows] = csvRows(text);
         return Object.fromEntries(headers.map((header, index) => [header, rows[0][index]]));
       };
-      const exportedXlsx = async (end) => {
+      const exportedXlsx = async (end, targetEmployeeId = employeeId) => {
         const params = new URLSearchParams({
           type: "attendance",
           format: "xlsx",
           from: "2026-11-01",
           to: `2026-11-${String(end).padStart(2, "0")}`,
           outletId: outletId.toHexString(),
-          employeeId: employeeId.toHexString(),
+          employeeId: targetEmployeeId.toHexString(),
         });
         const response = await request(`/api/reports/export?${params}`);
         const bytes = Buffer.from(await response.arrayBuffer());
@@ -424,6 +424,7 @@ test(
       );
 
       const loanId = new ObjectId();
+      const loanCreatedAt = new Date("2026-11-01T00:00:00.000Z");
       await db.collection("loans").insertOne({
         _id: loanId,
         employeeId: secondEmployeeId,
@@ -433,11 +434,93 @@ test(
         monthlyDeductionAmount: 600,
         deductionStartMonth: "2026-11",
         status: "ACTIVE",
+        createdAt: loanCreatedAt,
+        updatedAt: now,
+      });
+      await db.collection("loanInstallments").insertOne({
+        _id: new ObjectId(),
+        loanId,
+        employeeId: secondEmployeeId,
+        outletId,
+        payrollMonth: "2026-11",
+        openingBalance: 600,
+        scheduledDeduction: 600,
+        actualDeduction: 0,
+        closingBalance: 600,
+        status: "SCHEDULED",
+        actorId: adminId,
         createdAt: now,
         updatedAt: now,
       });
-      await preview(19, secondEmployeeId);
-      await preview(19, secondEmployeeId);
+      await db.collection("advances").insertMany([
+        {
+          _id: new ObjectId(),
+          employeeId: secondEmployeeId,
+          outletId,
+          date: "2026-11-05",
+          approvedDate: "2026-11-08",
+          amount: 5000,
+          status: "APPROVED",
+          givenBy: "Payroll E2E",
+          reference: "First advance",
+          reason: "Medical expense",
+          createdBy: adminId,
+          updatedBy: adminId,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          _id: new ObjectId(),
+          employeeId: secondEmployeeId,
+          outletId,
+          date: "2026-11-06",
+          approvedDate: "2026-11-09",
+          amount: 2000,
+          status: "APPROVED",
+          givenBy: "Payroll E2E",
+          reference: "Second advance",
+          reason: "Rent payment",
+          createdBy: adminId,
+          updatedBy: adminId,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ]);
+      const loanPreview = await preview(19, secondEmployeeId);
+      const loanReport = await report(19, secondEmployeeId);
+      const loanCsv = await exported(19, secondEmployeeId);
+      const loanXlsx = await exportedXlsx(19, secondEmployeeId);
+      assert.equal(loanPreview.loanDeduction, 600);
+      assert.equal(loanReport.totalAdvances, 7000);
+      assert.deepEqual(
+        loanReport.advanceDetails,
+        [
+          { date: "2026-11-05", amount: 5000 },
+          { date: "2026-11-06", amount: 2000 },
+        ],
+      );
+      assert.equal(loanReport.loanDeduction, 600);
+      assert.equal(loanReport.payableAmount, loanPreview.netPayable);
+      assert.equal(Number(loanCsv["Loan Deduction INR"]), 600);
+      assert.equal(Number(loanCsv["Total Advances INR"]), 7000);
+      assert.equal(
+        loanCsv["Advance Details (Date / Amount INR)"],
+        "05/11/2026: ₹5,000.00, 06/11/2026: ₹2,000.00",
+      );
+      assert.equal(
+        Number(loanCsv["Net Payable INR"]),
+        loanPreview.netPayable,
+      );
+      assert.equal(Number(loanXlsx["Loan Deduction INR"]), 600);
+      assert.equal(Number(loanXlsx["Total Advances INR"]), 7000);
+      assert.equal(
+        loanXlsx["Advance Details (Date / Amount INR)"],
+        "05/11/2026: ₹5,000.00, 06/11/2026: ₹2,000.00",
+      );
+      assert.equal(
+        Number(loanXlsx["Net Payable INR"]),
+        loanPreview.netPayable,
+      );
       assert.equal(
         (await db.collection("loans").findOne({ _id: loanId }))
           .outstandingAmount,

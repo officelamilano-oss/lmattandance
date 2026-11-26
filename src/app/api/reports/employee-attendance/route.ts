@@ -14,6 +14,7 @@
     getUniformReportItems,
     summarizeUniformDeductions,
   } from "@/lib/uniform-deductions";
+  import { formatExportDates } from "@/lib/reports/export-dates";
   import { dateOnlySchema, objectIdSchema } from "@/lib/validation/common";
   import type {
     AdvanceDocument,
@@ -375,6 +376,8 @@
             allowanceConsumed: 0,
           };
           const reportCutoff = new Date(`${query.to}T23:59:59.999Z`);
+          const employeeAdvances =
+            advancesByEmployee.get(employee._id.toHexString()) ?? [];
           const employeeLoans = (
             loansByEmployee.get(employee._id.toHexString()) ?? []
           ).filter((loan) => loan.createdAt <= reportCutoff);
@@ -465,9 +468,7 @@
                       (sum, entry) => sum + entry.actualDeduction,
                       0,
                     )
-                  : saved.status === "DRAFT"
-                    ? 0
-                    : Number(saved.calculation.loanDeduction ?? 0);
+                  : Number(saved.calculation.loanDeduction ?? 0);
                 hasSavedPayroll = true;
                 continue;
               }
@@ -562,7 +563,7 @@
               salaryDeductions.loanDeduction += calculation.loanDeduction;
             }
             payableLabel = hasLiveCalculation
-              ? `Live accrued · submitted days (${start} – ${end})`
+              ? `Submitted days (${formatExportDates(start)} – ${formatExportDates(end)})`
               : hasSavedPayroll
                 ? "Payroll record"
                 : "No submitted attendance";
@@ -580,6 +581,14 @@
                   monthlyBaseSalary: employee.monthlyBaseSalary,
                   payableAmount,
                   payableLabel,
+                  advanceDetails: employeeAdvances.map((advance) => ({
+                    date: advance.date,
+                    amount: advance.amount,
+                  })),
+                  totalAdvances: employeeAdvances.reduce(
+                    (sum, advance) => sum + advance.amount,
+                    0,
+                  ),
                   ...attendanceSalary,
                   originalLoanAmount,
                   remainingLoanBalance,

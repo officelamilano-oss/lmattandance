@@ -77,7 +77,7 @@ export function SalarySlip({
             <SlipRow label="Attendance deduction" amount={value("attendanceDeduction")} />
             <SlipRow label="Not marked deduction" amount={value("notMarkedDeduction")} />
             <div className="salary-slip-row">
-              <span>Allowance consumed</span>
+              <span>Used / allowed (days)</span>
               <strong>
                 {value("allowanceConsumed")} of {value("allowedWeekOff")}
               </strong>

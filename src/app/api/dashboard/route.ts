@@ -330,6 +330,7 @@ export async function GET(request: Request) {
     }
     let liveGrossSalary = 0;
     let liveNetPayable = 0;
+    let liveLoanDeductions = 0;
     let projectedMonthEndBase = 0;
     let approvedAdvancesPendingPayroll = 0;
     if (wantsSummary && canReadSalary) {
@@ -497,6 +498,9 @@ export async function GET(request: Request) {
               savedRecord.calculation.grossEarnings ?? 0,
             );
             liveNetPayable += Number(savedRecord.calculation.netPayable ?? 0);
+            liveLoanDeductions += Number(
+              savedRecord.calculation.loanDeduction ?? 0,
+            );
             continue;
         }
         const counts =
@@ -569,6 +573,7 @@ export async function GET(request: Request) {
         });
         liveGrossSalary += calculation.grossEarnings;
         liveNetPayable += calculation.netPayable;
+        liveLoanDeductions += calculation.loanDeduction;
       }
     }
     const attendance = { P: 0, A: 0, WO: 0, HD: 0 };
@@ -949,6 +954,7 @@ export async function GET(request: Request) {
               0,
             )
           : null,
+        liveLoanDeductions: canReadSalary ? liveLoanDeductions : null,
         recordedPayrollGross: canReadSalary
           ? salaryRecords.reduce(
               (sum, record) =>

@@ -2,6 +2,7 @@
 
 import { useMemo, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
+import { RoundedSelect } from "@/components/rounded-select";
 import {
   Check,
   FileSpreadsheet,
@@ -749,7 +750,7 @@ export function EmployeeImportPanel({
               )}
               <label className="field">
                 <span>Outlet * (employee codes are generated from it)</span>
-                <select
+                <RoundedSelect
                   value={activeOutletId}
                   onChange={(event) => changeOutlet(event.target.value)}
                   required
@@ -762,7 +763,7 @@ export function EmployeeImportPanel({
                         {outlet.code} · {outlet.name}
                       </option>
                     ))}
-                </select>
+                </RoundedSelect>
               </label>
 
               {unmappedFields.length > 0 && (
@@ -794,7 +795,7 @@ export function EmployeeImportPanel({
                               ? " *"
                               : " (optional)"}
                       </span>
-                      <select
+                      <RoundedSelect
                         value={mapping[field.key]}
                         onChange={(event) =>
                           changeMapping(field.key, event.target.value)
@@ -806,7 +807,7 @@ export function EmployeeImportPanel({
                             {column.label}
                           </option>
                         ))}
-                      </select>
+                      </RoundedSelect>
                     </label>
                   ))}
                 </div>
@@ -901,7 +902,7 @@ export function EmployeeImportPanel({
                               return (
                                 <td key={field.key}>
                                   {yesNoFields.includes(field.key) ? (
-                                    <select
+                                    <RoundedSelect
                                       className={`cell-input${invalid ? " cell-input-invalid" : ""}`}
                                       style={style}
                                       value={row[field.key]}
@@ -915,9 +916,9 @@ export function EmployeeImportPanel({
                                     >
                                       <option value="No">No</option>
                                       <option value="Yes">Yes</option>
-                                    </select>
+                                    </RoundedSelect>
                                   ) : field.key === "employmentType" ? (
-                                    <select
+                                    <RoundedSelect
                                       className={`cell-input${invalid ? " cell-input-invalid" : ""}`}
                                       style={style}
                                       value={row[field.key] || "Full-time"}
@@ -943,7 +944,7 @@ export function EmployeeImportPanel({
                                             {row[field.key]}
                                           </option>
                                         )}
-                                    </select>
+                                    </RoundedSelect>
                                   ) : (
                                     <input
                                       className={`cell-input${invalid ? " cell-input-invalid" : ""}`}

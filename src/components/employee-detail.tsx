@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { createPortal } from "react-dom";
+import { RoundedSelect } from "@/components/rounded-select";
 import { useEffect, useRef, useState, useSyncExternalStore, type ChangeEvent, type DragEvent, type FormEvent } from "react";
 import { ArrowDownToLine, ArrowLeft, Check, Eye, EyeOff, FileText, LoaderCircle, Share2, Trash2, Upload, X } from "lucide-react";
 import type { EmployeeView } from "@/lib/ui-types";
@@ -836,7 +837,7 @@ export function EmployeeDetail({
           </label>
           <label className="field">
             <span>Designation</span>
-            <select
+            <RoundedSelect
               name="designationKey"
               value={designationKey}
               onChange={(event) => {
@@ -863,7 +864,7 @@ export function EmployeeDetail({
                   {item.label}
                 </option>
               ))}
-            </select>
+            </RoundedSelect>
             <small>
               {designationKey === "LEGACY"
                 ? "Existing designation stays on this employee."
@@ -874,14 +875,14 @@ export function EmployeeDetail({
           </label>
           <label className="field">
             <span>Employment type</span>
-            <select
+            <RoundedSelect
               name="employmentType"
               defaultValue={employee.employmentType ?? "FULL_TIME"}
               disabled={!canEdit}
             >
               <option value="FULL_TIME">Full-time</option>
               <option value="PART_TIME">Part-time</option>
-            </select>
+            </RoundedSelect>
           </label>
           <label className="field">
             <span>Mobile</span>
@@ -895,7 +896,7 @@ export function EmployeeDetail({
           </label>
           <label className="field">
             <span>Outlet</span>
-            <select
+            <RoundedSelect
               name="outletId"
               value={outletId}
               onChange={(event) => {
@@ -918,7 +919,7 @@ export function EmployeeDetail({
                   {outlet.code} · {outlet.name}
                 </option>
               ))}
-            </select>
+            </RoundedSelect>
           </label>
           {canViewSensitive && (
             <>
@@ -946,7 +947,7 @@ export function EmployeeDetail({
               </label>
               <label className="field">
                 <span>Gender</span>
-                <select
+                <RoundedSelect
                   name="gender"
                   defaultValue={employee.gender ?? ""}
                   disabled={!canEdit}
@@ -954,7 +955,7 @@ export function EmployeeDetail({
                   <option value="">Not specified</option>
                   <option value="MALE">Male</option>
                   <option value="FEMALE">Female</option>
-                </select>
+                </RoundedSelect>
               </label>
               {sensitiveFields.map(({ name, label, value }) => (
                 <label className="field" key={name}>
@@ -1023,14 +1024,14 @@ export function EmployeeDetail({
               </div>
               <label className="field">
                 <span>PF enabled</span>
-                <select
+                <RoundedSelect
                   name="pfEnabled"
                   defaultValue={String(employee.pfEnabled)}
                   disabled={!canEdit}
                 >
                   <option value="false">No</option>
                   <option value="true">Yes</option>
-                </select>
+                </RoundedSelect>
               </label>
               <label className="field">
                 <span>Employee PF %</span>
@@ -1060,14 +1061,14 @@ export function EmployeeDetail({
               </label>
               <label className="field">
                 <span>ESI enabled</span>
-                <select
+                <RoundedSelect
                   name="esiEnabled"
                   defaultValue={String(employee.esiEnabled ?? false)}
                   disabled={!canEdit}
                 >
                   <option value="false">No</option>
                   <option value="true">Yes</option>
-                </select>
+                </RoundedSelect>
               </label>
               <label className="field">
                 <span>Employee ESI %</span>
@@ -1181,7 +1182,7 @@ export function EmployeeDetail({
                   <span>
                     {item.file.name} · {formatFileSize(item.file.size)}
                   </span>
-                  <select
+                  <RoundedSelect
                     aria-label={`Document type for ${item.file.name}`}
                     value={item.documentType}
                     onChange={(event) =>
@@ -1197,7 +1198,7 @@ export function EmployeeDetail({
                     {EMPLOYEE_DOCUMENT_TYPES.map((type) => (
                       <option key={type} value={type}>{documentTypeLabel(type)}</option>
                     ))}
-                  </select>
+                  </RoundedSelect>
                   <button
                     type="button"
                     className="icon-button"

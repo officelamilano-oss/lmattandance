@@ -124,7 +124,7 @@ export const advanceSchema = z.object({
   amount: z.number().finite().positive().max(10_000_000),
   givenBy: z.string().trim().min(2).max(120),
   reference: z.string().trim().min(2).max(200),
-  notes: z.string().trim().max(1000).optional().default(""),
+  reason: z.string().trim().min(2).max(1000),
 });
 
 const loanMoney = (minimum: number) =>

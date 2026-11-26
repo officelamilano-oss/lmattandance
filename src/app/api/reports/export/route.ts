@@ -18,6 +18,10 @@ import {
   type UniformReportItem,
 } from "@/lib/uniform-deductions";
 import { formatExportDates } from "@/lib/reports/export-dates";
+import {
+  addEmployeeAdvanceSummaries,
+  formatAdvanceDetails,
+} from "@/lib/reports/advance-details";
 import { dateAfter, getIndiaMonth, getMonthDates } from "@/lib/payroll/dates";
 import { dateOnlySchema, objectIdSchema } from "@/lib/validation/common";
 import type {
@@ -66,7 +70,10 @@ function advanceTotal(rows: ExportRow[]) {
   return Number(
     rows
       .filter((row) => row.Status === "APPROVED")
-      .reduce((sum, row) => sum + Number(row["Amount INR"] ?? 0), 0)
+      .reduce(
+        (sum, row) => sum + Number(row["Amount INR"] ?? 0),
+        0,
+      )
       .toFixed(2),
   );
 }
@@ -109,23 +116,6 @@ function addAdvancesMasterSheet(
       );
   styleSheet(sheet, false);
 
-  const labelCol = headers.indexOf("Employee") + 1;
-  const amountCol = headers.indexOf("Amount INR") + 1;
-  const addLine = (label: string, amount: number | null, strong = false) => {
-    const values: Array<string | number | null> = headers.map(() => null);
-    values[labelCol - 1] = label;
-    values[amountCol - 1] = amount;
-    const row = sheet.addRow(values);
-    if (amount === null || strong) styleTotalRow(row, headers.length, strong);
-    else {
-      row.getCell(labelCol).border = thinBorder;
-      const amountCell = row.getCell(amountCol);
-      amountCell.border = thinBorder;
-      amountCell.numFmt = '"₹"#,##0.00';
-      amountCell.alignment = { vertical: "middle", horizontal: "right" };
-    }
-  };
-
   const totals = allItems.map(({ outlet, rows }) => ({
     name: outlet.name.toUpperCase(),
     total: advanceTotal(rows),
@@ -137,15 +127,58 @@ function addAdvancesMasterSheet(
   const sum = (list: typeof totals) =>
     Number(list.reduce((total, item) => total + item.total, 0).toFixed(2));
 
-  sheet.addRow([]);
-  sheet.addRow([]);
-  addLine("ALL OUTLET TOTAL", null);
-  for (const total of mainGroup) addLine(total.name, total.total);
+  // Keep the summary beside the data table, separated by one blank column.
+  const startCol = headers.length + 2;
+  let rowIndex = 1;
+  const writeLine = (
+    label: string,
+    amount: number | string,
+    kind: "header" | "normal" | "subtotal" | "total" = "normal",
+  ) => {
+    const row = sheet.getRow(rowIndex++);
+    const labelCell = row.getCell(startCol);
+    const amountCell = row.getCell(startCol + 1);
+    labelCell.value = label;
+    amountCell.value = amount;
+    for (const cell of [labelCell, amountCell]) {
+      cell.border = thinBorder;
+      cell.alignment = { vertical: "middle", horizontal: "left" };
+      if (kind === "header") {
+        cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: HEADER_FILL },
+        };
+      } else if (kind === "subtotal" || kind === "total") {
+        cell.font = { bold: true, size: kind === "total" ? 12 : 11 };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: {
+            argb: kind === "total" ? "FFD9EAD3" : "FFE8EDE8",
+          },
+        };
+      }
+    }
+    amountCell.alignment = {
+      vertical: "middle",
+      horizontal: kind === "header" ? "center" : "right",
+    };
+    if (typeof amount === "number") amountCell.numFmt = '"₹"#,##0.00';
+  };
+
+  writeLine("Outlet", "Total Advances INR", "header");
+  for (const total of mainGroup) writeLine(total.name, total.total);
   if (separate.length) {
-    addLine(`${MAIN_GROUP_LABEL} TOTAL`, sum(mainGroup), true);
-    for (const total of separate) addLine(total.name, total.total);
+    writeLine(`${MAIN_GROUP_LABEL} TOTAL`, sum(mainGroup), "subtotal");
+    for (const total of separate) writeLine(total.name, total.total);
   }
-  addLine("TOTAL", sum(totals), true);
+  writeLine("TOTAL", sum(totals), "total");
+
+  sheet.getColumn(startCol).width = 26;
+  sheet.getColumn(startCol + 1).width = 22;
+  sheet.getColumn(startCol - 1).width = 4;
 }
 
 export async function GET(request: Request) {
@@ -264,9 +297,14 @@ export async function GET(request: Request) {
           uniformItems,
         ),
       });
-    if (query.type === "advances" && query.format === "xlsx")
-      for (const item of byOutlet)
-        item.rows = item.rows.filter((row) => row.Status === "APPROVED");
+    if (query.type === "advances")
+      for (const item of byOutlet) {
+        const rows =
+          query.format === "xlsx"
+            ? item.rows.filter((row) => row.Status === "APPROVED")
+            : item.rows;
+        item.rows = addEmployeeAdvanceSummaries(rows);
+      }
     const globalAuditRows: ExportRow[] =
       query.type === "audit" && actor.role === "MAIN_ADMIN" && !requestedOutletIds
         ? (
@@ -360,10 +398,10 @@ export async function GET(request: Request) {
       styleSheet(sheet, item.rows.length === 0);
       if (query.type === "advances" && item.rows.length) {
         const employeeCol = headers.indexOf("Employee");
-        const amountCol = headers.indexOf("Amount INR");
+        const totalCol = headers.indexOf("Total Advances INR");
         const values: Array<string | number | null> = headers.map(() => null);
-        values[employeeCol] = "NET PAY FOR THIS OUTLET";
-        values[amountCol] = advanceTotal(item.rows);
+        values[employeeCol] = "TOTAL ADVANCES FOR THIS OUTLET";
+        values[totalCol] = advanceTotal(item.rows);
         const totalRow = sheet.addRow(values);
         styleTotalRow(totalRow, headers.length, true);
       }
@@ -383,6 +421,17 @@ export async function GET(request: Request) {
       sheet.addRow(headers);
       styleSheet(sheet, true);
     }
+    for (const sheet of workbook.worksheets)
+      sheet.eachRow((row, rowNumber) => {
+        row.height = rowNumber === 1 ? 28 : 20;
+        if (rowNumber > 1)
+          row.eachCell({ includeEmpty: true }, (cell) => {
+            cell.alignment = {
+              ...(cell.alignment ?? {}),
+              wrapText: false,
+            };
+          });
+      });
     workbook.views = [{ x: 0, y: 0, width: 20000, height: 12000, firstSheet: 0, activeTab: 0, visibility: "visible" }];
 
     const buffer = await workbook.xlsx.writeBuffer();
@@ -780,7 +829,7 @@ async function getRows(
         "Chargeable Days": 0,
         "Attendance Deduction INR": 0,
         "Not Marked Deduction INR": 0,
-        "Allowance Consumed": "0 of 0",
+        "Used / Allowed (Days)": "0 of 0",
         "Present Dates": statusDates.P.join(", "),
         "Absent Dates": statusDates.A.join(", "),
         "Half Day Dates": statusDates.HD.join(", "),
@@ -811,8 +860,6 @@ async function getRows(
         let attendanceDeductionTotal = 0;
         let notMarkedDeductionTotal = 0;
         let allowanceConsumedTotal = 0;
-        let hasLiveCalculation = false;
-        let hasSavedPayroll = false;
         for (const [month, monthDayCounts] of monthCounts) {
           const { daysInMonth } = getMonthDates(month);
           const saved = payrollByEmployeeMonth.get(
@@ -847,10 +894,8 @@ async function getRows(
             attendanceDeductionTotal += Number(saved.calculation.attendanceDeduction ?? 0);
             notMarkedDeductionTotal += Number(saved.calculation.notMarkedDeduction ?? 0);
             allowanceConsumedTotal += Number(saved.calculation.allowanceConsumed ?? 0);
-            hasSavedPayroll = true;
             continue;
           }
-          hasLiveCalculation = true;
           const advanceAmount = (advancesByEmployee.get(
             employee._id.toHexString(),
           ) ?? [])
@@ -960,12 +1005,20 @@ async function getRows(
         result["Chargeable Days"] = chargeableDaysTotal;
         result["Attendance Deduction INR"] = attendanceDeductionTotal;
         result["Not Marked Deduction INR"] = notMarkedDeductionTotal;
-        result["Allowance Consumed"] =
+        result["Used / Allowed (Days)"] =
           `${allowanceConsumedTotal} of ${allowedWeekOffTotal}`;
         result["Fixed Monthly Salary INR"] = employee.monthlyBaseSalary;
         result["Salary per Paid Day INR"] = dailyRate;
         result["Paid Attendance Days"] = payableDayUnits;
         result["Attendance Salary Before Deductions INR"] = grossEarnings;
+        const employeeAdvances =
+          advancesByEmployee.get(employee._id.toHexString()) ?? [];
+        result["Advance Details (Date / Amount INR)"] =
+          formatAdvanceDetails(employeeAdvances);
+        result["Total Advances INR"] = employeeAdvances.reduce(
+          (sum, advance) => sum + advance.amount,
+          0,
+        );
         result["Advance Deduction INR"] = advanceDeduction;
         result["Employee ESI INR"] = employeeEsi;
         result["Employee PF INR"] = employeePf;
@@ -978,11 +1031,6 @@ async function getRows(
         result["Total Uniform Deduction INR"] = uniformSummary.total;
         result["Remaining Uniform Balance INR"] = uniformSummary.remaining;
         result["Net Payable INR"] = netPayable;
-        result["Payable Type"] = hasLiveCalculation
-          ? "Live accrued · submitted days"
-          : hasSavedPayroll
-            ? "Payroll record"
-            : "No submitted attendance";
       }
       return result;
     }));
@@ -1108,13 +1156,15 @@ async function getRows(
           "Chargeable Days": Number(record.calculation.chargeableDays ?? 0),
           "Attendance Deduction INR": Number(record.calculation.attendanceDeduction ?? 0),
           "Not Marked Deduction INR": Number(record.calculation.notMarkedDeduction ?? 0),
-          "Allowance Consumed": `${Number(record.calculation.allowanceConsumed ?? 0)} of ${Number(record.calculation.allowedWeekOff ?? 3)}`,
+          "Used / Allowed (Days)": `${Number(record.calculation.allowanceConsumed ?? 0)} of ${Number(record.calculation.allowedWeekOff ?? 3)}`,
           "Monthly base salary INR": employee?.monthlyBaseSalary ?? 0,
           "Gross INR": Number(record.calculation.grossEarnings ?? 0),
-          "Advances INR": Number(record.calculation.advances ?? 0),
-          "Advance Approval Details (Date / Amount INR)": formatAdvanceApprovalDetails(
-            advancesByPayrollRecord.get(record._id.toHexString()) ?? [],
+          "Advance Details (Date / Amount INR)": formatAdvanceDetails(
+            (advancesByPayrollRecord.get(record._id.toHexString()) ?? []).map(
+              (advance) => ({ date: advance.date, amount: advance.amount }),
+            ),
           ),
+          "Total Advances INR": Number(record.calculation.advances ?? 0),
           "Employee ESI INR": Number(record.calculation.esi ?? 0),
           "Employee PF (deduction) INR": Number(
             record.calculation.employeePf ?? 0,
@@ -1158,17 +1208,17 @@ async function getRows(
             "Chargeable Days": "",
             "Attendance Deduction INR": "",
             "Not Marked Deduction INR": "",
-            "Allowance Consumed": "",
+            "Used / Allowed (Days)": "",
             "Monthly base salary INR": employee.monthlyBaseSalary,
             "Gross INR": "",
-            "Advances INR":
-              advancesByEmployee.get(employee._id.toHexString()) ?? 0,
-            "Advance Approval Details (Date / Amount INR)":
-              formatAdvanceApprovalDetails(
+            "Advance Details (Date / Amount INR)":
+              formatAdvanceDetails(
                 unclaimedAdvancesByEmployee.get(
                   employee._id.toHexString(),
                 ) ?? [],
               ),
+            "Total Advances INR":
+              advancesByEmployee.get(employee._id.toHexString()) ?? 0,
             "Employee ESI INR": 0,
             "Employee PF (deduction) INR": 0,
             "Employer PF (tracked) INR": 0,
@@ -1185,15 +1235,9 @@ async function getRows(
       .collection<AdvanceDocument>("advances")
       .find({
         outletId: outlet._id,
-        $or: [
-          { approvedDate: { $gte: from, $lte: to } },
-          {
-            approvedDate: { $exists: false },
-            date: { $gte: from, $lte: to },
-          },
-        ],
+        date: { $gte: from, $lte: to },
       })
-      .sort({ approvedDate: 1, date: 1 })
+      .sort({ date: 1, approvedDate: 1 })
       .toArray();
     return advances.map((advance) => ({
       Date: advance.date,
@@ -1207,6 +1251,7 @@ async function getRows(
       "Amount INR": advance.amount,
       "Given By": advance.givenBy,
       Reference: advance.reference,
+      Reason: advance.reason ?? advance.notes ?? "",
       Status: advance.status,
       "Payroll Claimed": advance.payrollRecordId ? "Yes" : "No",
     }));
@@ -1238,15 +1283,6 @@ function safeCell(value: unknown): string | number | boolean | null {
   const text = formatExportDates(String(value));
   // Formula injection se bachao
   return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
-}
-
-function formatAdvanceApprovalDetails(advances: AdvanceDocument[]) {
-  return advances
-    .map(
-      (advance) =>
-        `${advance.approvedDate ?? "Approval date unavailable"}: ${advance.amount.toFixed(2)} INR`,
-    )
-    .join("; ");
 }
 
 function csvCell(value: unknown): string {
@@ -1303,7 +1339,10 @@ function styleSheet(sheet: ExcelJS.Worksheet, isEmpty = false) {
       const length = value === null || value === undefined ? 0 : String(value).length;
       if (length > max) max = length;
     });
-    sheet.getColumn(c).width = Math.min(42, Math.max(14, max + 4));
+    const heading = String(headerRow.getCell(c).value ?? "");
+    sheet.getColumn(c).width = heading.includes("Advance Details")
+      ? Math.min(72, Math.max(32, max + 4))
+      : Math.min(42, Math.max(14, max + 4));
   }
 
   // Header
@@ -1331,6 +1370,7 @@ function styleSheet(sheet: ExcelJS.Worksheet, isEmpty = false) {
       row.height = 24;
       return;
     }
+    row.height = 22;
     for (let c = 1; c <= columnCount; c += 1) {
       const cell = row.getCell(c);
       const heading = headings[c - 1];
@@ -1342,7 +1382,7 @@ function styleSheet(sheet: ExcelJS.Worksheet, isEmpty = false) {
         if (heading.includes("INR")) cell.numFmt = '"₹"#,##0.00';
         else if (heading.includes("%")) cell.numFmt = "0.00";
       } else {
-        cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+        cell.alignment = { vertical: "middle", horizontal: "left", wrapText: false };
         const color = typeof cell.value === "string" ? STATUS_COLORS[cell.value] : undefined;
         if (color && /status/i.test(heading)) {
           cell.font = { bold: true, color: { argb: color.fg } };
@@ -1433,6 +1473,8 @@ function emptyHeaders(
         "Salary per Paid Day INR",
         "Paid Attendance Days",
         "Attendance Salary Before Deductions INR",
+        "Advance Details (Date / Amount INR)",
+        "Total Advances INR",
         "Advance Deduction INR",
         "Employee ESI INR",
         "Employee PF INR",
@@ -1443,7 +1485,6 @@ function emptyHeaders(
         "Total Uniform Deduction INR",
         "Remaining Uniform Balance INR",
         "Net Payable INR",
-        "Payable Type",
       );
     return headers;
   }
@@ -1459,8 +1500,8 @@ function emptyHeaders(
       "Days filled",
       "Monthly base salary INR",
       "Gross INR",
-      "Advances INR",
-      "Advance Approval Details (Date / Amount INR)",
+      "Advance Details (Date / Amount INR)",
+      "Total Advances INR",
       "Employee ESI INR",
       "Employee PF (deduction) INR",
       "Employer PF (tracked) INR",
@@ -1494,6 +1535,9 @@ function emptyHeaders(
       "Amount INR",
       "Given By",
       "Reference",
+      "Advance Details (Date / Amount INR)",
+      "Reason",
+      "Total Advances INR",
       "Status",
       "Payroll Claimed",
     ];

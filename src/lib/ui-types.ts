@@ -114,6 +114,7 @@ export interface AdvanceView {
   amount: number;
   givenBy: string;
   reference: string;
+  reason?: string;
   notes?: string;
   employeeName?: string;
   employeeCode?: string;
@@ -267,6 +268,8 @@ export interface EmployeeAttendanceReportRow {
   notMarkedDeduction?: number;
   allowanceConsumed?: number;
   advances?: number;
+  advanceDetails?: Array<{ date: string; amount: number }>;
+  totalAdvances?: number;
   esi?: number;
   employeePf?: number;
   employerPf?: number;
@@ -330,6 +333,7 @@ export interface WorkspaceData {
     netPayable?: number | null;
     approvedAdvancesPendingPayroll?: number | null;
     recordedLoanDeductions?: number | null;
+    liveLoanDeductions?: number | null;
     recordedPayrollGross?: number | null;
     recordedPayrollNet?: number | null;
   };

@@ -161,6 +161,7 @@ export interface AdvanceDocument {
   editCount?: number;
   givenBy: string;
   reference: string;
+  reason?: string;
   notes?: string;
   payrollRecordId?: ObjectId;
   createdBy: ObjectId;

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Download, LoaderCircle, Printer, Search, Trash2, X } from "lucide-react";
+import { RoundedSelect } from "@/components/rounded-select";
 import { UNIFORM_ITEMS, UNIFORM_ITEM_LABELS } from "@/lib/uniform-deductions";
 import type { UniformDeductionStatus, UniformItemKey } from "@/lib/models";
 import { clientRequestCache } from "@/lib/client-request-cache";
@@ -458,7 +459,7 @@ export function UniformDeductionPanel({
           <div className="uniform-selectors">
             <label className="field">
               <span>Outlet</span>
-              <select
+              <RoundedSelect
                 value={outletId}
                 onChange={(event) => {
                   setOutletId(event.target.value);
@@ -472,7 +473,7 @@ export function UniformDeductionPanel({
                     {outlet.code} · {outlet.name}
                   </option>
                 ))}
-              </select>
+              </RoundedSelect>
             </label>
             <label className="field uniform-employee-search">
               <span>Search employee by name, ID, or mobile</span>
@@ -593,7 +594,7 @@ export function UniformDeductionPanel({
         <div className="uniform-filters">
           <label className="field">
             <span>Outlet</span>
-            <select
+            <RoundedSelect
               value={reportOutletId}
               onChange={(event) => {
                 setPage(1);
@@ -607,7 +608,7 @@ export function UniformDeductionPanel({
                   {outlet.code} · {outlet.name}
                 </option>
               ))}
-            </select>
+            </RoundedSelect>
           </label>
           <label className="field">
             <span>Search employee</span>
@@ -622,7 +623,7 @@ export function UniformDeductionPanel({
           </label>
           <label className="field">
             <span>Employee</span>
-            <select
+            <RoundedSelect
               value={reportEmployeeId}
               onChange={(event) => {
                 setPage(1);
@@ -635,7 +636,7 @@ export function UniformDeductionPanel({
                   {employee.fullName} · {employee.employeeCode}
                 </option>
               ))}
-            </select>
+            </RoundedSelect>
           </label>
           <label className="field">
             <span>Month</span>
@@ -650,19 +651,19 @@ export function UniformDeductionPanel({
           </label>
           <label className="field">
             <span>Item</span>
-            <select value={itemFilter} onChange={(event) => { setPage(1); setItemFilter(event.target.value); }}>
+            <RoundedSelect value={itemFilter} onChange={(event) => { setPage(1); setItemFilter(event.target.value); }}>
               <option value="ALL">All items</option>
               {UNIFORM_ITEMS.map((item) => <option key={item} value={item}>{UNIFORM_ITEM_LABELS[item]}</option>)}
-            </select>
+            </RoundedSelect>
           </label>
           <label className="field">
             <span>Status</span>
-            <select value={statusFilter} onChange={(event) => { setPage(1); setStatusFilter(event.target.value); }}>
+            <RoundedSelect value={statusFilter} onChange={(event) => { setPage(1); setStatusFilter(event.target.value); }}>
               <option value="ALL">All statuses</option>
               <option value="SCHEDULED">Scheduled</option>
               <option value="APPLIED">Applied</option>
               <option value="CANCELLED">Cancelled</option>
-            </select>
+            </RoundedSelect>
           </label>
         </div>
         <div className="table-scroll uniform-table-scroll">

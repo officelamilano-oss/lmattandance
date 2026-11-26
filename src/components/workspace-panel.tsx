@@ -14,8 +14,8 @@
   import Image from "next/image";
   import dynamic from "next/dynamic";
   import { createPortal } from "react-dom";
+  import { RoundedSelect } from "@/components/rounded-select";
   import {
-    ArrowDownToLine,
     ArrowUpRight,
     Bell,
     Banknote,
@@ -269,6 +269,46 @@
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
   }
 
+  function formatReportDate(value: string) {
+    const [year, month, day] = value.split("-");
+    return year && month && day ? `${day}/${month}/${year}` : "";
+  }
+
+  function parseReportDate(value: string) {
+    const match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(value);
+    if (!match) return "";
+    const [, day, month, year] = match;
+    const dayNumber = Number(day);
+    const monthNumber = Number(month);
+    const yearNumber = Number(year);
+    const daysInMonth = [
+      31,
+      yearNumber % 4 === 0 &&
+      (yearNumber % 100 !== 0 || yearNumber % 400 === 0)
+        ? 29
+        : 28,
+      31,
+      30,
+      31,
+      30,
+      31,
+      31,
+      30,
+      31,
+      30,
+      31,
+    ];
+    if (
+      yearNumber < 1 ||
+      monthNumber < 1 ||
+      monthNumber > 12 ||
+      dayNumber < 1 ||
+      dayNumber > daysInMonth[monthNumber - 1]
+    )
+      return "";
+    return `${year}-${month}-${day}`;
+  }
+
   function PageHead({
     title,
     description,
@@ -413,7 +453,7 @@
     >("ALL");
     const [dashboardExportBusy, setDashboardExportBusy] =
       useState<ExportFormat | null>(null);
-    const [awayPeriod, setAwayPeriod] = useState("TODAY");
+    const [awayPeriod, setAwayPeriod] = useState("LAST_WEEK");
     const [awayFrom, setAwayFrom] = useState(() => `${getIndiaMonth()}-01`);
     const [awayTo, setAwayTo] = useState(() => getIndiaDate());
     const [search, setSearch] = useState("");
@@ -760,6 +800,10 @@
         setDashboardDate(today);
         return;
       }
+      if (value === "Yesterday") {
+        start.setUTCDate(start.getUTCDate() - 1);
+        end.setUTCDate(end.getUTCDate() - 1);
+      }
       if (value === "This Month") start.setUTCDate(1);
       if (value === "Last Month") {
         start.setUTCDate(1);
@@ -926,7 +970,7 @@
     }
 
     const outletSelect = (
-      <select
+      <RoundedSelect
         value={selectedOutlet}
         onChange={(event) => {
           setSelectedOutlet(event.target.value);
@@ -942,7 +986,7 @@
             {outlet.code} · {outlet.name}
           </option>
         ))}
-      </select>
+      </RoundedSelect>
     );
     const toolbar = (
       <div
@@ -951,7 +995,7 @@
         {outletSelect}
         {section === "dashboard" && (
           <>
-            <select
+            <RoundedSelect
               aria-label="Dashboard reporting period"
               value={dashboardPreset}
               onChange={(event) => applyDashboardPreset(event.target.value)}
@@ -959,8 +1003,9 @@
               <option>This Month</option>
               <option>Last Month</option>
               <option>Today</option>
+              <option>Yesterday</option>
               <option>Custom</option>
-            </select>
+            </RoundedSelect>
             {dashboardPreset === "Custom" && (
               <>
                 <input
@@ -1634,7 +1679,7 @@
                   </span>
                 ) : attendanceOutlets.length > 1 ? (
                   <div className="attendance-outlet-select">
-                    <select
+                    <RoundedSelect
                       value={selectedOutlet}
                       onChange={(event) => {
                         setSelectedOutlet(event.target.value);
@@ -1650,7 +1695,7 @@
                           {outlet.code} · {outlet.name}
                         </option>
                       ))}
-                    </select>
+                    </RoundedSelect>
                   </div>
                 ) : (
                   <span className="attendance-single-outlet">
@@ -2829,18 +2874,18 @@
                     </label>
                     <label className="field">
                       <span>Salary method</span>
-                      <select name="salaryMethod" defaultValue="FIXED_30_DAYS">
+                      <RoundedSelect name="salaryMethod" defaultValue="FIXED_30_DAYS">
                         <option value="FIXED_30_DAYS">Fixed 30 days</option>
                         <option value="CALENDAR_DAYS">Calendar days</option>
                         <option value="WORKING_DAYS_26">Working days (26)</option>
-                      </select>
+                      </RoundedSelect>
                     </label>
                     <label className="field">
                       <span>PF enabled</span>
-                      <select name="pfEnabled" defaultValue="false">
+                      <RoundedSelect name="pfEnabled" defaultValue="false">
                         <option value="false">No</option>
                         <option value="true">Yes</option>
-                      </select>
+                      </RoundedSelect>
                     </label>
                     <label className="field">
                       <span>Employee PF %</span>
@@ -2868,10 +2913,10 @@
                     </label>
                     <label className="field">
                       <span>ESI enabled</span>
-                      <select name="esiEnabled" defaultValue="false">
+                      <RoundedSelect name="esiEnabled" defaultValue="false">
                         <option value="false">No</option>
                         <option value="true">Yes</option>
-                      </select>
+                      </RoundedSelect>
                     </label>
                     <label className="field">
                       <span>Employee ESI %</span>
@@ -3064,7 +3109,7 @@
             </button>
             <label className="field advance-status-filter">
               <span>Filter advances</span>
-              <select
+              <RoundedSelect
                 value={advanceStatus}
                 onChange={(event) => {
                   setAdvanceStatus(
@@ -3081,7 +3126,7 @@
                 <option value="PENDING">Pending approval</option>
                 <option value="APPROVED">Approved</option>
                 <option value="REJECTED">Rejected</option>
-              </select>
+              </RoundedSelect>
             </label>
           </div>
           {isAdvanceFormOpen && (
@@ -3112,7 +3157,7 @@
                 >
                 <label className="field">
                   <span>Outlet</span>
-                  <select
+                  <RoundedSelect
                     name="outletId"
                     value={advanceOutletId}
                     onChange={(event) => {
@@ -3129,11 +3174,11 @@
                         {outlet.code} · {outlet.name}
                       </option>
                     ))}
-                  </select>
+                  </RoundedSelect>
                 </label>
                 <label className="field">
                   <span>Employee</span>
-                  <select
+                  <RoundedSelect
                     name="employeeId"
                     value={advanceEmployeeId}
                     onChange={(event) =>
@@ -3163,7 +3208,7 @@
                         )?.code ?? "Outlet"}
                       </option>
                       ))}
-                  </select>
+                  </RoundedSelect>
                 </label>
                 <Field
                   label="Date"
@@ -3191,7 +3236,7 @@
                   name="reference"
                   required
                 />
-                <Field label="Notes" name="notes" />
+                <Field label="Reason" name="reason" required />
                 <div className="form-actions">
                   <button
                     className="button button-primary"
@@ -3597,7 +3642,7 @@
             >
               <label className="field">
                 <span>Outlet</span>
-                <select
+                <RoundedSelect
                   name="outletId"
                   value={loanOutletId}
                   onChange={(event) => {
@@ -3612,11 +3657,11 @@
                       {outlet.code} · {outlet.name}
                     </option>
                   ))}
-                </select>
+                </RoundedSelect>
               </label>
               <label className="field">
                 <span>Employee</span>
-                <select
+                <RoundedSelect
                   name="employeeId"
                   value={loanEmployeeId}
                   onChange={(event) => {
@@ -3643,7 +3688,7 @@
                         )?.code ?? "Outlet"}
                       </option>
                     ))}
-                </select>
+                </RoundedSelect>
               </label>
               <label className="field">
                 <span>Original loan amount (INR)</span>
@@ -3659,7 +3704,7 @@
               </label>
               <label className="field">
                 <span>Repayment method</span>
-                <select
+                <RoundedSelect
                   name="repaymentMethod"
                   value={loanFormMethod}
                   onChange={(event) =>
@@ -3674,7 +3719,7 @@
                   <option value="FIXED_AMOUNT">Fixed monthly deduction</option>
                   <option value="FIXED_INSTALLMENTS">Fixed number of installments</option>
                   <option value="DATE_RANGE">Start and end month</option>
-                </select>
+                </RoundedSelect>
               </label>
               {loanFormMethod === "FIXED_AMOUNT" ? (
                 <label className="field">
@@ -3792,7 +3837,7 @@
             </label>
             <label className="field loan-status-filter">
               <span>Loan status</span>
-              <select
+              <RoundedSelect
                 aria-label="Filter loans by status"
                 value={loanStatusFilter}
                 onChange={(event) => {
@@ -3804,7 +3849,7 @@
                 <option value="ONGOING">Ongoing</option>
                 <option value="COMPLETED">Completed</option>
                 <option value="PAUSED">Paused</option>
-              </select>
+              </RoundedSelect>
             </label>
             <label className="field loan-search-filter">
               <span>Search</span>
@@ -3924,7 +3969,7 @@
                 currency(loan.monthlyDeductionAmount ?? 0),
                 loan.notes || "—",
                 <div key="actions" className="loan-row-actions">
-                  <select
+                  <RoundedSelect
                     className="loan-action-select"
                     aria-label={`Actions for ${loan.employeeName ?? loan.employeeCode}`}
                     value=""
@@ -3984,7 +4029,7 @@
                       <option value="REVERSE">Reverse posted installment</option>
                     )}
                     <option value="HISTORY">View repayment history</option>
-                  </select>
+                  </RoundedSelect>
                 </div>,
                 ])}
               empty="No loans recorded."
@@ -4066,14 +4111,14 @@
                   />
                   <label className="field">
                     <span>Repayment method</span>
-                    <select
+                    <RoundedSelect
                       name="repaymentMethod"
                       defaultValue={loanToEdit.repaymentMethod ?? "FIXED_AMOUNT"}
                     >
                       <option value="FIXED_AMOUNT">Fixed monthly deduction</option>
                       <option value="FIXED_INSTALLMENTS">Fixed number of installments</option>
                       <option value="DATE_RANGE">Start and end month</option>
-                    </select>
+                    </RoundedSelect>
                   </label>
                   <Field
                     id="loan-edit-installmentCount"
@@ -4267,7 +4312,7 @@
                 "Chargeable days",
                 "Attendance deduction",
                 "Not marked deduction",
-                "Allowance consumed",
+                "Used / allowed (days)",
                 "Gross",
                 "Advances",
                 "Uniform deduction",
@@ -4326,7 +4371,7 @@
                       <dd>{currency(record.calculation.attendanceDeduction ?? 0)}</dd>
                       <dt>Not marked deduction</dt>
                       <dd>{currency(record.calculation.notMarkedDeduction ?? 0)}</dd>
-                      <dt>Allowance consumed</dt>
+                      <dt>Used / allowed (days)</dt>
                       <dd>
                         {record.calculation.allowanceConsumed ?? 0} of{" "}
                         {record.calculation.allowedWeekOff ?? 3}
@@ -4611,10 +4656,10 @@
                 <Field label="Contact phone" name="contactPhone" />
                 <label className="field">
                   <span>Status</span>
-                  <select name="active" defaultValue="true">
+                  <RoundedSelect name="active" defaultValue="true">
                     <option value="true">Active</option>
                     <option value="false">Inactive</option>
-                  </select>
+                  </RoundedSelect>
                 </label>
                 <div className="form-actions">
                   <button
@@ -4700,7 +4745,7 @@
               </label>
               <label className="field">
                 <span>Access profile</span>
-                <select
+                <RoundedSelect
                   name="accessProfile"
                   value={newAccountProfile}
                   onChange={(event) => setNewAccountProfile(event.target.value)}
@@ -4716,12 +4761,12 @@
                       Designation · {designation.name}
                     </option>
                   ))}
-                </select>
+                </RoundedSelect>
               </label>
               {newAccountProfile !== "MAIN_ADMIN" && (
                 <label className="field">
                   <span>Assigned outlet · choose one</span>
-                  <select name="outletIds" required>
+                  <RoundedSelect name="outletIds" required>
                     <option value="">Select outlet</option>
                     {activeOutlets.map((outlet) => (
                       <option key={outlet._id} value={outlet._id}>
@@ -4729,7 +4774,7 @@
                       </option>
                     ))}
                     <option value="__ALL_OUTLETS__">All outlets</option>
-                  </select>
+                  </RoundedSelect>
                 </label>
               )}
               {newAccountProfile.startsWith("designation:") && (
@@ -4889,7 +4934,7 @@
         amount: Number(values.get("amount")),
         givenBy: values.get("givenBy"),
         reference: values.get("reference"),
-        notes: values.get("notes"),
+        reason: values.get("reason"),
       });
       if (saved) setIsOpen(false);
     }
@@ -4962,8 +5007,14 @@
                   <input name="reference" defaultValue={item.reference} required />
                 </label>
                 <label className="field">
-                  <span>Notes</span>
-                  <input name="notes" defaultValue={item.notes ?? ""} />
+                  <span>Reason</span>
+                  <input
+                    name="reason"
+                    defaultValue={item.reason ?? item.notes ?? ""}
+                    minLength={2}
+                    maxLength={1000}
+                    required
+                  />
                 </label>
                 <button className="button button-primary" disabled={busy}>
                   Save advance
@@ -5242,14 +5293,14 @@
                 >
                   <label className="field">
                     <span>Adjustment</span>
-                    <select
+                    <RoundedSelect
                       value={adjustmentKind}
                       onChange={(event) => setAdjustmentKind(event.target.value)}
                     >
                       <option value="OVERTIME">Overtime</option>
                       <option value="ALLOWANCE">Allowance</option>
                       <option value="DEDUCTION">Deduction</option>
-                    </select>
+                    </RoundedSelect>
                   </label>
                   <label className="field">
                     <span>Label</span>
@@ -5678,6 +5729,10 @@
     if (period === "ALL_TIME") return { from: "0001-01-01", to: today };
     const end = new Date(`${today}T00:00:00.000Z`);
     const start = new Date(end);
+    if (period === "YESTERDAY") {
+      start.setUTCDate(start.getUTCDate() - 1);
+      end.setUTCDate(end.getUTCDate() - 1);
+    }
     if (period === "THIS_MONTH") start.setUTCDate(1);
     if (period === "LAST_WEEK") start.setUTCDate(start.getUTCDate() - 6);
     if (period === "LAST_MONTH") {
@@ -6117,6 +6172,27 @@
     onCustomToChange: (value: string) => void;
     onExport: (format: ExportFormat) => void;
   }) {
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState<number | "all">(10);
+    const pageCount =
+      pageSize === "all"
+        ? 1
+        : Math.max(1, Math.ceil(employees.length / pageSize));
+    const currentPage = Math.min(page, pageCount);
+    const visibleEmployees =
+      pageSize === "all"
+        ? employees
+        : employees.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+    const firstItem = employees.length
+      ? (currentPage - 1) *
+          (pageSize === "all" ? employees.length : pageSize) +
+        1
+      : 0;
+    const lastItem =
+      pageSize === "all"
+        ? employees.length
+        : Math.min(currentPage * pageSize, employees.length);
+
     return (
       <section className="panel">
         <div className="panel-heading">
@@ -6127,18 +6203,22 @@
           <div className="toolbar">
             <label className="field">
             <span>Range</span>
-              <select
+              <RoundedSelect
                 aria-label="Attendance date range"
                 value={period}
-                onChange={(event) => onPeriodChange(event.target.value)}
+                onChange={(event) => {
+                  setPage(1);
+                  onPeriodChange(event.target.value);
+                }}
               >
                 <option value="TODAY">Today</option>
+                <option value="YESTERDAY">Yesterday</option>
                 <option value="THIS_MONTH">This month</option>
                 <option value="LAST_WEEK">Last 7 days</option>
                 <option value="LAST_MONTH">Last month</option>
                 <option value="ALL_TIME">All time</option>
                 <option value="CUSTOM">Custom range</option>
-              </select>
+              </RoundedSelect>
             </label>
             {period === "CUSTOM" && (
               <>
@@ -6146,13 +6226,19 @@
                   aria-label="Attendance start date"
                   type="date"
                   value={customFrom}
-                  onChange={(event) => onCustomFromChange(event.target.value)}
+                  onChange={(event) => {
+                    setPage(1);
+                    onCustomFromChange(event.target.value);
+                  }}
                 />
                 <input
                   aria-label="Attendance end date"
                   type="date"
                   value={customTo}
-                  onChange={(event) => onCustomToChange(event.target.value)}
+                  onChange={(event) => {
+                    setPage(1);
+                    onCustomToChange(event.target.value);
+                  }}
                 />
               </>
             )}
@@ -6192,7 +6278,7 @@
               </tr>
             </thead>
             <tbody>
-              {employees.map((employee) => (
+              {visibleEmployees.map((employee) => (
                 <tr key={`${employee.employeeId}-${employee.date}`}>
                   <td>
                     <strong>{employee.employeeName}</strong>
@@ -6215,6 +6301,54 @@
             <Empty>No submitted absent or half-day records for this range.</Empty>
           )}
         </div>
+        {employees.length > 0 && (
+          <div className="panel-footer dashboard-table-pagination">
+            <span>
+              Showing {firstItem}–{lastItem} of {employees.length} employees
+            </span>
+            <div className="pagination table-pagination-controls">
+              <label className="table-page-size">
+                Rows per page
+                <RoundedSelect
+                  aria-label="Who’s Away rows per page"
+                  value={pageSize}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setPageSize(value === "all" ? "all" : Number(value));
+                    setPage(1);
+                  }}
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                  <option value="all">All</option>
+                </RoundedSelect>
+              </label>
+              <button
+                className="icon-button"
+                aria-label="Previous page"
+                title="Previous page"
+                disabled={currentPage <= 1}
+                onClick={() => setPage(currentPage - 1)}
+              >
+                <ChevronLeft size={17} />
+              </button>
+              <span>
+                {currentPage} / {pageCount}
+              </span>
+              <button
+                className="icon-button"
+                aria-label="Next page"
+                title="Next page"
+                disabled={currentPage >= pageCount}
+                onClick={() => setPage(currentPage + 1)}
+              >
+                <ChevronRight size={17} />
+              </button>
+            </div>
+          </div>
+        )}
       </section>
     );
   }
@@ -6350,11 +6484,16 @@
                   : rate >= 75
                     ? "mid"
                     : "low";
+            const tooltip =
+              rate === null
+                ? `${formatDate(day.date)} · ${WO ? "Week off / no attendance marks" : "No attendance data"}`
+                : `${formatDate(day.date)} · ${rate.toFixed(1)}% attendance · P ${P}, A ${A}, HD ${HD}, WO ${WO}`;
             return (
               <span
                 key={day.date}
                 className={`dashboard-heatmap-day heatmap-${tone}`}
-                title={`${formatDate(day.date)} · ${rate === null ? (WO ? "Week off / no attendance marks" : "No attendance data") : `${rate.toFixed(1)}% attendance · P ${P}, A ${A}, HD ${HD}, WO ${WO}`}`}
+                title={tooltip}
+                aria-label={tooltip}
               >
                 {new Date(`${day.date}T00:00:00Z`).getUTCDate()}
               </span>
@@ -6471,6 +6610,10 @@
     accrualDate: string;
   }) {
     const net = metrics?.netPayable ?? 0;
+    const hasGeneratedPayroll = (metrics?.payrollCount ?? 0) > 0;
+    const loanDeductions = hasGeneratedPayroll
+      ? (metrics?.recordedLoanDeductions ?? 0)
+      : (metrics?.liveLoanDeductions ?? 0);
     const periodStart = `${accrualDate.slice(0, 7)}-01`;
     return (
       <section className="panel dashboard-payroll-panel">
@@ -6487,13 +6630,13 @@
           ) : (
             <>
               <div className="dashboard-payroll-values">
-                <div><span>Approved advances</span><strong>{metrics.approvedAdvancesPendingPayroll == null ? "—" : currency(metrics.approvedAdvancesPendingPayroll)}</strong><small>Approved this month</small></div>
-                <div><span>Loan deductions in generated payroll</span><strong>{metrics.payrollCount ? currency(metrics.recordedLoanDeductions ?? 0) : "No payroll records"}</strong></div>
-                <div><span>Net payroll · all employees</span><strong className="payroll-value-net">{currency(net)}</strong><small>After attendance and deductions through {formatDate(accrualDate)}</small></div>
-                <div><span>Average net / active employee</span><strong>{employeeCount ? currency(net / employeeCount) : currency(0)}</strong><small>Current month-to-date amount</small></div>
+                <div><span>Approved advances</span><strong className="payroll-value-highlight">{metrics.approvedAdvancesPendingPayroll == null ? "—" : currency(metrics.approvedAdvancesPendingPayroll)}</strong><small>Approved this month</small></div>
+                <div><span>{hasGeneratedPayroll ? "Loan deductions in generated payroll" : "Scheduled loan deductions this month"}</span><strong className="payroll-value-highlight">{currency(loanDeductions)}</strong></div>
+                <div><span>Net payroll · all employees</span><strong className="payroll-value-net payroll-value-highlight">{currency(net)}</strong><small>After attendance and deductions through {formatDate(accrualDate)}</small></div>
+                <div><span>Average net / active employee</span><strong className="payroll-value-highlight">{employeeCount ? currency(net / employeeCount) : currency(0)}</strong><small>Current month-to-date amount</small></div>
               </div>
               <p className="dashboard-payroll-note">
-                Net payroll uses submitted attendance and current payroll rules, including approved advances and configured deductions. The loan figure above is from generated payroll records.
+                Net payroll uses submitted attendance and current payroll rules, including approved advances and configured deductions. Loan deductions show generated payroll totals when available, otherwise this month’s scheduled installments.
               </p>
             </>
           )}
@@ -6623,7 +6766,7 @@
             {onPageSizeChange && (
               <label className="table-page-size">
                 Rows per page
-                <select
+                <RoundedSelect
                   aria-label="Rows per page"
                   value={pageSize}
                   onChange={(event) =>
@@ -6640,7 +6783,7 @@
                     </option>
                   ))}
                   <option value="all">All</option>
-                </select>
+                </RoundedSelect>
               </label>
             )}
             <button
@@ -6695,7 +6838,7 @@
         <div className="pagination table-pagination-controls">
           <label className="table-page-size">
             Rows per page
-            <select
+            <RoundedSelect
               aria-label="Rows per page"
               value={pageSize}
               onChange={(event) => onPageSizeChange(Number(event.target.value))}
@@ -6705,7 +6848,7 @@
                   {size}
                 </option>
               ))}
-            </select>
+            </RoundedSelect>
           </label>
           <button
             className="icon-button"
@@ -6911,7 +7054,7 @@
               <>
                 <label className="field">
                   <span>Closure type</span>
-                  <select
+                  <RoundedSelect
                     name="closureType"
                     value={closureType}
                     onChange={(event) => setClosureType(event.target.value)}
@@ -6921,7 +7064,7 @@
                     </option>
                     <option value="WRITE_OFF">Waived / written off</option>
                     <option value="OTHER">Other approved closure</option>
-                  </select>
+                  </RoundedSelect>
                 </label>
                 {loan.outstandingAmount > 0 &&
                   closureType === "EXTERNAL_SETTLEMENT" && (
@@ -6957,12 +7100,12 @@
               <>
                 <label className="field">
                   <span>Balance change</span>
-                  <select name="direction" defaultValue="REDUCE">
+                  <RoundedSelect name="direction" defaultValue="REDUCE">
                     <option value="REDUCE">Reduce balance</option>
                     <option value="INCREASE">
                       Increase (additional disbursement)
                     </option>
-                  </select>
+                  </RoundedSelect>
                 </label>
                 <label className="field">
                   <span>Adjustment amount (INR)</span>
@@ -7523,7 +7666,7 @@
                       <small className="ol-saving">Saving...</small>
                     )}
                   </span>
-                  <select
+                  <RoundedSelect
                     value={weeklyOffCount}
                     onChange={(event) =>
                       scheduleWeekOffSave(Number(event.target.value))
@@ -7535,7 +7678,7 @@
                         {count}
                       </option>
                     ))}
-                  </select>
+                  </RoundedSelect>
                 </label>
               </div>
               <div className="ol-foot">
@@ -7712,7 +7855,7 @@
           <div className="designation-picker">
             <label className="field">
               <span>Edit a designation</span>
-              <select
+              <RoundedSelect
                 value={editingId}
                 onChange={(event) => beginEdit(event.target.value)}
                 aria-label="Choose a designation to edit"
@@ -7723,7 +7866,7 @@
                     {item.name} · {item.assignedCount ?? 0} assigned account(s)
                   </option>
                 ))}
-              </select>
+              </RoundedSelect>
             </label>
             <small>
               Select a designation to edit its permissions or remove it.
@@ -7930,7 +8073,7 @@
             <div className="access-edit-body">
           <label className="field">
             <span>Role</span>
-            <select
+            <RoundedSelect
               value={selectedRoleValue}
               onChange={(event) => {
                 const nextValue = event.target.value;
@@ -7965,11 +8108,11 @@
                   Designation · {designation.name}
                 </option>
               ))}
-            </select>
+            </RoundedSelect>
           </label>
           <label className="field">
             <span>Assigned outlets</span>
-            <select
+            <RoundedSelect
               multiple
               size={3}
               value={outletIds}
@@ -7989,7 +8132,7 @@
                   {outlet.code} · {outlet.name}
                 </option>
                 ))}
-            </select>
+            </RoundedSelect>
           </label>
           {designationId && (
             <small>
@@ -8413,7 +8556,7 @@
           </div>
           {hasLocalFilters && (
           <div className="toolbar dashboard-report-toolbar">
-            <select
+            <RoundedSelect
               aria-label="Attendance report outlet"
               value={localOutletId}
               onChange={(event) => {
@@ -8428,8 +8571,8 @@
                   {outlet.code} · {outlet.name}
                 </option>
               ))}
-            </select>
-            <select
+            </RoundedSelect>
+            <RoundedSelect
               aria-label="Attendance report employee"
               value={localEmployeeId}
               onChange={(event) => {
@@ -8448,7 +8591,7 @@
                     {employee.code} · {employee.name}
                   </option>
                 ))}
-            </select>
+            </RoundedSelect>
             <input
               type="date"
               aria-label="Attendance report from date"
@@ -8545,15 +8688,17 @@
                     <th rowSpan={2}>Chargeable days</th>
                     <th rowSpan={2}>Attendance deduction</th>
                     <th rowSpan={2}>Not marked deduction</th>
-                    <th rowSpan={2}>Allowance consumed</th>
+                    <th rowSpan={2}>Used / allowed (days)</th>
                     <th rowSpan={2}>Fixed salary</th>
-                    <th rowSpan={2}>Advances</th>
+                    <th rowSpan={2}>Advance details</th>
+                    <th rowSpan={2}>Total advances</th>
                     <th rowSpan={2}>Employee ESI</th>
                     <th rowSpan={2}>Employee PF</th>
                     <th rowSpan={2}>Employer PF</th>
                     <th rowSpan={2}>Original loan</th>
                     <th rowSpan={2}>Remaining balance</th>
                     <th rowSpan={2}>Monthly deduction</th>
+                    <th rowSpan={2}>Loan deduction</th>
                     <th colSpan={uniformItems.length + 2}>
                       Uniform Deduction
                     </th>
@@ -8682,7 +8827,29 @@
                   {canReadSalary && (
                     <td>{currency(row.monthlyBaseSalary ?? 0)}</td>
                   )}
-                  {canReadSalary && <td>{currency(row.advances ?? 0)}</td>}
+                  {canReadSalary && (
+                    <>
+                      <td>
+                        <span
+                          className="report-advance-details"
+                          title={(row.advanceDetails ?? [])
+                            .map(
+                              (advance) =>
+                                `${formatDate(advance.date)}: ${currency(advance.amount)}`,
+                            )
+                            .join(", ")}
+                        >
+                          {(row.advanceDetails ?? [])
+                            .map(
+                              (advance) =>
+                                `${formatDate(advance.date)}: ${currency(advance.amount)}`,
+                            )
+                            .join(", ") || "—"}
+                        </span>
+                      </td>
+                      <td>{currency(row.totalAdvances ?? 0)}</td>
+                    </>
+                  )}
                   {canReadSalary && <td>{currency(row.esi ?? 0)}</td>}
                   {canReadSalary && (
                     <td>{currency(row.employeePf ?? 0)}</td>
@@ -8699,6 +8866,9 @@
                   {canReadSalary && (
                     <td>{currency(row.monthlyLoanDeduction ?? 0)}</td>
                   )}
+                  {canReadSalary && (
+                    <td>{currency(row.loanDeduction ?? 0)}</td>
+                  )}
                   {canReadSalary &&
                     uniformItems.map((item) => (
                       <td key={item.key}>
@@ -8714,7 +8884,17 @@
                   {canReadSalary && (
                     <td>
                       {currency(row.payableAmount ?? 0)}
-                      <span className="sub-cell">{row.payableLabel}</span>
+                      <span className="sub-cell">
+                        {row.payableLabel
+                          ?.replace(
+                            /^Live accrued\s*·\s*submitted days/i,
+                            "Submitted days",
+                          )
+                          .replace(
+                            /\b(\d{4})-(\d{2})-(\d{2})\b/g,
+                            "$3/$2/$1",
+                          )}
+                      </span>
                     </td>
                   )}
                 </tr>
@@ -8743,13 +8923,15 @@
                       {sum((row) => row.allowedWeekOff ?? 0)}
                     </td>
                     <td>{currency(sum((row) => row.monthlyBaseSalary ?? 0))}</td>
-                    <td>{currency(sum((row) => row.advances ?? 0))}</td>
+                    <td />
+                    <td>{currency(sum((row) => row.totalAdvances ?? 0))}</td>
                     <td>{currency(sum((row) => row.esi ?? 0))}</td>
                     <td>{currency(sum((row) => row.employeePf ?? 0))}</td>
                     <td>{currency(sum((row) => row.employerPf ?? 0))}</td>
                     <td>{currency(sum((row) => row.originalLoanAmount ?? 0))}</td>
                     <td>{currency(sum((row) => row.remainingLoanBalance ?? 0))}</td>
                     <td>{currency(sum((row) => row.monthlyLoanDeduction ?? 0))}</td>
+                    <td>{currency(sum((row) => row.loanDeduction ?? 0))}</td>
                     {uniformItems.map((item) => (
                       <td key={item.key}>
                         {currency(
@@ -8812,6 +8994,7 @@
     enabled: boolean;
   }) {
     const [kind, setKind] = useState("attendance");
+    const outletPickerRef = useRef<HTMLDetailsElement>(null);
     const [outletSelection, setOutletSelection] = useState<string[] | null>(
       null,
     );
@@ -8838,10 +9021,43 @@
     const monthStart = `${today.slice(0, 7)}-01`;
     const [from, setFrom] = useState(monthStart);
     const [to, setTo] = useState(today);
+    const [fromInput, setFromInput] = useState(() =>
+      formatReportDate(monthStart),
+    );
+    const [toInput, setToInput] = useState(() => formatReportDate(today));
+    const fromDatePickerRef = useRef<HTMLInputElement>(null);
+    const toDatePickerRef = useRef<HTMLInputElement>(null);
     const [preset, setPreset] = useState("This Month");
     const [busy, setBusy] = useState<ExportFormat | null>(null);
     const [error, setError] = useState("");
     const [employeeId, setEmployeeId] = useState("");
+    const dateInputError =
+      !parseReportDate(fromInput) || !parseReportDate(toInput)
+        ? "Enter dates in DD/MM/YYYY format."
+        : "";
+    useEffect(() => {
+      function closeOutletPicker(event: PointerEvent) {
+        const picker = outletPickerRef.current;
+        if (
+          picker &&
+          event.target instanceof Node &&
+          !picker.contains(event.target)
+        )
+          picker.open = false;
+      }
+
+      function handleEscape(event: KeyboardEvent) {
+        if (event.key === "Escape" && outletPickerRef.current?.open)
+          outletPickerRef.current.open = false;
+      }
+
+      document.addEventListener("pointerdown", closeOutletPicker);
+      document.addEventListener("keydown", handleEscape);
+      return () => {
+        document.removeEventListener("pointerdown", closeOutletPicker);
+        document.removeEventListener("keydown", handleEscape);
+      };
+    }, []);
     const employeeReport = useEmployeeAttendanceReport({
       enabled:
         enabled && kind === "attendance" && selectedOutletIds.length > 0,
@@ -8870,8 +9086,14 @@
       }
       setFrom(start.toISOString().slice(0, 10));
       setTo(end.toISOString().slice(0, 10));
+      setFromInput(formatReportDate(start.toISOString().slice(0, 10)));
+      setToInput(formatReportDate(end.toISOString().slice(0, 10)));
     }
     async function exportFile(format: ExportFormat) {
+      if (dateInputError) {
+        setError(dateInputError);
+        return;
+      }
       if (selectedOutletIds.length === 0) {
         setError("Select at least one outlet to export.");
         return;
@@ -8903,20 +9125,21 @@
           description="Export permission-checked reports to Excel, CSV, or PDF."
         />
         <Notice
-          error={error || (kind === "attendance" ? employeeReport.error : "")}
+          error={
+            error ||
+            dateInputError ||
+            (kind === "attendance" ? employeeReport.error : "")
+          }
           success=""
           refreshing={
             kind === "attendance" && employeeReport.isFetching
           }
         />
         <section className="panel report-panel">
-          <div className="report-icon">
-            <ArrowDownToLine size={22} />
-          </div>
-          <div className="form-grid">
+          <div className="form-grid report-filter-grid">
             <label className="field">
               <span>Date range</span>
-              <select
+              <RoundedSelect
                 value={preset}
                 onChange={(event) => applyPreset(event.target.value)}
               >
@@ -8931,11 +9154,11 @@
                 ].map((value) => (
                   <option key={value}>{value}</option>
                 ))}
-              </select>
+              </RoundedSelect>
             </label>
             <label className="field">
               <span>Report</span>
-              <select
+              <RoundedSelect
                 value={kind}
                 onChange={(event) => setKind(event.target.value)}
               >
@@ -8944,11 +9167,14 @@
                 <option value="employees">Employee list</option>
                 <option value="advances">Advances</option>
                 <option value="audit">Audit log</option>
-              </select>
+              </RoundedSelect>
             </label>
             <div className="field report-outlet-filter">
               <span>Outlet</span>
-              <details className="report-outlet-picker">
+              <details
+                ref={outletPickerRef}
+                className="report-outlet-picker"
+              >
                 <summary className="report-outlet-trigger">
                   <span>{outletFilterLabel}</span>
                   <ChevronDown size={16} aria-hidden="true" />
@@ -9007,7 +9233,7 @@
             {kind === "attendance" && (
               <label className="field">
                 <span>Employee</span>
-                <select
+                <RoundedSelect
                   value={employeeId}
                   onChange={(event) => setEmployeeId(event.target.value)}
                 >
@@ -9017,38 +9243,92 @@
                       {employee.code} · {employee.name}
                     </option>
                   ))}
-                </select>
+                </RoundedSelect>
               </label>
             )}
+          </div>
+          <div className="report-date-export-row">
             <label className="field">
               <span>From</span>
-              <input
-                type="date"
-                value={from}
-                onChange={(event) => {
-                  setPreset("Custom");
-                  setFrom(event.target.value);
-                }}
-              />
+              <div className="report-date-control">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="DD/MM/YYYY"
+                  aria-label="From date (DD/MM/YYYY)"
+                  value={fromInput}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setFromInput(value);
+                    setPreset("Custom");
+                    const parsed = parseReportDate(value);
+                    if (parsed) setFrom(parsed);
+                  }}
+                  aria-invalid={Boolean(fromInput && !parseReportDate(fromInput))}
+                />
+                <CalendarDays
+                  className="report-date-icon"
+                  size={16}
+                  aria-hidden="true"
+                />
+                <input
+                  ref={fromDatePickerRef}
+                  className="report-date-picker-native"
+                  type="date"
+                  aria-label="Choose from date"
+                  value={from}
+                  onChange={(event) => {
+                    setPreset("Custom");
+                    setFrom(event.target.value);
+                    setFromInput(formatReportDate(event.target.value));
+                  }}
+                />
+              </div>
             </label>
             <label className="field">
               <span>To</span>
-              <input
-                type="date"
-                value={to}
-                onChange={(event) => {
-                  setPreset("Custom");
-                  setTo(event.target.value);
-                }}
-              />
+              <div className="report-date-control">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="DD/MM/YYYY"
+                  aria-label="To date (DD/MM/YYYY)"
+                  value={toInput}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setToInput(value);
+                    setPreset("Custom");
+                    const parsed = parseReportDate(value);
+                    if (parsed) setTo(parsed);
+                  }}
+                  aria-invalid={Boolean(toInput && !parseReportDate(toInput))}
+                />
+                <CalendarDays
+                  className="report-date-icon"
+                  size={16}
+                  aria-hidden="true"
+                />
+                <input
+                  ref={toDatePickerRef}
+                  className="report-date-picker-native"
+                  type="date"
+                  aria-label="Choose to date"
+                  value={to}
+                  onChange={(event) => {
+                    setPreset("Custom");
+                    setTo(event.target.value);
+                    setToInput(formatReportDate(event.target.value));
+                  }}
+                />
+              </div>
             </label>
-          </div>
-          <div className="toolbar">
+            <div className="toolbar">
             <button
               className="button button-primary"
               aria-label="Export Excel workbook"
               disabled={
                 busy !== null ||
+                Boolean(dateInputError) ||
                 from > to ||
                 selectedOutletIds.length === 0 ||
                 (kind === "attendance" && employeeReport.isFetching)
@@ -9067,6 +9347,7 @@
               aria-label="Export CSV file"
               disabled={
                 busy !== null ||
+                Boolean(dateInputError) ||
                 from > to ||
                 selectedOutletIds.length === 0 ||
                 (kind === "attendance" && employeeReport.isFetching)
@@ -9087,6 +9368,7 @@
                 aria-label="Print attendance report or save as PDF"
                 disabled={
                   from > to ||
+                  Boolean(dateInputError) ||
                   selectedOutletIds.length === 0 ||
                   employeeReport.isFetching
                 }
@@ -9096,6 +9378,7 @@
                 Print / PDF
               </button>
             )}
+            </div>
           </div>
         </section>
         {kind === "attendance" && (

@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from "react";
 import Image from "next/image";
+import { RoundedSelect } from "@/components/rounded-select";
 import { Check, Download, FileText, LoaderCircle, Plus, X } from "lucide-react";
 import type { UserRole } from "@/lib/models";
 import type { DashboardOutlet } from "@/lib/ui-types";
@@ -1143,7 +1144,7 @@ export function EmployeeCreatePanel({
                 ) : (
                   <label className="field">
                     <span>Outlet</span>
-                    <select
+                    <RoundedSelect
                       name="outletId"
                       value={outletId}
                       onChange={(event) => {
@@ -1164,7 +1165,7 @@ export function EmployeeCreatePanel({
                             {outlet.code} · {outlet.name}
                           </option>
                         ))}
-                    </select>
+                    </RoundedSelect>
                   </label>
                 )}
                 <label className="field">
@@ -1203,7 +1204,7 @@ export function EmployeeCreatePanel({
                 )}
                 <label className="field">
                   <span>Gender</span>
-                  <select
+                  <RoundedSelect
                     name="gender"
                     defaultValue={pendingFormValue("gender")}
                     required={isOutletUser}
@@ -1211,11 +1212,11 @@ export function EmployeeCreatePanel({
                     <option value="">Select gender</option>
                     <option value="MALE">Male</option>
                     <option value="FEMALE">Female</option>
-                  </select>
+                  </RoundedSelect>
                 </label>
                 <label className="field">
                   <span>Designation</span>
-                  <select
+                  <RoundedSelect
                     name="designationKey"
                     value={designationKey}
                     onChange={(event) => {
@@ -1236,7 +1237,7 @@ export function EmployeeCreatePanel({
                         {designation.label}
                       </option>
                     ))}
-                  </select>
+                  </RoundedSelect>
                   <input
                     type="hidden"
                     name="designation"
@@ -1258,7 +1259,7 @@ export function EmployeeCreatePanel({
                 </label>
                 <label className="field">
                   <span>Employment type</span>
-                  <select
+                  <RoundedSelect
                     name="employmentType"
                     defaultValue={
                       pendingFormValue("employmentType") ||
@@ -1268,7 +1269,7 @@ export function EmployeeCreatePanel({
                   >
                     <option value="FULL_TIME">Full-time</option>
                     <option value="PART_TIME">Part-time</option>
-                  </select>
+                  </RoundedSelect>
                 </label>
                 <label className="field">
                   <span>Mobile (optional)</span>
@@ -1291,10 +1292,10 @@ export function EmployeeCreatePanel({
                     <input type="hidden" name="salaryMethod" value="FIXED_30_DAYS" />
                     <label className="field">
                       <span>PF enabled</span>
-                      <select name="pfEnabled" defaultValue="false">
+                      <RoundedSelect name="pfEnabled" defaultValue="false">
                         <option value="false">No</option>
                         <option value="true">Yes</option>
-                      </select>
+                      </RoundedSelect>
                     </label>
                     <label className="field">
                       <span>Employee PF %</span>
@@ -1308,10 +1309,10 @@ export function EmployeeCreatePanel({
                     </label>
                     <label className="field">
                       <span>ESI enabled</span>
-                      <select name="esiEnabled" defaultValue="false">
+                      <RoundedSelect name="esiEnabled" defaultValue="false">
                         <option value="false">No</option>
                         <option value="true">Yes</option>
-                      </select>
+                      </RoundedSelect>
                     </label>
                     <label className="field">
                       <span>Employee ESI %</span>
@@ -1600,7 +1601,7 @@ export function EmployeeCreatePanel({
                                     {(upload.file.size / (1024 * 1024)).toFixed(2)} MB
                                   </span>
                                 )}
-                                <select
+                                <RoundedSelect
                                   aria-label={`Document type for ${upload.file.name}`}
                                   value={upload.documentType}
                                   onChange={(event) =>
@@ -1616,7 +1617,7 @@ export function EmployeeCreatePanel({
                                   {EMPLOYEE_DOCUMENT_TYPES.map((itemType) => (
                                     <option key={itemType} value={itemType}>{documentTypeLabel(itemType)}</option>
                                   ))}
-                                </select>
+                                </RoundedSelect>
                                 <button
                                   type="button"
                                   className="icon-button"

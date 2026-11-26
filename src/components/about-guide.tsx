@@ -190,7 +190,7 @@ const sections: GuideSection[] = [
     items: [
       {
         title: "Record and review an advance",
-        body: "Where permitted, select the employee and outlet, enter the amount and date, and provide any requested reference or notes. Review pending records before approving or rejecting them. The page also supports reviewing and editing records within permission and role-specific limits.",
+        body: "Where permitted, select the employee and outlet, enter the amount and date, provide the reference, and enter a required reason. Review pending records before approving or rejecting them. The page also supports reviewing and editing records within permission and role-specific limits.",
         steps: [
           "Open Advances and check the employee and outlet filters or list.",
           "Record the advance once, using the correct amount and date.",
