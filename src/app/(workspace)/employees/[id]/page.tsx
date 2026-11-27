@@ -19,6 +19,8 @@ export default async function EmployeeDetailPage({
       mainAdmin={actor.role === "MAIN_ADMIN"}
       canViewSensitive={actor.role !== "OUTLET_USER"}
       canManageUniforms={actor.permissions.includes("uniforms.manage")}
+      canManageShift={actor.permissions.includes("employees.shift.manage")}
+      canManageFace={actor.permissions.includes("employees.face.manage")}
     />
   );
 }

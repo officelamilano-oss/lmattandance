@@ -4,6 +4,7 @@ import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb, getMongoClient } from "@/lib/mongodb";
 import {
   employeeSchema,
+  employeeShiftSchema,
   outletEmployeeRequiredDetailsSchema,
 } from "@/lib/validation/business";
 import { paginationSchema } from "@/lib/validation/common";
@@ -279,6 +280,16 @@ export async function POST(request: Request) {
         { status: 400 },
       );
     const payload = body as Record<string, unknown>;
+    const hasShiftFields =
+      "shiftStartTime" in payload || "shiftEndTime" in payload;
+    if (
+      hasShiftFields &&
+      !actor.permissions.includes("employees.shift.manage")
+    )
+      return NextResponse.json({ error: "Forbidden." }, { status: 403 });
+    const shiftSchedule = hasShiftFields
+      ? employeeShiftSchema.parse(payload)
+      : undefined;
     let uniformEntries: ReturnType<typeof normalizeUniformEntries> = [];
     if ("uniformDeductions" in payload) {
       if (!actor.permissions.includes("uniforms.manage"))
@@ -460,6 +471,7 @@ export async function POST(request: Request) {
     const document: EmployeeDocument = {
       _id: new ObjectId(),
       ...input,
+      ...(shiftSchedule ?? {}),
       termsAccepted: true,
       termsVersion: EMPLOYEE_TERMS_VERSION,
       acceptedAt: now,

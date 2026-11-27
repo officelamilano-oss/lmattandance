@@ -69,6 +69,8 @@ export interface EmployeeView {
   fullName: string;
   designation: string;
   employmentType?: EmploymentType;
+  shiftStartTime?: string;
+  shiftEndTime?: string;
   mobile?: string | null;
   active: boolean;
   outletId: string;
@@ -97,6 +99,8 @@ export interface EmployeeView {
   esiPercent?: number;
   notes?: string;
   attendanceStatus?: AttendanceStatus | null;
+  punchInAt?: string | null;
+  punchOutAt?: string | null;
   savedAttendanceStatus?: AttendanceStatus | null;
   outletCode?: string;
   outletName?: string;

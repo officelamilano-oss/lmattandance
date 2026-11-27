@@ -6,7 +6,8 @@ export type Permission =
   | "employees.deactivate" | "attendance.read" | "attendance.write" | "attendance.submit"
   | "attendance.unlock" | "advances.read" | "advances.write" | "salary.read" | "salary.generate"
   | "advances.approve" | "salary.adjust" | "salary.approve" | "salary.pay" | "settings.manage" | "access.manage"
-  | "reports.export" | "audit.read" | "uniforms.manage" | "about.read";
+  | "reports.export" | "audit.read" | "uniforms.manage" | "about.read"
+  | "employees.shift.manage" | "employees.face.manage";
 
 export interface UserDocument {
   _id: ObjectId;
@@ -69,6 +70,8 @@ export interface EmployeeDocument {
   designationKey?: string | null;
   designationGroup?: "HEAD_OFFICE" | "OUTLET" | null;
   employmentType?: EmploymentType;
+  shiftStartTime?: string;
+  shiftEndTime?: string;
   mobile?: string | null;
   outletId: ObjectId;
   monthlyBaseSalary: number;
@@ -148,6 +151,51 @@ export interface AttendanceDayDocument {
   corrections: Array<{ at: Date; actorId: ObjectId; reason: string; action: "UNLOCK" | "RELOCK" }>;
   updatedAt: Date;
   updatedBy: ObjectId;
+}
+
+export interface EmployeeFaceTemplateDocument {
+  _id: ObjectId;
+  employeeId: ObjectId;
+  outletId: ObjectId;
+  encryptedDescriptor: {
+    iv: string;
+    authTag: string;
+    ciphertext: string;
+  };
+  consentAt: Date;
+  consentBy: ObjectId;
+  consentVersion: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface KioskDeviceDocument {
+  _id: ObjectId;
+  outletId: ObjectId;
+  label: string;
+  tokenHash?: string;
+  pinHash?: string;
+  pinEncrypted?: {
+    iv: string;
+    authTag: string;
+    ciphertext: string;
+  };
+  active: boolean;
+  createdBy: ObjectId;
+  createdAt: Date;
+  updatedAt: Date;
+  lastUsedAt?: Date;
+}
+
+export interface AttendancePunchDocument {
+  _id: ObjectId;
+  employeeId: ObjectId;
+  outletId: ObjectId;
+  date: string;
+  checkInAt?: Date;
+  checkOutAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface AdvanceDocument {

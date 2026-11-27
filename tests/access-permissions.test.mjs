@@ -35,6 +35,16 @@ test("MAIN_ADMIN access accepts the full permission set", () => {
     permissions: allPermissionValues,
   });
 
+  test("shift and face enrollment permissions can be granted to staff roles", () => {
+    const result = userProvisionSchema.safeParse({
+      ...user,
+      permissions: ["employees.shift.manage", "employees.face.manage"],
+    });
+    assert.equal(result.success, true);
+    assert.ok(staffPermissionValues.includes("employees.shift.manage"));
+    assert.ok(staffPermissionValues.includes("employees.face.manage"));
+  });
+
   assert.equal(result.success, true);
 });
 

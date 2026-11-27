@@ -1867,6 +1867,15 @@
                           <span className="sub-cell">
                             {employee.employeeCode}
                           </span>
+                          {(employee.punchInAt || employee.punchOutAt) && (
+                            <span className="sub-cell">
+                              {employee.punchInAt &&
+                                `In ${new Date(employee.punchInAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}`}
+                              {employee.punchInAt && employee.punchOutAt && " · "}
+                              {employee.punchOutAt &&
+                                `Out ${new Date(employee.punchOutAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}`}
+                            </span>
+                          )}
                         </td>
                         <td>{employee.designation}</td>
                         <td>
@@ -2654,6 +2663,7 @@
               initialOutletId={selectedOutlet}
               canManageDocuments={user.permissions.includes("employees.update")}
               canManageUniforms={user.permissions.includes("uniforms.manage")}
+              canManageShift={user.permissions.includes("employees.shift.manage")}
               onCreated={reload}
             />
           )}
@@ -3010,6 +3020,8 @@
                     mainAdmin={user.role === "MAIN_ADMIN"}
                     canViewSensitive={user.role !== "OUTLET_USER"}
                     canManageUniforms={user.permissions.includes("uniforms.manage")}
+                    canManageShift={user.permissions.includes("employees.shift.manage")}
+                    canManageFace={user.permissions.includes("employees.face.manage")}
                     modal
                     onSaved={(documentStorageWarning) => {
                       setEmployeeToEdit(null);

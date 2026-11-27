@@ -200,6 +200,31 @@ try {
       { name: "employee_files_employee_created_uploaded" },
     ],
     [
+      "employeeFaceTemplates",
+      { employeeId: 1 },
+      { unique: true, name: "employee_face_template_employee_unique" },
+    ],
+    [
+      "kioskDevices",
+      { tokenHash: 1 },
+      { unique: true, name: "kiosk_device_token_hash_unique" },
+    ],
+    [
+      "kioskDevices",
+      { outletId: 1, active: 1 },
+      { name: "kiosk_devices_outlet_active" },
+    ],
+    [
+      "attendancePunches",
+      { employeeId: 1, date: 1 },
+      { unique: true, name: "attendance_punch_employee_date_unique" },
+    ],
+    [
+      "attendancePunches",
+      { outletId: 1, date: 1 },
+      { name: "attendance_punch_outlet_date" },
+    ],
+    [
       "attendance",
       { outletId: 1, date: 1 },
       { unique: true, name: "attendance_outlet_date_unique" },

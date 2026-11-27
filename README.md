@@ -73,7 +73,7 @@ npm run setup:db
 
 If a unique index conflicts with existing records, setup stops with the index name. Review and resolve duplicate data or an incompatible existing index manually; do not drop production data to make setup pass. Run setup again after correction. Confirm Atlas network access and grant the database user read/write access to the configured database. After deploying a change that alters attendance persistence, run this setup command against the same database used by the app so legacy indexes are migrated.
 
-The application uses the existing collections: `users`, `outlets`, `employees`, `attendance`, `advances`, `loans`, `salaryRecords`, `accessPermissions`, `auditLogs`, `settings`, and `roles`. Attendance is stored as one date/outlet document with employee entries; this supports an atomic submit/lock transition.
+The application uses the existing collections: `users`, `outlets`, `employees`, `employeeFaceTemplates`, `kioskDevices`, `attendance`, `attendancePunches`, `advances`, `loans`, `salaryRecords`, `accessPermissions`, `auditLogs`, `settings`, and `roles`. Attendance is stored as one date/outlet document with employee entries; this supports an atomic submit/lock transition.
 
 ## Employee Sheet Import and Outlet Attendance
 
@@ -82,6 +82,23 @@ From **Employees → Import employee sheet**, a `MAIN_ADMIN` can preview and imp
 For example, a sheet can include `Employee Code`, `Full Name`, `Date of Joining`, `Designation`, `Mobile`, and `Monthly Base Salary`; other supported optional headings include `PF Enabled`, `Employee PF %`, `Employer PF %`, `ESI Enabled`, `Employee ESI %`, and `Notes`. Salary calculations use the app's fixed 30-day basis.
 
 Create an account from **Access management** using the person's email and password, assign its outlet or outlets, and select a designation or configure custom permissions. A `MAIN_ADMIN` can reset an account password from its **Password** action; the existing password cannot be viewed because credentials are stored as one-way hashes. An `OUTLET_USER` can be assigned one active outlet; other staff roles can be assigned multiple outlets. The permissions granted by a designation control which dashboard, attendance, employee, advances, salary, and report pages/actions the account can use. Updating a designation updates the permissions for all accounts assigned to it. Outlets, Access management, and global Settings remain `MAIN_ADMIN`-only. The confirmation on **Submit & lock** saves the outlet's attendance to the master attendance record; only an authorized administrator can unlock a submitted sheet.
+
+## Face Attendance Kiosk
+
+Employee shift start/end times are configured from the employee detail page. The **Manage employee shifts** permission (or `MAIN_ADMIN`) is required to edit them. A face check-in not recorded by shift start plus 30 minutes is marked absent by the secured scheduler on its next minute run; employees without configured shifts are skipped. Existing attendance entries, including `WO`, `HD`, and submitted records, are not overwritten.
+
+Enroll each employee's face once from the employee detail page using **Manage face enrollment** permission and the employee's explicit consent: open the camera, capture and enroll, then stop. Then create an outlet-scoped kiosk device from **Attendance kiosks** as `MAIN_ADMIN`. A device token is shown only once; store it only on the assigned kiosk and revoke the device if the token is lost. Open `/kiosk` on that device and enter its token once. Keep the page open: the camera starts automatically and continuously scans. At shift start, the employee only needs to stand in front of the camera; a recognized face automatically checks them in without pressing a button or blinking. After the configured shift end, they must show their face again to automatically check out. Check-out before shift end is rejected by the server. The kiosk matches only active enrolled employees belonging to that device's outlet. Camera frames remain in the browser; the app stores only an AES-256-GCM encrypted face descriptor and a consent record. Enrollment can be deleted from the employee detail page. The bundled model weights (pinned from `vladmandic/face-api` revision `189226d63aabb48cb40776fd1c453ebc0fa722f1`) and their MIT license are in `public/face-models`; the browser loads them from this app rather than sending camera images to a third party.
+
+Configure two additional server-only secrets in every environment that runs kiosks:
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Use the first value for `KIOSK_ENCRYPTION_KEY` and the second for `CRON_SECRET`. Back up `KIOSK_ENCRYPTION_KEY` securely: changing it makes existing face templates unreadable, so employees must be re-enrolled. Configure an external scheduler to send an HTTPS `POST` to `/api/cron/attendance-absences` every minute with `Authorization: Bearer <CRON_SECRET>`. The endpoint returns `503` until `CRON_SECRET` is configured and `401` for an invalid token. A minute-based external scheduler is required; a once-nightly job cannot meet the 10:31 absence rule.
+
+Face matching alone is not strong anti-spoof authentication. Keep the kiosk physically supervised and provide manual attendance as an accessible fallback. Do not treat face matching alone as proof of identity.
 
 ## First Administrator
 

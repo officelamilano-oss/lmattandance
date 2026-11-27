@@ -149,6 +149,7 @@ export function EmployeeCreatePanel({
   initialOutletId,
   canManageDocuments,
   canManageUniforms,
+  canManageShift,
   onCreated,
 }: {
   user: { email: string; role: UserRole };
@@ -156,6 +157,7 @@ export function EmployeeCreatePanel({
   initialOutletId?: string;
   canManageDocuments: boolean;
   canManageUniforms: boolean;
+  canManageShift: boolean;
   onCreated: () => void | Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
@@ -613,6 +615,12 @@ export function EmployeeCreatePanel({
         esiEnabled: values.get("esiEnabled") === "true",
         esiPercent: Number(values.get("esiPercent")),
       });
+    if (canManageShift) {
+      const shiftStartTime = nullableString(values.get("shiftStartTime"));
+      const shiftEndTime = nullableString(values.get("shiftEndTime"));
+      if (shiftStartTime || shiftEndTime)
+        Object.assign(body, { shiftStartTime, shiftEndTime });
+    }
     if (canManageUniforms)
       body.uniformDeductions = uniformEntriesFromForm(values);
     try {
@@ -1271,6 +1279,38 @@ export function EmployeeCreatePanel({
                     <option value="PART_TIME">Part-time</option>
                   </RoundedSelect>
                 </label>
+                {canManageShift && (
+                  <>
+                    <label className="field">
+                      <span>Shift start (optional)</span>
+                      <input
+                        name="shiftStartTime"
+                        type="time"
+                        defaultValue={
+                          draftFields.shiftStartTime ||
+                          pendingFormValue("shiftStartTime")
+                        }
+                      />
+                      {fieldError(fieldErrors, "shiftStartTime")}
+                    </label>
+                    <label className="field">
+                      <span>Shift end (optional)</span>
+                      <input
+                        name="shiftEndTime"
+                        type="time"
+                        defaultValue={
+                          draftFields.shiftEndTime ||
+                          pendingFormValue("shiftEndTime")
+                        }
+                      />
+                      {fieldError(fieldErrors, "shiftEndTime")}
+                    </label>
+                    <small className="muted">
+                      If set, the 30-minute grace period applies before
+                      automatic absence.
+                    </small>
+                  </>
+                )}
                 <label className="field">
                   <span>Mobile (optional)</span>
                   <input

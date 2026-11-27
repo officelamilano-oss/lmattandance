@@ -1,4 +1,4 @@
-import { ObjectId } from "mongodb";
+import { ObjectId, type Db } from "mongodb";
 import path from "node:path";
 import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
@@ -7,6 +7,7 @@ import { apiError, assertSameOrigin, readJson } from "@/lib/http";
 import { writeAudit } from "@/lib/audit";
 import type {
   EmployeeDocument,
+  EmployeeFaceTemplateDocument,
   EmployeeFileDocument,
   OutletDocument,
   UniformDeductionDocument,
@@ -34,6 +35,27 @@ import {
   uniformEntriesSchema,
 } from "@/lib/uniform-deductions";
 import { getIndiaMonth } from "@/lib/payroll/dates";
+
+async function removeEmployeeFaceEnrollment(
+  db: Db,
+  employee: EmployeeDocument,
+  actor: { id: ObjectId; email: string },
+  reason: string,
+) {
+  const removed = await db
+    .collection<EmployeeFaceTemplateDocument>("employeeFaceTemplates")
+    .deleteOne({ employeeId: employee._id });
+  if (removed.deletedCount)
+    await writeAudit({
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: "EMPLOYEE_FACE_DELETED",
+      entityType: "employee",
+      entityId: employee._id.toHexString(),
+      outletId: employee.outletId,
+      reason,
+    });
+}
 
 export async function GET(
   _request: Request,
@@ -72,6 +94,8 @@ export async function GET(
             designationKey: 1,
             designationGroup: 1,
             employmentType: 1,
+            shiftStartTime: 1,
+            shiftEndTime: 1,
             mobile: 1,
             outletId: 1,
             monthlyBaseSalary: 1,
@@ -174,6 +198,12 @@ export async function DELETE(
       const storage = await getStorageAdapter(getEmployeeFileProvider(document));
       await storage.delete(getEmployeeFileId(document));
     }
+    await removeEmployeeFaceEnrollment(
+      db,
+      employee,
+      actor,
+      "Employee record deleted; biometric template removed.",
+    );
     await db
       .collection<EmployeeFileDocument>("employeeFiles")
       .deleteMany({ employeeId: employee._id });
@@ -290,6 +320,12 @@ export async function PATCH(
           { _id: current._id },
           { $set: { active: false, deactivatedAt, updatedAt: new Date() } },
         );
+      await removeEmployeeFaceEnrollment(
+        db,
+        current,
+        actor,
+        "Employee deactivated; face enrollment removed.",
+      );
       await writeAudit({
         actorId: actor.id,
         actorEmail: actor.email,
@@ -483,6 +519,13 @@ export async function PATCH(
     } else {
       await updateEmployee();
     }
+    if (outletChanged)
+      await removeEmployeeFaceEnrollment(
+        db,
+        current,
+        actor,
+        "Employee transferred to another outlet; face enrollment removed and must be renewed.",
+      );
     let documentStorageWarning: string | undefined;
     if (outletChanged) {
       const employeeFiles = await db

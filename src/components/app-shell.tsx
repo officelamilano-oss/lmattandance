@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Activity, ArrowRight, Banknote, Bell, BookOpen, Building2, CalendarDays, ClipboardList, FileSpreadsheet, House, LayoutDashboard, LogOut, Menu, Moon, Settings2, ShieldCheck, Sun, Users, Wallet, X, HandCoins, Shirt } from "lucide-react";
+import { Activity, ArrowRight, Banknote, Bell, BookOpen, Building2, CalendarDays, ClipboardList, FileSpreadsheet, Fingerprint, House, LayoutDashboard, LogOut, Menu, Moon, Settings2, ShieldCheck, Sun, Users, Wallet, X, HandCoins, Shirt } from "lucide-react";
 import type { Permission, UserRole } from "@/lib/models";
 import type { AdvanceView, WorkspaceData } from "@/lib/ui-types";
 import { clientRequestCache } from "@/lib/client-request-cache";
@@ -33,6 +33,7 @@ const navigation: Array<{ href: string; label: string; icon: typeof LayoutDashbo
   { href: "/employees", label: "Employees", icon: Users, permission: "employees.read" },
   { href: "/advances", label: "Advances", icon: Wallet, permission: "advances.read" },
   { href: "/loans", label: "Loans", icon: HandCoins, permission: "salary.read", mainAdminOnly: true },
+  { href: "/kiosks", label: "Attendance kiosks", icon: Fingerprint, permission: "outlets.manage", mainAdminOnly: true },
   { href: "/outlets", label: "Outlets", icon: Building2, permission: "outlets.manage" },
   { href: "/access", label: "Access management", icon: ShieldCheck, permission: "access.manage" },
   { href: "/reports", label: "Reports & exports", icon: FileSpreadsheet, permission: "reports.export" },

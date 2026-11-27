@@ -88,6 +88,16 @@ export const employeeSchema = z.object({
     });
 });
 
+export const employeeShiftSchema = z
+  .object({
+    shiftStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    shiftEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+  })
+  .refine((shift) => shift.shiftStartTime !== shift.shiftEndTime, {
+    message: "Shift start and end times must be different.",
+    path: ["shiftEndTime"],
+  });
+
 export const outletEmployeeRequiredDetailsSchema = z.object({
   gender: z.enum(["MALE", "FEMALE"]),
 });

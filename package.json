@@ -20,6 +20,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1170.0",
     "@hookform/resolvers": "^5.9.2",
     "@imagekit/nodejs": "^7.15.0",
+    "@vladmandic/face-api": "^1.7.15",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.11.0",
     "decimal.js": "^10.6.0",

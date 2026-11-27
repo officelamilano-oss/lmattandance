@@ -24,6 +24,8 @@ export const designationPermissionGroups: Array<{
       { value: "employees.create", label: "Add employees" },
       { value: "employees.update", label: "Edit employees" },
       { value: "employees.deactivate", label: "Deactivate employees" },
+      { value: "employees.shift.manage", label: "Manage employee shifts" },
+      { value: "employees.face.manage", label: "Manage face enrollment" },
     ],
   },
   {

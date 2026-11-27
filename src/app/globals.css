@@ -12140,6 +12140,138 @@ html, body {
     color: var(--text);
 }
 
+.kiosk-terminal {
+    width: min(100%, 900px);
+}
+
+.kiosk-camera,
+.employee-face-camera {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 18px 20px;
+}
+
+.kiosk-camera video:not([hidden]),
+.employee-face-camera video:not([hidden]) {
+    display: block;
+    width: min(100%, 480px);
+    max-height: 360px;
+    object-fit: cover;
+    border-radius: 12px;
+    background: #111;
+}
+
+.kiosk-identification,
+.kiosk-token-result {
+    display: grid;
+    gap: 10px;
+    margin: 0 20px 18px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface-2);
+}
+
+.kiosk-identification h3,
+.kiosk-identification p,
+.kiosk-token-result p {
+    margin: 0;
+}
+
+.kiosk-token-result code {
+    overflow-wrap: anywhere;
+}
+
+.kiosk-device-list {
+    display: grid;
+}
+
+.kiosk-device-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 15px 20px;
+    border-bottom: 1px solid var(--border);
+}
+
+.kiosk-device-row>div:first-child,
+.kiosk-device-actions {
+    display: grid;
+    gap: 5px;
+}
+
+.kiosk-device-row span,
+.kiosk-device-row small {
+    color: var(--text-muted);
+}
+
+.kiosk-device-actions {
+    justify-items: end;
+}
+
+.kiosk-device-name-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.kiosk-device-name-form input {
+    min-width: 160px;
+    min-height: 38px;
+}
+
+.form-error,
+.form-success {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+}
+
+.form-error {
+    color: var(--status-absent);
+    background: color-mix(in srgb, var(--status-absent) 10%, transparent);
+}
+
+.form-success {
+    color: var(--status-present);
+    background: color-mix(in srgb, var(--status-present) 10%, transparent);
+}
+
+@media (max-width: 640px) {
+    .content-area.kiosk-terminal {
+        padding: 18px 16px 32px;
+    }
+
+    .kiosk-topbar {
+        align-items: flex-start;
+        margin-bottom: 16px;
+    }
+
+    .kiosk-topbar > span {
+        max-width: 52%;
+    }
+
+    .kiosk-device-row {
+        align-items: flex-start;
+    }
+
+    .kiosk-device-actions {
+        justify-items: start;
+    }
+
+    .kiosk-device-name-form {
+        align-items: stretch;
+    }
+
+    .kiosk-device-name-form input {
+        width: 100%;
+    }
+}
+
 th {
     background: var(--surface);
     color: var(--text-muted);
@@ -12208,6 +12340,317 @@ select option { background: var(--surface); color: var(--text); }
 }
 .search-field input, .attendance-search-field input,
 .about-search input, .uniform-employee-search input { color: var(--text); }
+
+.content-area.kiosk-terminal {
+    width: min(100%, 980px);
+    padding: 28px 32px 48px;
+}
+
+.kiosk-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    min-height: 58px;
+    margin-bottom: 24px;
+    padding: 8px 0 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.kiosk-brand {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 7px;
+    color: var(--text);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.kiosk-brand strong {
+    font-size: 15px;
+    letter-spacing: 0.04em;
+}
+
+.kiosk-brand > span {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.12em;
+}
+
+.kiosk-nav-links {
+    display: inline-flex;
+    align-items: center;
+    flex: 1;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+}
+
+.kiosk-nav-links a {
+    min-height: 36px;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.kiosk-nav-links a:hover {
+    color: var(--accent);
+}
+
+.kiosk-topbar a {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 36px;
+    color: var(--text);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.kiosk-nav-links .kiosk-workspace-link {
+    margin-left: auto;
+}
+
+.kiosk-nav-context {
+    flex-basis: 100%;
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.kiosk-toast {
+    position: fixed;
+    z-index: 1000;
+    top: 20px;
+    left: 50%;
+    width: max-content;
+    max-width: min(560px, calc(100vw - 32px));
+    padding: 13px 18px;
+    border: 1px solid color-mix(in srgb, var(--status-present) 35%, transparent);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--status-present);
+    font-weight: 650;
+    line-height: 1.5;
+    text-align: center;
+    overflow-wrap: anywhere;
+    box-shadow: 0 12px 36px rgb(0 0 0 / 18%);
+    transform: translateX(-50%);
+}
+
+.kiosk-token-panel {
+    padding: 24px clamp(18px, 3vw, 30px);
+}
+
+.kiosk-token-panel > h2 {
+    margin: 0;
+    color: var(--text);
+    font-family: var(--font-sans), sans-serif;
+    font-size: clamp(18px, 2vw, 22px);
+    font-weight: 650;
+    letter-spacing: 0;
+    line-height: 1.35;
+    text-transform: none;
+    overflow-wrap: anywhere;
+}
+
+.kiosk-token-panel > p {
+    margin: 8px 0 0;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+
+.kiosk-token-panel > .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    padding: 18px 0 0;
+}
+
+.kiosk-token-panel .field > span {
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.kiosk-token-panel .field input {
+    min-height: 46px;
+    height: auto;
+    padding: 10px 12px;
+    font-size: 15px;
+}
+
+.kiosk-token-panel .form-actions {
+    grid-column: auto;
+    justify-content: flex-start;
+    align-items: center;
+}
+
+.kiosk-token-panel .form-actions .button {
+    min-height: 44px;
+    margin-left: 0;
+    padding-inline: 20px;
+}
+
+.kiosk-token-panel > .form-error {
+    margin: 14px 0 0;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.kiosk-camera-panel .panel-heading h2 {
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+.kiosk-camera-panel .panel-heading p {
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.kiosk-terminal > .page-head > div,
+.kiosk-camera-panel .panel-heading > div {
+    min-width: 0;
+}
+
+.employee-face-enrollment > .panel-heading {
+    align-items: flex-start;
+    padding: 22px 26px 18px;
+}
+
+.employee-face-enrollment > .panel-heading > div {
+    min-width: 0;
+}
+
+.employee-face-enrollment > .panel-heading h2 {
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.employee-face-enrollment > .panel-heading p {
+    max-width: 760px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+
+.employee-face-consent {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin: 0;
+    padding: 20px 26px 8px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.employee-face-consent input[type="checkbox"] {
+    flex: 0 0 20px;
+    width: 20px;
+    min-width: 20px;
+    height: 20px;
+    margin: 1px 0 0;
+    padding: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.employee-face-consent span {
+    min-width: 0;
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+
+.employee-face-consent-date,
+.employee-face-notice {
+    margin: 14px 26px 0;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.employee-face-camera {
+    padding: 14px 26px 18px;
+}
+
+.employee-face-camera .button {
+    min-height: 42px;
+}
+
+.employee-face-disclaimer {
+    display: block;
+    margin: 0 26px 22px;
+    color: var(--text-muted);
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+
+.kiosk-terminal .page-head p,
+.kiosk-terminal .muted {
+    color: var(--text-muted);
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
+.kiosk-camera-panel > .muted {
+    display: block;
+    margin: 0 20px 20px;
+}
+
+@media (max-width: 640px) {
+    .content-area.kiosk-terminal {
+        padding: 20px 14px 36px;
+    }
+
+    .kiosk-token-panel {
+        padding: 20px 16px;
+    }
+
+    .kiosk-topbar {
+        align-items: center;
+        gap: 8px 14px;
+    }
+
+    .kiosk-nav-links {
+        flex-basis: 100%;
+        gap: 4px 14px;
+    }
+
+    .kiosk-nav-links .kiosk-workspace-link {
+        margin-left: 0;
+    }
+
+    .kiosk-nav-context {
+        flex-basis: 100%;
+    }
+
+    .employee-face-enrollment > .panel-heading {
+        padding: 18px 16px 14px;
+    }
+
+    .employee-face-consent {
+        gap: 10px;
+        padding: 16px 16px 6px;
+    }
+
+    .employee-face-consent-date,
+    .employee-face-notice {
+        margin-inline: 16px;
+    }
+
+    .employee-face-camera {
+        padding: 12px 16px 16px;
+    }
+
+    .employee-face-disclaimer {
+        margin: 0 16px 18px;
+    }
+}
 
 .button-primary {
     background: var(--accent);

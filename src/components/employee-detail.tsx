@@ -15,6 +15,7 @@ import {
 } from "@/lib/employee-designations";
 import { getEmployeeCodePrefix } from "@/lib/employee-code";
 import { UniformDetailsFields } from "@/components/uniform-details-fields";
+import { EmployeeFaceEnrollment } from "@/components/employee-face-enrollment";
 import { uniformEntriesFromForm } from "@/lib/uniform-deductions";
 import { clientRequestCache } from "@/lib/client-request-cache";
 import { fetchOutletList } from "@/lib/outlets-client";
@@ -172,6 +173,8 @@ export function EmployeeDetail({
   mainAdmin,
   canViewSensitive,
   canManageUniforms,
+  canManageShift,
+  canManageFace,
   modal = false,
   onSaved,
 }: {
@@ -181,6 +184,8 @@ export function EmployeeDetail({
   mainAdmin: boolean;
   canViewSensitive: boolean;
   canManageUniforms: boolean;
+  canManageShift?: boolean;
+  canManageFace?: boolean;
   modal?: boolean;
   onSaved?: (documentStorageWarning?: string) => void;
 }) {
@@ -192,6 +197,11 @@ export function EmployeeDetail({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [success, setSuccess] = useState("");
   const [busy, setBusy] = useState(false);
+  const [shiftBusy, setShiftBusy] = useState(false);
+  const [shiftError, setShiftError] = useState("");
+  const [shiftSuccess, setShiftSuccess] = useState("");
+  const [shiftStartTime, setShiftStartTime] = useState("");
+  const [shiftEndTime, setShiftEndTime] = useState("");
   const [outletId, setOutletId] = useState("");
   const [designationKey, setDesignationKey] = useState("");
   const [designationLabel, setDesignationLabel] = useState("");
@@ -230,6 +240,8 @@ export function EmployeeDetail({
       if (!active) return;
       setEmployee(loaded);
       setOutletId(loaded.outletId);
+      setShiftStartTime(loaded.shiftStartTime ?? "");
+      setShiftEndTime(loaded.shiftEndTime ?? "");
       setDesignationKey(
         EMPLOYEE_DESIGNATIONS.some((item) => item.key === loaded.designationKey)
           ? loaded.designationKey ?? "LEGACY"
@@ -425,6 +437,39 @@ export function EmployeeDetail({
       );
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function saveShift(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setShiftError("");
+    setShiftSuccess("");
+    if (!shiftStartTime || !shiftEndTime || shiftStartTime === shiftEndTime) {
+      setShiftError("Enter different shift start and end times.");
+      return;
+    }
+    setShiftBusy(true);
+    try {
+      const response = await fetch(`/api/employees/${id}/shift`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shiftStartTime, shiftEndTime }),
+      });
+      const result = await response.json();
+      if (!response.ok)
+        throw new Error(result.error ?? "Unable to save shift schedule.");
+      setEmployee((current) =>
+        current ? { ...current, shiftStartTime, shiftEndTime } : current,
+      );
+      setShiftSuccess("Shift schedule saved. The absence grace period is 30 minutes.");
+    } catch (caught) {
+      setShiftError(
+        caught instanceof Error
+          ? caught.message
+          : "Unable to save shift schedule.",
+      );
+    } finally {
+      setShiftBusy(false);
     }
   }
 
@@ -1107,6 +1152,52 @@ export function EmployeeDetail({
           )}
         </form>
       </section>
+      {(canManageShift || employee.shiftStartTime || employee.shiftEndTime) && (
+        <section className="panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Employee shift schedule</h2>
+              <p>
+                If no face check-in is recorded by shift start plus 30 minutes,
+                the system marks the employee absent at the next minute check.
+              </p>
+            </div>
+          </div>
+          {shiftError && <p className="form-error" role="alert">{shiftError}</p>}
+          {shiftSuccess && <p className="form-success" role="status">{shiftSuccess}</p>}
+          <form className="form-grid" onSubmit={saveShift}>
+            <label className="field">
+              <span>Shift start</span>
+              <input
+                type="time"
+                value={shiftStartTime}
+                onChange={(event) => setShiftStartTime(event.target.value)}
+                disabled={!canManageShift || shiftBusy}
+                required={!!canManageShift}
+              />
+            </label>
+            <label className="field">
+              <span>Shift end</span>
+              <input
+                type="time"
+                value={shiftEndTime}
+                onChange={(event) => setShiftEndTime(event.target.value)}
+                disabled={!canManageShift || shiftBusy}
+                required={!!canManageShift}
+              />
+            </label>
+            <p className="muted">Late grace period: 30 minutes.</p>
+            {canManageShift && (
+              <div className="form-actions">
+                <button className="button button-primary" disabled={shiftBusy}>
+                  {shiftBusy ? "Saving…" : "Save shift"}
+                </button>
+              </div>
+            )}
+          </form>
+        </section>
+      )}
+      {canManageFace && <EmployeeFaceEnrollment employeeId={id} />}
       {canViewSensitive && (
         <section className="panel employee-documents-panel">
           <div className="panel-heading">

@@ -1,0 +1,541 @@
+"use client";
+
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  FaceScanError,
+  getFaceDescriptor,
+  startFaceCamera,
+  stopFaceCamera,
+} from "@/components/face-client";
+
+type IdentifiedEmployee = {
+  id: string;
+  name: string;
+  code: string;
+};
+
+type Identification = {
+  employee: IdentifiedEmployee;
+  nextAction:
+    | "CHECK_IN"
+    | "CHECK_OUT"
+    | "WAIT_FOR_SHIFT"
+    | "WAIT_FOR_CHECKOUT"
+    | "DONE"
+    | "ABSENT"
+    | "CONTACT_MANAGER";
+  message?: string;
+};
+
+async function responseJson(response: Response) {
+  const body = await response.json();
+  if (!response.ok)
+    throw new Error(body.error ?? "Kiosk request could not be completed.");
+  return body;
+}
+
+function LegacyManualKioskTerminal() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [token, setToken] = useState("");
+  const [tokenInput, setTokenInput] = useState("");
+  const [cameraReady, setCameraReady] = useState(false);
+  const [descriptor, setDescriptor] = useState<number[] | null>(null);
+  const [identification, setIdentification] = useState<Identification | null>(
+    null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    setToken(window.localStorage.getItem("attendance-kiosk-token") ?? "");
+    return () => stopFaceCamera(streamRef.current);
+  }, []);
+
+  function saveToken(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = tokenInput.trim();
+    if (value.length < 32) {
+      setError("Enter the kiosk access token provided by the administrator.");
+      return;
+    }
+    window.localStorage.setItem("attendance-kiosk-token", value);
+    setToken(value);
+    setTokenInput("");
+    setError("");
+  }
+
+  function disconnect() {
+    closeCamera();
+    window.localStorage.removeItem("attendance-kiosk-token");
+    setToken("");
+    setIdentification(null);
+    setDescriptor(null);
+    setMessage("");
+  }
+
+  async function openCamera() {
+    setError("");
+    try {
+      if (!videoRef.current) throw new Error("Camera preview is unavailable.");
+      streamRef.current = await startFaceCamera(videoRef.current);
+      setCameraReady(true);
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Unable to open the camera.",
+      );
+    }
+
+  }
+
+export function KioskTerminal() {
+      const videoRef = useRef<HTMLVideoElement>(null);
+      const streamRef = useRef<MediaStream | null>(null);
+      const [token, setToken] = useState("");
+      const [tokenInput, setTokenInput] = useState("");
+      const [cameraReady, setCameraReady] = useState(false);
+      const [cameraStarting, setCameraStarting] = useState(false);
+      const [error, setError] = useState("");
+      const [message, setMessage] = useState("Register this kiosk device to begin.");
+
+      useEffect(() => {
+        setToken(window.localStorage.getItem("attendance-kiosk-token") ?? "");
+        return () => stopFaceCamera(streamRef.current);
+      }, []);
+
+      function saveToken(event: FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+        const value = tokenInput.trim();
+        if (value.length < 32) {
+          setError("Enter the kiosk access token provided by the administrator.");
+          return;
+        }
+        window.localStorage.setItem("attendance-kiosk-token", value);
+        setToken(value);
+        setTokenInput("");
+        setError("");
+        setMessage("Starting the attendance camera…");
+      }
+
+      function disconnect() {
+        stopFaceCamera(streamRef.current);
+        streamRef.current = null;
+        setCameraReady(false);
+        window.localStorage.removeItem("attendance-kiosk-token");
+        setToken("");
+        setMessage("Kiosk disconnected.");
+      }
+
+      async function openCamera() {
+        setError("");
+        setCameraStarting(true);
+        try {
+          if (!videoRef.current) throw new Error("Camera preview is unavailable.");
+          streamRef.current = await startFaceCamera(videoRef.current);
+          setCameraReady(true);
+          setMessage("Camera is on. Stand in front and blink once for attendance.");
+        } catch (caught) {
+          setError(
+            caught instanceof Error ? caught.message : "Unable to open the camera.",
+          );
+        } finally {
+          setCameraStarting(false);
+        }
+      }
+
+      useEffect(() => {
+        if (!token || cameraReady) return;
+        let active = true;
+        setCameraStarting(true);
+        void (async () => {
+          try {
+            if (!videoRef.current)
+              throw new Error("Camera preview is unavailable.");
+            const stream = await startFaceCamera(videoRef.current);
+            if (!active) {
+              stopFaceCamera(stream);
+              return;
+            }
+            streamRef.current = stream;
+            setCameraReady(true);
+            setError("");
+            setMessage("Camera is on. Stand in front and blink once for attendance.");
+          } catch (caught) {
+            if (active)
+              setError(
+                caught instanceof Error
+                  ? caught.message
+                  : "Unable to open the camera.",
+              );
+          } finally {
+            if (active) setCameraStarting(false);
+          }
+        })();
+        return () => {
+          active = false;
+        };
+      }, [token, cameraReady]);
+
+      useEffect(() => {
+        if (!token || !cameraReady) return;
+        let active = true;
+        const wait = (milliseconds: number) =>
+          new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds));
+
+        async function identify(descriptor: number[]) {
+          const response = await fetch("/api/kiosk/identify", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ descriptor }),
+          });
+          return (await responseJson(response)) as Identification;
+        }
+
+        async function punch(descriptor: number[]) {
+          const response = await fetch("/api/kiosk/punch", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ descriptor }),
+          });
+          return responseJson(response);
+        }
+
+        async function scanContinuously() {
+          while (active) {
+            try {
+              const video = videoRef.current;
+              if (!video) throw new Error("Camera preview is unavailable.");
+              setMessage(
+                "Waiting for an enrolled employee to stand in front of the camera…",
+              );
+              const descriptor = await getFaceDescriptor(video, true);
+              if (!active) break;
+              const result = await identify(descriptor);
+              if (!active) break;
+
+              if (
+                result.nextAction === "CHECK_IN" ||
+                result.nextAction === "CHECK_OUT"
+              ) {
+                const punchResult = await punch(descriptor);
+                if (!active) break;
+                const action =
+                  punchResult.action === "IN" ? "checked in" : "checked out";
+                setError("");
+                setMessage(
+                  `${punchResult.employee.name} ${action} at ${new Date(punchResult.punchedAt).toLocaleTimeString()}.`,
+                );
+                await wait(5000);
+                continue;
+              }
+
+              setError("");
+              setMessage(
+                `${result.employee.name}: ${result.message ?? "Attendance is already complete."}`,
+              );
+              await wait(result.nextAction === "DONE" ? 8000 : 4000);
+            } catch (caught) {
+              if (!active) break;
+              const errorMessage =
+                caught instanceof Error ? caught.message : "";
+              if (
+                caught instanceof FaceScanError ||
+                errorMessage.includes("Face not recognized")
+              ) {
+                setError("");
+                setMessage(
+                  "Waiting for an enrolled employee to stand in front of the camera…",
+                );
+                await wait(500);
+                continue;
+              }
+              setError(
+                caught instanceof Error
+                  ? caught.message
+                  : "Unable to process face attendance.",
+              );
+              await wait(3000);
+            }
+          }
+        }
+
+        void scanContinuously();
+        return () => {
+          active = false;
+        };
+      }, [cameraReady, token]);
+
+      return (
+        <main className="content-area kiosk-terminal">
+          <header className="page-head">
+            <div>
+              <p className="eyebrow">LA MILANO · ATTENDANCE</p>
+              <h1>Automatic face attendance</h1>
+              <p>
+                Show your enrolled face at shift start for check-in and again after
+                shift end for check-out.
+              </p>
+            </div>
+          </header>
+          {!token ? (
+            <section className="panel kiosk-token-panel">
+              <h2>Set up this outlet kiosk</h2>
+              <p>
+                Enter the device token once. After setup, the camera scans
+                automatically; employees do not press attendance buttons.
+              </p>
+              <form className="form-grid" onSubmit={saveToken}>
+                <label className="field">
+                  <span>Kiosk access token</span>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={tokenInput}
+                    onChange={(event) => setTokenInput(event.target.value)}
+                    required
+                  />
+                </label>
+                <div className="form-actions">
+                  <button className="button button-primary">Register kiosk</button>
+                </div>
+              </form>
+              {error && <p className="form-error" role="alert">{error}</p>}
+            </section>
+          ) : (
+            <section className="panel kiosk-camera-panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Automatic shift check-in and check-out</h2>
+                  <p>
+                    Check-out is accepted only at or after the employee’s scheduled
+                    shift end.
+                  </p>
+                </div>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={disconnect}
+                >
+                  Disconnect kiosk
+                </button>
+              </div>
+              {error && <p className="form-error" role="alert">{error}</p>}
+              <div className="kiosk-camera">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  hidden={!cameraReady}
+                />
+                {!cameraReady && (
+                  <button
+                    className="button button-primary"
+                    type="button"
+                    onClick={() => void openCamera()}
+                    disabled={cameraStarting}
+                  >
+                    {cameraStarting ? "Starting camera…" : "Start camera"}
+                  </button>
+                )}
+              </div>
+              <div className="kiosk-identification" aria-live="polite">
+                <p>{message}</p>
+              </div>
+              <small className="muted">
+                The kiosk keeps scanning while this page and camera are open. At
+                shift start, stand in view and blink once; return after shift end
+                for automatic check-out. Use manual attendance if the camera is
+                unavailable.
+              </small>
+            </section>
+          )}
+        </main>
+      );
+}
+
+  function closeCamera() {
+    stopFaceCamera(streamRef.current);
+    streamRef.current = null;
+    setCameraReady(false);
+  }
+
+  async function identify() {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    setIdentification(null);
+    setDescriptor(null);
+    try {
+      if (!token) throw new Error("Register this kiosk with its access token.");
+      if (!videoRef.current || !cameraReady)
+        throw new Error("Open the camera before scanning.");
+      const currentDescriptor = await getFaceDescriptor(videoRef.current, true);
+      const response = await fetch("/api/kiosk/identify", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ descriptor: currentDescriptor }),
+      });
+      const result = await responseJson(response);
+      setDescriptor(currentDescriptor);
+      setIdentification(result as Identification);
+      setMessage(result.message ?? "");
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Unable to identify face.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function punch(action: "IN" | "OUT") {
+    if (!descriptor || !identification) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const response = await fetch("/api/kiosk/punch", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ descriptor, action }),
+      });
+      const result = await responseJson(response);
+      setMessage(
+        `${result.employee.name} ${action === "IN" ? "checked in" : "checked out"} at ${new Date(result.punchedAt).toLocaleTimeString()}.`,
+      );
+      setIdentification(null);
+      setDescriptor(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to record punch.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="content-area kiosk-terminal">
+      <header className="page-head">
+        <div>
+          <p className="eyebrow">LA MILANO · ATTENDANCE</p>
+          <h1>Face attendance kiosk</h1>
+          <p>Look at the camera and blink once to identify yourself.</p>
+        </div>
+      </header>
+      {!token ? (
+        <section className="panel kiosk-token-panel">
+          <h2>Register this kiosk</h2>
+          <p>Enter the one-time token created for this outlet and device.</p>
+          <form className="form-grid" onSubmit={saveToken}>
+            <label className="field">
+              <span>Kiosk access token</span>
+              <input
+                type="password"
+                autoComplete="off"
+                value={tokenInput}
+                onChange={(event) => setTokenInput(event.target.value)}
+                required
+              />
+            </label>
+            <div className="form-actions">
+              <button className="button button-primary">Register kiosk</button>
+            </div>
+          </form>
+        </section>
+      ) : (
+        <section className="panel kiosk-camera-panel">
+          <div className="panel-heading">
+            <div>
+              <h2>Check in or check out</h2>
+              <p>This kiosk can match enrolled employees at its assigned outlet only.</p>
+            </div>
+            <button
+              className="button button-secondary"
+              type="button"
+              onClick={disconnect}
+              disabled={busy}
+            >
+              Disconnect kiosk
+            </button>
+          </div>
+          {error && <p className="form-error" role="alert">{error}</p>}
+          {message && <p className="form-success" role="status">{message}</p>}
+          <div className="kiosk-camera">
+            <video ref={videoRef} autoPlay playsInline muted hidden={!cameraReady} />
+            {!cameraReady ? (
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => void openCamera()}
+                disabled={busy}
+              >
+                Open camera
+              </button>
+            ) : (
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => void identify()}
+                disabled={busy}
+              >
+                {busy ? "Checking…" : "Scan face"}
+              </button>
+            )}
+          </div>
+          {identification && (
+            <div className="kiosk-identification" aria-live="polite">
+              <h3>{identification.employee.name}</h3>
+              <p>{identification.employee.code}</p>
+              {identification.nextAction === "CHECK_IN" && (
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() => void punch("IN")}
+                  disabled={busy}
+                >
+                  Confirm check-in
+                </button>
+              )}
+              {identification.nextAction === "CHECK_OUT" && (
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() => void punch("OUT")}
+                  disabled={busy}
+                >
+                  Confirm check-out
+                </button>
+              )}
+              {identification.nextAction === "DONE" && (
+                <p>You have already checked in and out for this shift.</p>
+              )}
+              {(identification.nextAction === "ABSENT" ||
+                identification.nextAction === "CONTACT_MANAGER") && (
+                <p>{identification.message}</p>
+              )}
+            </div>
+          )}
+          <small className="muted">
+            The blink check is basic and can be spoofed. Keep this kiosk
+            supervised; provide manual attendance for accessibility or camera
+            failures.
+          </small>
+        </section>
+      )}
+      {!token && error && <p className="form-error" role="alert">{error}</p>}
+    </main>
+  );
+}

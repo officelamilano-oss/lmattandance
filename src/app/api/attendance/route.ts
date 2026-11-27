@@ -21,6 +21,7 @@ import {
 } from "@/lib/attendance";
 import type {
   AttendanceDayDocument,
+  AttendancePunchDocument,
   EmployeeDocument,
 } from "@/lib/models";
 import type { OutletSettingsDocument } from "@/lib/outlet-settings";
@@ -55,6 +56,18 @@ export async function GET(request: Request) {
         .collection<AttendanceDayDocument>("attendance")
         .find({ outletId: { $in: outletIds }, date })
         .toArray();
+      const punches = outletIds.length
+        ? await db
+            .collection<AttendancePunchDocument>("attendancePunches")
+            .find(
+              { outletId: { $in: outletIds }, date },
+              { projection: { employeeId: 1, checkInAt: 1, checkOutAt: 1 } },
+            )
+            .toArray()
+        : [];
+      const punchByEmployeeId = new Map(
+        punches.map((punch) => [punch.employeeId.toHexString(), punch]),
+      );
       const historicalEmployeeIds = days.flatMap((day) =>
         [
           ...day.entries.map((entry) => entry.employeeId),
@@ -129,6 +142,7 @@ export async function GET(request: Request) {
                 { outletId: day.outletId.toHexString(), date: day.date },
               )
             : undefined;
+          const punch = punchByEmployeeId.get(employee._id.toHexString());
           return {
             _id: employee._id,
             employeeCode: employee.employeeCode,
@@ -138,6 +152,8 @@ export async function GET(request: Request) {
             outletCode: outlet?.code,
             outletName: outlet?.name,
             attendanceStatus: entry?.status ?? null,
+            punchInAt: punch?.checkInAt?.toISOString() ?? null,
+            punchOutAt: punch?.checkOutAt?.toISOString() ?? null,
             savedAttendanceStatus: entry?.status ?? null,
             attendanceEntryExists: !!entry,
             attendanceEntryUpdatedAt: entry?.updatedAt?.toISOString() ?? null,
@@ -163,6 +179,16 @@ export async function GET(request: Request) {
     const day = await db
       .collection<AttendanceDayDocument>("attendance")
       .findOne({ outletId: outlet._id, date });
+    const punches = await db
+      .collection<AttendancePunchDocument>("attendancePunches")
+      .find(
+        { outletId: outlet._id, date },
+        { projection: { employeeId: 1, checkInAt: 1, checkOutAt: 1 } },
+      )
+      .toArray();
+    const punchByEmployeeId = new Map(
+      punches.map((punch) => [punch.employeeId.toHexString(), punch]),
+    );
     const historicalEmployeeIds = [
       ...(day?.entries ?? []).map((entry) => entry.employeeId),
       ...(day?.employeeCorrectionCounts ?? []).map(
@@ -213,6 +239,14 @@ export async function GET(request: Request) {
         outletId: employee.outletId,
         outletCode: outlet.code,
         outletName: outlet.name,
+        punchInAt:
+          punchByEmployeeId
+            .get(employee._id.toHexString())
+            ?.checkInAt?.toISOString() ?? null,
+        punchOutAt:
+          punchByEmployeeId
+            .get(employee._id.toHexString())
+            ?.checkOutAt?.toISOString() ?? null,
         ...(actor.role === "OUTLET_USER" ? {} : { mobile: employee.mobile }),
         attendanceStatus:
           entries.get(employee._id.toHexString())?.status ?? null,
