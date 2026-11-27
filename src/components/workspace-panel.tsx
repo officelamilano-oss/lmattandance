@@ -9,6 +9,7 @@
     Fragment,
     type FormEvent,
     type ReactNode,
+    type CSSProperties,
   } from "react";
   import Link from "next/link";
   import Image from "next/image";
@@ -101,6 +102,37 @@
     loanScheduleSummary,
   } from "@/lib/payroll/loans";
   import { formatDate, formatDateTime } from "@/lib/date-format";
+
+  function getOutletPickerPosition(
+    trigger: HTMLButtonElement,
+    optionCount: number,
+  ): CSSProperties {
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(
+      Math.max(rect.width, 280),
+      window.innerWidth - 24,
+    );
+    const left = Math.max(
+      12,
+      Math.min(rect.left, window.innerWidth - width - 12),
+    );
+    const desiredHeight = Math.min(270, Math.max(80, (optionCount + 1) * 44));
+    const belowSpace = Math.max(0, window.innerHeight - rect.bottom - 12);
+    const aboveSpace = Math.max(0, rect.top - 12);
+    const openAbove =
+      belowSpace < Math.min(desiredHeight, 160) && aboveSpace > belowSpace;
+    const maxHeight = Math.max(
+      1,
+      Math.min(desiredHeight, openAbove ? aboveSpace : belowSpace),
+    );
+    return {
+      position: "fixed",
+      top: `${openAbove ? Math.max(12, rect.top - maxHeight - 5) : rect.bottom + 5}px`,
+      left: `${left}px`,
+      width: `${width}px`,
+      maxHeight: `${maxHeight}px`,
+    };
+  }
 
   const RechartsLoading = () => (
     <div className="panel chart-panel chart-area" role="status" aria-busy="true">
@@ -3213,11 +3245,7 @@
                       )
                       .map((employee: Employee) => (
                       <option key={employee._id} value={employee._id}>
-                        {employee.employeeCode} · {employee.fullName} ·{" "}
-                        {data.outlets?.find(
-                          (outlet: Outlet) =>
-                            outlet._id === employee.outletId,
-                        )?.code ?? "Outlet"}
+                        {employee.employeeCode} · {employee.fullName}
                       </option>
                       ))}
                   </RoundedSelect>
@@ -3694,10 +3722,7 @@
                     )
                     .map((employee) => (
                       <option key={employee._id} value={employee._id}>
-                        {employee.employeeCode} · {employee.fullName} ·{" "}
-                        {data.outlets?.find(
-                          (outlet: Outlet) => outlet._id === employee.outletId,
-                        )?.code ?? "Outlet"}
+                        {employee.employeeCode} · {employee.fullName}
                       </option>
                     ))}
                 </RoundedSelect>
@@ -9006,7 +9031,11 @@
     enabled: boolean;
   }) {
     const [kind, setKind] = useState("attendance");
-    const outletPickerRef = useRef<HTMLDetailsElement>(null);
+    const outletPickerRef = useRef<HTMLButtonElement>(null);
+    const outletOptionsRef = useRef<HTMLDivElement>(null);
+    const [outletPickerOpen, setOutletPickerOpen] = useState(false);
+    const [outletPickerPosition, setOutletPickerPosition] =
+      useState<CSSProperties>();
     const [outletSelection, setOutletSelection] = useState<string[] | null>(
       null,
     );
@@ -9048,28 +9077,39 @@
         ? "Enter dates in DD/MM/YYYY format."
         : "";
     useEffect(() => {
+      if (!outletPickerOpen) return;
+      function updatePosition() {
+        const trigger = outletPickerRef.current;
+        if (trigger)
+          setOutletPickerPosition(
+            getOutletPickerPosition(trigger, outlets.length + 1),
+          );
+      }
       function closeOutletPicker(event: PointerEvent) {
-        const picker = outletPickerRef.current;
         if (
-          picker &&
           event.target instanceof Node &&
-          !picker.contains(event.target)
+          !outletPickerRef.current?.contains(event.target) &&
+          !outletOptionsRef.current?.contains(event.target)
         )
-          picker.open = false;
+          setOutletPickerOpen(false);
       }
 
       function handleEscape(event: KeyboardEvent) {
-        if (event.key === "Escape" && outletPickerRef.current?.open)
-          outletPickerRef.current.open = false;
+        if (event.key === "Escape") setOutletPickerOpen(false);
       }
 
+      updatePosition();
       document.addEventListener("pointerdown", closeOutletPicker);
       document.addEventListener("keydown", handleEscape);
+      window.addEventListener("resize", updatePosition);
+      window.addEventListener("scroll", updatePosition, true);
       return () => {
         document.removeEventListener("pointerdown", closeOutletPicker);
         document.removeEventListener("keydown", handleEscape);
+        window.removeEventListener("resize", updatePosition);
+        window.removeEventListener("scroll", updatePosition, true);
       };
-    }, []);
+    }, [outletPickerOpen, outlets.length]);
     const employeeReport = useEmployeeAttendanceReport({
       enabled:
         enabled && kind === "attendance" && selectedOutletIds.length > 0,
@@ -9183,64 +9223,87 @@
             </label>
             <div className="field report-outlet-filter">
               <span>Outlet</span>
-              <details
-                ref={outletPickerRef}
-                className="report-outlet-picker"
+              <div
+                className={`report-outlet-picker${outletPickerOpen ? " report-outlet-picker-open" : ""}`}
               >
-                <summary className="report-outlet-trigger">
+                <button
+                  ref={outletPickerRef}
+                  type="button"
+                  className="report-outlet-trigger"
+                  aria-expanded={outletPickerOpen}
+                  aria-controls="report-outlet-options"
+                  onClick={() => {
+                    if (outletPickerOpen) {
+                      setOutletPickerOpen(false);
+                      return;
+                    }
+                    const trigger = outletPickerRef.current;
+                    if (!trigger) return;
+                    setOutletPickerPosition(getOutletPickerPosition(trigger, outlets.length + 1));
+                    setOutletPickerOpen(true);
+                  }}
+                >
                   <span>{outletFilterLabel}</span>
                   <ChevronDown size={16} aria-hidden="true" />
-                </summary>
-                <div
-                  className="report-outlet-options"
-                  role="group"
-                  aria-label="Accessible outlets"
-                >
-                  <label className="report-outlet-option">
-                    <input
-                      type="checkbox"
-                      checked={allOutletsSelected}
-                      onChange={(event) => {
-                        setOutletSelection(event.target.checked ? null : []);
-                        setEmployeeId("");
-                      }}
-                    />
-                    <span>All accessible outlets</span>
-                  </label>
-                  {outlets.map((outlet) => {
-                    const checked =
-                      allOutletsSelected ||
-                      selectedOutletIds.includes(outlet._id);
-                    return (
-                      <label
-                        key={outlet._id}
-                        className="report-outlet-option"
-                      >
+                </button>
+                {outletPickerOpen &&
+                  outletPickerPosition &&
+                  createPortal(
+                    <div
+                      ref={outletOptionsRef}
+                      id="report-outlet-options"
+                      className="report-outlet-options"
+                      role="group"
+                      aria-label="Accessible outlets"
+                      style={outletPickerPosition}
+                    >
+                      <label className="report-outlet-option">
                         <input
                           type="checkbox"
-                          checked={checked}
+                          checked={allOutletsSelected}
                           onChange={(event) => {
-                            setOutletSelection((current) => {
-                              const selected =
-                                current ?? outlets.map((item) => item._id);
-                              const next = event.target.checked
-                                ? [...new Set([...selected, outlet._id])]
-                                : selected.filter((id) => id !== outlet._id);
-                              return next.length === outlets.length
-                                ? null
-                                : next;
-                            });
+                            setOutletSelection(event.target.checked ? null : []);
                             setEmployeeId("");
                           }}
                         />
-                        <span>
-                          {outlet.code} · {outlet.name}
-                        </span>
+                        <span>All accessible outlets</span>
                       </label>
-                    );
-                  })}
-                </div>
-              </details>
+                      {outlets.map((outlet) => {
+                        const checked =
+                          allOutletsSelected ||
+                          selectedOutletIds.includes(outlet._id);
+                        return (
+                          <label
+                            key={outlet._id}
+                            className="report-outlet-option"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(event) => {
+                                setOutletSelection((current) => {
+                                  const selected =
+                                    current ?? outlets.map((item) => item._id);
+                                  const next = event.target.checked
+                                    ? [...new Set([...selected, outlet._id])]
+                                    : selected.filter((id) => id !== outlet._id);
+                                  return next.length === outlets.length
+                                    ? null
+                                    : next;
+                                });
+                                setEmployeeId("");
+                              }}
+                            />
+                            <span>
+                              {outlet.code} · {outlet.name}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>,
+                    document.body,
+                  )}
+              </div>
             </div>
             {kind === "attendance" && (
               <label className="field">

@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Anton, Inter } from "next/font/google";
 import "./globals.css";
+import "./dropdown-overlays.css";
 
 const anton = Anton({
   subsets: ["latin"],

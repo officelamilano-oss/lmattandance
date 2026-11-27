@@ -27,6 +27,55 @@ type SelectOption = {
   disabled: boolean;
 };
 
+function getMenuPosition(
+  trigger: HTMLButtonElement,
+  optionCount: number,
+): CSSProperties {
+  const rect = trigger.getBoundingClientRect();
+  const modal = trigger.closest<HTMLElement>(
+    '[role="dialog"], .advance-modal, .employee-create-modal, .employee-edit-modal',
+  );
+  const modalRect = modal?.getBoundingClientRect();
+  const boundaryTop = Math.max(12, modalRect?.top ?? 0);
+  const boundaryBottom = Math.min(
+    window.innerHeight - 12,
+    modalRect?.bottom ?? window.innerHeight,
+  );
+  const boundaryLeft = Math.max(12, modalRect?.left ?? 0);
+  const boundaryRight = Math.min(
+    window.innerWidth - 12,
+    modalRect?.right ?? window.innerWidth,
+  );
+  const width = Math.min(
+    Math.max(rect.width, 280),
+    boundaryRight - boundaryLeft,
+  );
+  const left = Math.max(
+    boundaryLeft,
+    Math.min(rect.left, boundaryRight - width),
+  );
+  const desiredHeight = Math.min(320, Math.max(80, optionCount * 38 + 16));
+  const belowSpace = Math.max(0, boundaryBottom - rect.bottom - 8);
+  const aboveSpace = Math.max(0, rect.top - boundaryTop - 8);
+  const openAbove =
+    belowSpace < Math.min(desiredHeight, 160) && aboveSpace > belowSpace;
+  const maxHeight = Math.max(
+    1,
+    Math.min(desiredHeight, openAbove ? aboveSpace : belowSpace),
+  );
+  const top = openAbove
+    ? Math.max(boundaryTop + 8, rect.top - maxHeight - 8)
+    : rect.bottom + 8;
+
+  return {
+    position: "fixed",
+    top: `${top}px`,
+    left: `${left}px`,
+    width: `${width}px`,
+    maxHeight: `${maxHeight}px`,
+  };
+}
+
 function readOptions(children: ReactNode): SelectOption[] {
   const options: SelectOption[] = [];
   Children.forEach(children, (child) => {
@@ -100,14 +149,7 @@ export function RoundedSelect({
   function openMenu(index = selectedIndex >= 0 ? selectedIndex : 0) {
     const trigger = triggerRef.current;
     if (!trigger || disabled) return;
-    const rect = trigger.getBoundingClientRect();
-    const width = Math.min(240, window.innerWidth - 24);
-    setPanelPosition({
-      position: "fixed",
-      top: `${rect.bottom + 8}px`,
-      left: `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`,
-      width: `${width}px`,
-    });
+    setPanelPosition(getMenuPosition(trigger, options.length));
     const startIndex =
       index >= 0 && !options[index]?.disabled
         ? index
@@ -145,15 +187,8 @@ export function RoundedSelect({
       }
     };
     const updatePosition = () => {
-      const rect = triggerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const width = Math.min(240, window.innerWidth - 24);
-      setPanelPosition({
-        position: "fixed",
-        top: `${rect.bottom + 8}px`,
-        left: `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`,
-        width: `${width}px`,
-      });
+      const trigger = triggerRef.current;
+      if (trigger) setPanelPosition(getMenuPosition(trigger, options.length));
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -165,7 +200,7 @@ export function RoundedSelect({
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [open]);
+  }, [open, options.length]);
 
   function handleKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
