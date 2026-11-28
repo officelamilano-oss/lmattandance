@@ -71,6 +71,7 @@ export interface EmployeeView {
   employmentType?: EmploymentType;
   shiftStartTime?: string;
   shiftEndTime?: string;
+  shiftDurationHours?: number;
   mobile?: string | null;
   active: boolean;
   outletId: string;
@@ -245,12 +246,15 @@ export interface DesignationView {
 }
 
 export interface AuditView {
+  _id: string;
   at: string;
   actorEmail: string;
   action: string;
   entityType: string;
   entityId: string;
+  entityLabel?: string;
   reason?: string;
+  changes?: Record<string, { before: unknown; after: unknown }>;
 }
 
 export interface EmployeeAttendanceReportRow {
@@ -334,7 +338,9 @@ export interface WorkspaceData {
     pendingPayroll?: number | null;
     pendingApprovals?: number;
     pendingAdvanceApprovals?: number;
+    grossSalary?: number | null;
     netPayable?: number | null;
+    projectedMonthEndBase?: number | null;
     approvedAdvancesPendingPayroll?: number | null;
     recordedLoanDeductions?: number | null;
     liveLoanDeductions?: number | null;
@@ -370,6 +376,7 @@ export interface WorkspaceData {
   users?: UserView[];
   designations?: DesignationView[];
   logs?: AuditView[];
+  hasMore?: boolean;
   total?: number;
   page?: number;
   pageSize?: number;

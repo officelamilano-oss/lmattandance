@@ -3,7 +3,7 @@ import { connection, NextResponse } from "next/server";
 import { getActor } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError } from "@/lib/http";
-import type { AuditLogDocument } from "@/lib/models";
+import type { AuditLogDocument, EmployeeDocument } from "@/lib/models";
 
 export async function GET(request: Request) {
   try {
@@ -46,16 +46,51 @@ export async function GET(request: Request) {
             }
           : {}),
     };
-    const logs = await (
-      await getDb()
-    )
+    const db = await getDb();
+    const logs = await db
       .collection<AuditLogDocument>("auditLogs")
       .find(query)
       .sort({ at: -1 })
       .skip(page * 50)
       .limit(50)
       .toArray();
-    return NextResponse.json({ logs, page, hasMore: logs.length === 50 });
+    const employeeIds = logs
+      .filter(
+        (log) =>
+          log.entityType === "employee" &&
+          !log.entityLabel &&
+          ObjectId.isValid(log.entityId),
+      )
+      .map((log) => new ObjectId(log.entityId));
+    const employees = employeeIds.length
+      ? await db
+          .collection<EmployeeDocument>("employees")
+          .find(
+            {
+              _id: { $in: employeeIds },
+              ...(actor.role === "MAIN_ADMIN"
+                ? {}
+                : { outletId: { $in: actor.outletIds } }),
+            },
+            { projection: { employeeCode: 1, fullName: 1 } },
+          )
+          .toArray()
+      : [];
+    const employeeLabels = new Map(
+      employees.map((employee) => [
+        employee._id.toHexString(),
+        `${employee.employeeCode} · ${employee.fullName}`,
+      ]),
+    );
+    return NextResponse.json({
+      logs: logs.map((log) => ({
+        ...log,
+        entityLabel:
+          log.entityLabel ?? employeeLabels.get(log.entityId),
+      })),
+      page,
+      hasMore: logs.length === 50,
+    });
   } catch (error) {
     return apiError(error);
   }

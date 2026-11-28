@@ -1,8 +1,14 @@
 "use client";
 
-import { Activity, ArrowLeft, Menu, Moon, Sun, X } from "lucide-react";
+import {
+  ChevronDown,
+  Search,
+  Users,
+} from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { AutoDismissNotice } from "@/components/auto-dismiss-notice";
 import {
   FaceScanError,
   getFaceDescriptor,
@@ -25,9 +31,14 @@ type Identification = {
   message?: string;
 };
 
-type KioskContext = {
-  device: { label: string };
-  outlet: { code: string; name: string };
+type KioskOutlet = { id: string; code: string; name: string };
+type KioskEmployee = {
+  id: string;
+  code: string;
+  name: string;
+  outletId: string;
+  outletCode: string;
+  outletName: string;
 };
 
 class KioskRequestError extends Error {
@@ -56,49 +67,56 @@ function wait(milliseconds: number) {
 export function KioskTerminal() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const outletPickerRef = useRef<HTMLDetailsElement>(null);
+  const scanOpenerRef = useRef<HTMLElement | null>(null);
+  const cameraDialogRef = useRef<HTMLElement>(null);
   const [authorized, setAuthorized] = useState(false);
   const [sessionLoading, setSessionLoading] = useState(true);
-  const [pinInput, setPinInput] = useState("");
-  const [pinSubmitting, setPinSubmitting] = useState(false);
-  const [kioskContext, setKioskContext] = useState<KioskContext | null>(null);
+  const [outlets, setOutlets] = useState<KioskOutlet[]>([]);
+  const [selectedOutletId, setSelectedOutletId] = useState("all");
+  const [employees, setEmployees] = useState<KioskEmployee[]>([]);
+  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [employeeSearch, setEmployeeSearch] = useState("");
+  const [selectedEmployee, setSelectedEmployee] =
+    useState<KioskEmployee | null>(null);
   const [recognizedEmployee, setRecognizedEmployee] =
     useState<Identification["employee"] | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
-  const [navigationOpen, setNavigationOpen] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
-  const [autoStartCamera, setAutoStartCamera] = useState(true);
+  const [autoStartCamera, setAutoStartCamera] = useState(false);
   const [cameraStartRequest, setCameraStartRequest] = useState(0);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [hasCompletedPunch, setHasCompletedPunch] = useState(false);
-  const [message, setMessage] = useState(
-    "Enter the kiosk PIN to connect this device.",
+  const [message, setMessage] = useState("Choose an employee to start.");
+  const visibleEmployees = useMemo(
+    () =>
+      employees.filter((employee) =>
+        `${employee.code} ${employee.name} ${employee.outletCode} ${employee.outletName}`
+          .toLowerCase()
+          .includes(employeeSearch.trim().toLowerCase()),
+      ),
+    [employeeSearch, employees],
+  );
+  const selectedOutlet = outlets.find(
+    (outlet) => outlet.id === selectedOutletId,
   );
 
   useEffect(() => {
-    if (!success) return;
-    const timer = window.setTimeout(() => setSuccess(""), 2000);
-    return () => window.clearTimeout(timer);
-  }, [success]);
-
-  useEffect(() => {
-    window.localStorage.removeItem("attendance-kiosk-token");
     let active = true;
     void fetch("/api/kiosk/session", { cache: "no-store" })
       .then(async (response) => {
-        if (response.status === 401) return null;
-        return (await responseJson(response)) as KioskContext;
+        if (response.status === 401 || response.status === 403)
+          throw new KioskRequestError(
+            "Sign in to the workspace with attendance access to use the kiosk.",
+            response.status,
+          );
+        return (await responseJson(response)) as { outlets: KioskOutlet[] };
       })
       .then((result) => {
         if (!active) return;
-        if (result) {
-          setKioskContext(result);
-          setAuthorized(true);
-          setMessage(
-            `Connected to ${result.outlet.code} · ${result.outlet.name}. Starting camera…`,
-          );
-        }
+        setOutlets(result.outlets);
+        setAuthorized(true);
+        setMessage("Choose an outlet and employee to start the face scan.");
       })
       .catch((caught: unknown) => {
         if (active)
@@ -117,72 +135,115 @@ export function KioskTerminal() {
     };
   }, []);
 
-  async function savePin(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError("");
-    setSuccess("");
-    setPinSubmitting(true);
-    try {
-      const response = await fetch("/api/kiosk/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pin: pinInput.trim() }),
+  useEffect(() => {
+    if (!authorized) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setEmployeesLoading(true);
+      setEmployees([]);
+    });
+    const query = selectedOutletId === "all"
+      ? "all"
+      : encodeURIComponent(selectedOutletId);
+    void fetch(`/api/kiosk/session?outletId=${query}`, { cache: "no-store" })
+      .then(async (response) => {
+        const result = await responseJson(response);
+        return result as { employees: KioskEmployee[] };
+      })
+      .then((result) => {
+        if (active) setEmployees(result.employees);
+      })
+      .catch((caught: unknown) => {
+        if (active)
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "Unable to load enrolled employees.",
+          );
+      })
+      .finally(() => {
+        if (active) setEmployeesLoading(false);
       });
-      const result = (await responseJson(response)) as KioskContext;
-      setKioskContext(result);
-      setAuthorized(true);
-      setPinInput("");
-      setAutoStartCamera(true);
-      setMessage(
-        `Connected to ${result.outlet.code} · ${result.outlet.name}. Starting camera…`,
-      );
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "Unable to connect kiosk.",
-      );
-    } finally {
-      setPinSubmitting(false);
-    }
-  }
+    return () => {
+      active = false;
+    };
+  }, [authorized, selectedOutletId]);
 
-  async function disconnect() {
+  const stopScan = useCallback(() => {
+    stopFaceCamera(streamRef.current);
+    streamRef.current = null;
+    setCameraReady(false);
+    setCameraStarting(false);
+    setAutoStartCamera(false);
+    setRecognizedEmployee(null);
+    setSelectedEmployee(null);
+    setMessage("Choose another employee to start.");
+    window.requestAnimationFrame(() => scanOpenerRef.current?.focus());
+  }, []);
+
+  function selectOutlet(outletId: string) {
     stopFaceCamera(streamRef.current);
     streamRef.current = null;
     setCameraReady(false);
     setAutoStartCamera(false);
-    try {
-      const response = await fetch("/api/kiosk/session", { method: "DELETE" });
-      await responseJson(response);
-    } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "Unable to disconnect this kiosk.",
-      );
-    }
-    setAuthorized(false);
-    setKioskContext(null);
+    setSelectedEmployee(null);
     setRecognizedEmployee(null);
-    setSuccess("");
-    setHasCompletedPunch(false);
-    setMessage("Kiosk disconnected. Enter its PIN to connect again.");
+    setSelectedOutletId(outletId);
+    setEmployees([]);
+    setEmployeesLoading(true);
+    setError("");
   }
 
-  async function openCamera() {
+  function selectEmployee(employee: KioskEmployee, opener: HTMLElement) {
+    stopFaceCamera(streamRef.current);
+    streamRef.current = null;
+    setCameraReady(false);
+    setCameraStarting(false);
+    scanOpenerRef.current = opener;
     setError("");
     setSuccess("");
+    setSelectedEmployee(employee);
+    setRecognizedEmployee(null);
+    setMessage(`Opening camera for ${employee.name}…`);
     setAutoStartCamera(true);
     setCameraStartRequest((request) => request + 1);
   }
 
-  function toggleTheme() {
-    const nextDarkMode = !darkMode;
-    setDarkMode(nextDarkMode);
-    document.documentElement.dataset.theme = nextDarkMode ? "dark" : "light";
-  }
+  useEffect(() => {
+    if (!selectedEmployee) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        stopScan();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = cameraDialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], video[tabindex], [tabindex]:not([tabindex="-1"])',
+      );
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedEmployee, stopScan]);
 
   useEffect(() => {
-    if (!authorized || cameraReady || !autoStartCamera) return;
+    if (!authorized || !selectedEmployee || cameraReady || !autoStartCamera)
+      return;
     let active = true;
     queueMicrotask(() => {
       if (active) setCameraStarting(true);
@@ -199,16 +260,16 @@ export function KioskTerminal() {
         streamRef.current = stream;
         setCameraReady(true);
         setError("");
-        setMessage(
-          `Camera is on at ${kioskContext?.outlet.code ?? "this outlet"}. Show an enrolled face to check attendance.`,
-        );
+        setMessage(`Camera is ready for ${selectedEmployee.name}.`);
       } catch (caught) {
-        if (active)
+        if (active) {
+          setAutoStartCamera(false);
           setError(
             caught instanceof Error
               ? caught.message
               : "Unable to open the camera.",
           );
+        }
       } finally {
         if (active) setCameraStarting(false);
       }
@@ -221,18 +282,22 @@ export function KioskTerminal() {
     autoStartCamera,
     cameraReady,
     cameraStartRequest,
-    kioskContext,
+    selectedEmployee,
   ]);
 
   useEffect(() => {
-    if (!authorized || !cameraReady) return;
+    if (!authorized || !cameraReady || !selectedEmployee) return;
     let active = true;
 
     async function identify(descriptor: number[]) {
       const response = await fetch("/api/kiosk/identify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ descriptor }),
+        body: JSON.stringify({
+          descriptor,
+          outletId: selectedEmployee!.outletId,
+          employeeId: selectedEmployee!.id,
+        }),
       });
       return (await responseJson(response)) as Identification;
     }
@@ -241,7 +306,11 @@ export function KioskTerminal() {
       const response = await fetch("/api/kiosk/punch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ descriptor }),
+        body: JSON.stringify({
+          descriptor,
+          outletId: selectedEmployee!.outletId,
+          employeeId: selectedEmployee!.id,
+        }),
       });
       return responseJson(response);
     }
@@ -259,15 +328,12 @@ export function KioskTerminal() {
           setRecognizedEmployee(result.employee);
           setError("");
           setSuccess("");
-          const outletLabel = kioskContext
-            ? `${kioskContext.outlet.code} · ${kioskContext.outlet.name}`
-            : "this outlet";
           if (
             result.nextAction === "CHECK_IN" ||
             result.nextAction === "CHECK_OUT"
           ) {
             setMessage(
-              `${result.employee.name} is recognized at ${outletLabel}. Recording attendance…`,
+              `${result.employee.name} is recognized. Recording attendance…`,
             );
             const punchResult = await punch(descriptor);
             if (!active) break;
@@ -276,18 +342,23 @@ export function KioskTerminal() {
             streamRef.current = null;
             setCameraReady(false);
             setAutoStartCamera(false);
-            setHasCompletedPunch(true);
             setSuccess(
               punchResult.action === "IN"
-                ? `${punchResult.employee.name}, your shift has started. Attendance marked present at ${punchedAt}.`
-                : `${punchResult.employee.name}, your shift has ended. Check-out recorded at ${punchedAt}.`,
+                ? punchResult.attendanceMarked === false
+                  ? `${punchResult.employee.name}, your face clock-in was recorded at ${punchedAt}.`
+                  : `${punchResult.employee.name}, your shift has started. Attendance marked present at ${punchedAt}.`
+                : punchResult.attendanceMarked === false
+                  ? `${punchResult.employee.name}, your face clock-out was recorded at ${punchedAt}.`
+                  : `${punchResult.employee.name}, your shift has ended. Check-out recorded at ${punchedAt}.`,
             );
-            setMessage("Camera is off. Start scanning when the next employee is ready.");
+            setSelectedEmployee(null);
+            setRecognizedEmployee(null);
+            setMessage("Camera is off. Select another employee when ready.");
             return;
           }
 
           setMessage(
-            `${result.employee.name} (${result.employee.code}) · ${outletLabel}. ${result.message ?? "No attendance action is due right now."}`,
+            `${result.employee.name} (${result.employee.code}). ${result.message ?? "Face recognized."}`,
           );
           await wait(result.nextAction === "DONE" ? 8000 : 3000);
         } catch (caught) {
@@ -311,16 +382,24 @@ export function KioskTerminal() {
             streamRef.current = null;
             setCameraReady(false);
             setAuthorized(false);
-            setKioskContext(null);
-            setError("This kiosk PIN was reset or the device was revoked. Ask an administrator for the current PIN.");
+            setError("Your workspace session expired. Sign in again to continue.");
             break;
           }
           if (caught instanceof KioskRequestError && caught.status === 409) {
-            stopFaceCamera(streamRef.current);
-            streamRef.current = null;
-            setCameraReady(false);
-            setAutoStartCamera(false);
+            if (
+              caught.message !==
+              "The detected face does not match the selected employee."
+            ) {
+              stopFaceCamera(streamRef.current);
+              streamRef.current = null;
+              setCameraReady(false);
+              setAutoStartCamera(false);
+            }
             setMessage(caught.message);
+            if (cameraReady) {
+              await wait(1000);
+              continue;
+            }
             break;
           }
           setError(
@@ -337,172 +416,263 @@ export function KioskTerminal() {
     return () => {
       active = false;
     };
-  }, [authorized, cameraReady, kioskContext]);
+  }, [authorized, cameraReady, selectedEmployee]);
 
   return (
+    <>
     <main className="kiosk-page content-area kiosk-terminal">
-      <header className="topbar kiosk-app-topbar">
-        <button
-          className="icon-button kiosk-menu-button"
-          type="button"
-          aria-label={navigationOpen ? "Close navigation" : "Open navigation"}
-          aria-expanded={navigationOpen}
-          onClick={() => setNavigationOpen((open) => !open)}
-        >
-          {navigationOpen ? <X size={20} /> : <Menu size={20} />}
-        </button>
-        <div className="breadcrumb">
-          <Activity size={16} aria-hidden="true" />
-          <span>Operations</span>
-          <b>/</b>
-          <strong>Attendance kiosk</strong>
-        </div>
-        <div className="topbar-right kiosk-topbar-right">
-          <button
-            className="topbar-utility"
-            type="button"
-            aria-label={darkMode ? "Switch to light theme" : "Switch to dark theme"}
-            title={darkMode ? "Switch to light theme" : "Switch to dark theme"}
-            onClick={toggleTheme}
-          >
-            {darkMode ? <Sun size={17} /> : <Moon size={17} />}
-          </button>
-          <Link className="button button-secondary kiosk-workspace-button" href="/">
-            <ArrowLeft aria-hidden="true" size={17} />
-            <span>Back to workspace</span>
-          </Link>
-        </div>
-        {navigationOpen && (
-          <nav className="kiosk-menu" aria-label="Workspace navigation">
-            <Link href="/attendance" onClick={() => setNavigationOpen(false)}>Attendance</Link>
-            <Link href="/employees" onClick={() => setNavigationOpen(false)}>Employees</Link>
-            <Link href="/" onClick={() => setNavigationOpen(false)}>Back to workspace</Link>
-          </nav>
-        )}
-      </header>
-      {kioskContext && (
-        <p className="kiosk-nav-context">
-          {kioskContext.outlet.code} · {kioskContext.outlet.name} · {kioskContext.device.label}
-        </p>
-      )}
       <header className="page-head kiosk-content">
         <div>
           <p className="eyebrow">LA MILANO · ATTENDANCE</p>
-          <h1>Automatic face attendance</h1>
+          <h1>Face attendance kiosk</h1>
           <p>
-            Show your enrolled face at shift start for check-in and again after
-            shift end for check-out.
+            Select an outlet and employee. The camera opens for that employee
+            and turns off after the face punch.
           </p>
         </div>
       </header>
       {sessionLoading ? (
-        <section className="panel kiosk-token-panel kiosk-content" role="status">
-          Checking this browser’s saved kiosk setup…
+        <section
+          className="panel kiosk-employee-panel kiosk-content kiosk-initial-loading"
+          role="status"
+          aria-label="Loading kiosk options"
+          aria-busy="true"
+        >
+          <span className="kiosk-sr-only">Loading kiosk options</span>
+          <div className="panel-heading" aria-hidden="true">
+            <div>
+              <h2>Select employee</h2>
+              <p>Only active employees with registered faces are listed.</p>
+            </div>
+          </div>
+          <div className="kiosk-selector-row" aria-hidden="true">
+            <div className="kiosk-skeleton kiosk-skeleton-control" />
+            <div className="kiosk-skeleton kiosk-skeleton-control" />
+          </div>
+          <div className="kiosk-initial-employee-skeletons" aria-hidden="true">
+            <div className="kiosk-skeleton kiosk-skeleton-employee" />
+            <div className="kiosk-skeleton kiosk-skeleton-employee" />
+          </div>
         </section>
       ) : !authorized ? (
         <section className="panel kiosk-token-panel kiosk-content">
-          <h2>Connect this outlet kiosk</h2>
+          <h2>Workspace sign-in required</h2>
           <p>
-            Enter the 8-digit PIN once. This browser securely remembers the
-            kiosk for one year, so the PIN will not be requested every time.
+            Sign in with an account that has attendance access to use the face
+            attendance kiosk.
           </p>
-          <form className="form-grid" onSubmit={(event) => void savePin(event)}>
-            <label className="field">
-              <span>Kiosk PIN</span>
-              <input
-                type="password"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={8}
-                value={pinInput}
-                onChange={(event) =>
-                  setPinInput(event.target.value.replace(/\D/g, "").slice(0, 8))
-                }
-                required
-              />
-            </label>
-            <div className="form-actions">
-              <button
-                className="button button-primary"
-                disabled={pinSubmitting || pinInput.length !== 8}
-              >
-                {pinSubmitting ? "Connecting…" : "Connect kiosk"}
-              </button>
-            </div>
-          </form>
+          <Link className="button button-primary" href="/login">
+            Sign in to workspace
+          </Link>
           {error && <p className="form-error" role="alert">{error}</p>}
         </section>
       ) : (
-        <section className="panel kiosk-camera-panel kiosk-content">
-          <div className="panel-heading">
-            <div>
-              <h2>Automatic shift check-in and check-out</h2>
-              <p>
-                Check-out is accepted only at or after the employee’s scheduled
-                shift end.
-              </p>
+        <>
+          <section className="panel kiosk-employee-panel kiosk-content">
+            <div className="panel-heading">
+              <div>
+                <h2>Select employee</h2>
+                <p>Only active employees with registered faces are listed.</p>
+              </div>
             </div>
-            <button
-              className="button button-secondary"
-              type="button"
-              onClick={() => void disconnect()}
-            >
-              Disconnect kiosk
-            </button>
-          </div>
-          {error && <p className="form-error" role="alert">{error}</p>}
-          <div className="kiosk-camera">
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              hidden={!cameraReady}
-            />
-            {!cameraReady && (
-              <button
-                className="button button-primary"
-                type="button"
-                onClick={() => void openCamera()}
-                disabled={cameraStarting}
-              >
-                {cameraStarting
-                  ? "Starting camera…"
-                  : hasCompletedPunch
-                    ? "Check in another employee"
-                    : "Start camera"}
-              </button>
-            )}
-          </div>
-          <div className="kiosk-identification" aria-live="polite">
-            {kioskContext && (
-              <p>
-                Outlet: <strong>{kioskContext.outlet.code} · {kioskContext.outlet.name}</strong>
-                {" · "}Device: <strong>{kioskContext.device.label}</strong>
+            {error && <p className="form-error" role="alert">{error}</p>}
+            <div className="kiosk-selector-row">
+              <label className="field">
+                <span>Location</span>
+                <details
+                  className="kiosk-outlet-picker"
+                  ref={outletPickerRef}
+                  onBlur={(event) => {
+                    if (
+                      !(event.relatedTarget instanceof Node) ||
+                      !event.currentTarget.contains(event.relatedTarget)
+                    )
+                      event.currentTarget.open = false;
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.currentTarget.open = false;
+                      event.currentTarget.querySelector("summary")?.focus();
+                    }
+                  }}
+                >
+                  <summary aria-label="Choose location">
+                    <span>
+                      {selectedOutletId === "all"
+                        ? "All Outlets"
+                        : selectedOutlet
+                          ? `${selectedOutlet.code} · ${selectedOutlet.name}`
+                          : "Choose location"}
+                    </span>
+                    <ChevronDown size={17} aria-hidden="true" />
+                  </summary>
+                  <div
+                    className="kiosk-outlet-options"
+                    role="group"
+                    aria-label="Locations"
+                  >
+                    <button
+                      type="button"
+                      className={
+                        selectedOutletId === "all"
+                          ? "kiosk-outlet-option is-selected"
+                          : "kiosk-outlet-option"
+                      }
+                      aria-pressed={selectedOutletId === "all"}
+                      onClick={() => {
+                        selectOutlet("all");
+                        outletPickerRef.current?.querySelector("summary")?.focus();
+                        outletPickerRef.current?.removeAttribute("open");
+                      }}
+                    >
+                      All Outlets
+                    </button>
+                    {outlets.map((outlet) => (
+                      <button
+                        key={outlet.id}
+                        type="button"
+                        className={
+                          selectedOutletId === outlet.id
+                            ? "kiosk-outlet-option is-selected"
+                            : "kiosk-outlet-option"
+                        }
+                        aria-pressed={selectedOutletId === outlet.id}
+                        onClick={() => {
+                          selectOutlet(outlet.id);
+                          outletPickerRef.current
+                            ?.querySelector("summary")
+                            ?.focus();
+                          outletPickerRef.current?.removeAttribute("open");
+                        }}
+                      >
+                        <span>{outlet.code}</span>
+                        <span>{outlet.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              </label>
+              <label className="kiosk-employee-search">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  value={employeeSearch}
+                  onChange={(event) => setEmployeeSearch(event.target.value)}
+                  aria-label="Search employees"
+                  placeholder="Search employee"
+                />
+              </label>
+            </div>
+            {employeesLoading ? (
+              <div className="kiosk-loading-state" role="status">
+                <span className="kiosk-loading-spinner" aria-hidden="true" />
+                <span>Loading enrolled employees…</span>
+              </div>
+            ) : visibleEmployees.length ? (
+              <div className="kiosk-employee-list">
+                {visibleEmployees.map((employee) => (
+                  <button
+                    className="kiosk-employee-option"
+                    key={employee.id}
+                    type="button"
+                    onClick={(event) =>
+                      selectEmployee(employee, event.currentTarget)
+                    }
+                  >
+                    <Users size={17} aria-hidden="true" />
+                    <span>
+                      <strong>{employee.code} · {employee.name}</strong>
+                      {selectedOutletId === "all" && (
+                        <small>{employee.outletCode} · {employee.outletName}</small>
+                      )}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="kiosk-no-employees">
+                No enrolled employees available for this outlet.
               </p>
             )}
-            {recognizedEmployee && (
-              <p>
-                Recognized employee:{" "}
-                <strong>
-                  {recognizedEmployee.name} ({recognizedEmployee.code})
-                </strong>
-              </p>
-          )}
-          <p>{message}</p>
-          </div>
-          <small className="muted">
-            The camera turns off after each successful attendance. Start it
-            again for the next employee. At shift start, check-in is marked
-            only when the configured shift window opens.
-          </small>
-        </section>
+          </section>
+        </>
       )}
       {success && (
-        <div className="kiosk-toast" role="status" aria-live="polite" aria-atomic="true">
-          {success}
-        </div>
+        <AutoDismissNotice message={success} variant="success" />
       )}
     </main>
+    {selectedEmployee &&
+      createPortal(
+        <div
+          className="kiosk-camera-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) stopScan();
+          }}
+        >
+          <section
+            className="panel kiosk-camera-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="kiosk-camera-title"
+            ref={cameraDialogRef}
+          >
+            <div className="panel-heading kiosk-camera-modal-heading">
+              <div>
+                <h2 id="kiosk-camera-title">
+                  {selectedEmployee.name} · {selectedEmployee.code}
+                </h2>
+                <p>
+                  {selectedEmployee.outletCode} · {selectedEmployee.outletName}
+                </p>
+              </div>
+              <button
+                className="button button-secondary"
+                type="button"
+                autoFocus
+                onClick={stopScan}
+              >
+                Cancel scan
+              </button>
+            </div>
+            {error && <p className="form-error kiosk-camera-modal-error" role="alert">{error}</p>}
+            <div className="kiosk-camera kiosk-camera-modal-preview">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                hidden={!cameraReady}
+              />
+              {!cameraReady && !cameraStarting && (
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() => {
+                    setError("");
+                    setAutoStartCamera(true);
+                    setCameraStartRequest((request) => request + 1);
+                  }}
+                >
+                  Try camera again
+                </button>
+              )}
+              {cameraStarting && <span role="status">Opening camera…</span>}
+            </div>
+            <div className="kiosk-identification" aria-live="polite">
+              {recognizedEmployee && (
+                <p>
+                  Face recognized:{" "}
+                  <strong>{recognizedEmployee.name} ({recognizedEmployee.code})</strong>
+                </p>
+              )}
+              <p>{message}</p>
+            </div>
+            <small className="muted kiosk-camera-modal-note">
+              Your camera turns off after the face punch.
+            </small>
+          </section>
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }

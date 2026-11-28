@@ -10,14 +10,17 @@ export function AutoDismissNotice({
   message: string;
   variant: "error" | "success";
 }) {
-  const [visible, setVisible] = useState(true);
+  const [dismissedMessage, setDismissedMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => setVisible(false), 2000);
+    const timeout = window.setTimeout(
+      () => setDismissedMessage(message),
+      5000,
+    );
     return () => window.clearTimeout(timeout);
   }, [message]);
 
-  if (!message || !visible) return null;
+  if (!message || message === dismissedMessage) return null;
 
   return (
     <div

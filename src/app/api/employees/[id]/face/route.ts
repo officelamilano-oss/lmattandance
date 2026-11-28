@@ -143,6 +143,7 @@ export async function PUT(
       action: "EMPLOYEE_FACE_ENROLLED",
       entityType: "employee",
       entityId: id,
+      entityLabel: `${access.employee.employeeCode} · ${access.employee.fullName}`,
       outletId: access.employee.outletId,
       changes: {
         faceEnrollment: {
@@ -176,7 +177,11 @@ export async function DELETE(
         action: "EMPLOYEE_FACE_DELETED",
         entityType: "employee",
         entityId: id,
+        entityLabel: `${access.employee.employeeCode} · ${access.employee.fullName}`,
         outletId: access.employee.outletId,
+        changes: {
+          faceEnrollment: { before: "Enrolled", after: "Removed" },
+        },
       });
     return NextResponse.json({ ok: true });
   } catch (error) {

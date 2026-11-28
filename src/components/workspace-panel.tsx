@@ -103,6 +103,99 @@
   } from "@/lib/payroll/loans";
   import { formatDate, formatDateTime } from "@/lib/date-format";
 
+  const auditActionLabels: Record<string, string> = {
+    EMPLOYEE_CREATED: "Employee added",
+    EMPLOYEE_REQUESTED: "Employee addition requested",
+    EMPLOYEE_UPDATED: "Employee details edited",
+    EMPLOYEE_DELETED: "Employee deleted",
+    EMPLOYEE_ACTIVATED: "Employee activated",
+    EMPLOYEE_DEACTIVATED: "Employee deactivated",
+    EMPLOYEE_REQUEST_APPROVED: "Employee request approved",
+    EMPLOYEE_REQUEST_REJECTED: "Employee request rejected",
+    EMPLOYEE_DOCUMENTS_UPLOADED: "Employee files uploaded",
+    EMPLOYEE_DOCUMENT_DELETED: "Employee file deleted",
+    EMPLOYEE_FACE_ENROLLED: "Employee face enrolled",
+    EMPLOYEE_FACE_DELETED: "Employee face enrollment removed",
+    EMPLOYEE_SHIFT_UPDATED: "Employee shift updated",
+    EMPLOYEE_SHEET_IMPORTED: "Employee sheet imported",
+    ATTENDANCE_SUBMITTED: "Attendance submitted",
+    ATTENDANCE_CORRECTED: "Attendance corrected",
+    ATTENDANCE_PUNCHED_IN: "Attendance check-in",
+    ATTENDANCE_PUNCHED_OUT: "Attendance check-out",
+    USER_PROVISIONED: "User added",
+    USER_ACCESS_UPDATED: "User access updated",
+    USER_PASSWORD_RESET: "User password reset",
+    USER_DELETED: "User deleted",
+    OUTLET_CREATED: "Outlet added",
+    PAYROLL_SETTINGS_UPDATED: "Payroll settings updated",
+    ADMIN_CREDENTIALS_UPDATED: "Administrator credentials updated",
+  };
+
+  function formatAuditAction(action: string) {
+    return (
+      auditActionLabels[action] ??
+      action
+        .toLowerCase()
+        .split("_")
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ")
+    );
+  }
+
+  function formatAuditField(field: string) {
+    const labels: Record<string, string> = {
+      employeeCode: "Employee code",
+      fullName: "Employee name",
+      dateOfJoining: "Date of joining",
+      dateOfBirth: "Date of birth",
+      designationKey: "Designation",
+      designationGroup: "Designation group",
+      employmentType: "Employment type",
+      shiftStartTime: "Shift start",
+      shiftEndTime: "Shift end",
+      outletId: "Outlet",
+      monthlyBaseSalary: "Base salary",
+      salaryMethod: "Salary method",
+      employeePfPercent: "Employee PF rate",
+      employerPfPercent: "Employer PF rate",
+      esiEnabled: "ESI enabled",
+      esiPercent: "ESI rate",
+      beneficiaryName: "Bank beneficiary",
+      bankName: "Bank name",
+      branchName: "Bank branch",
+      accountNumber: "Bank account number",
+      ifscCode: "IFSC code",
+      panNumber: "PAN number",
+      aadhaarNumber: "Aadhaar number",
+      drivingLicenceNumber: "Driving licence number",
+      documentsUploaded: "Files uploaded",
+      documentTypes: "File types",
+      faceEnrollment: "Face enrollment",
+    };
+    return (
+      labels[field] ??
+      field.replace(/[A-Z]/g, (letter) => ` ${letter.toLowerCase()}`)
+    );
+  }
+
+  function isPrivateAuditField(field: string) {
+    return /(?:password(?!set)|secret|token|pin|descriptor|accountnumber|ifsc|pan|aadhaar|drivinglicence|dateofbirth|mobile|bankname|branchname|beneficiaryname|salary|payroll|pfpercent|esipercent)/i.test(
+      field.replace(/[^a-z]/gi, ""),
+    );
+  }
+
+  function formatAuditValue(field: string, value: unknown) {
+    if (value === null || value === undefined || value === "") return "—";
+    if (isPrivateAuditField(field))
+      return value === "Updated; value hidden"
+        ? "Updated; value hidden"
+        : "Value hidden";
+    if (typeof value === "boolean") return value ? "Yes" : "No";
+    if (typeof value === "number") return value.toLocaleString();
+    if (typeof value === "string") return value;
+    return JSON.stringify(value);
+  }
+
   function getOutletPickerPosition(
     trigger: HTMLButtonElement,
     optionCount: number,
@@ -461,6 +554,9 @@
     } | null>(null);
     const [error, setError] = useState("");
     const [success, setSuccess] = useState("");
+    const [auditPage, setAuditPage] = useState(0);
+    const [auditHasMore, setAuditHasMore] = useState(false);
+    const [loadingOlderAudit, setLoadingOlderAudit] = useState(false);
     const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(
       null,
     );
@@ -725,12 +821,15 @@
         if (section === "activeLogs") {
           const params = new URLSearchParams({ page: "0" });
           if (selectedOutlet) params.set("outletId", selectedOutlet);
-          commitData(
-            await request<WorkspaceData>(
-              `/api/audit?${params.toString()}`,
-              { signal },
-            ),
+          const auditData = await request<WorkspaceData>(
+            `/api/audit?${params.toString()}`,
+            { signal },
           );
+          if (reloadId === attendanceReloadId.current) {
+            setData(auditData);
+            setAuditPage(0);
+            setAuditHasMore(Boolean(auditData.hasMore));
+          }
         }
         if (section === "settings")
           commitData(await request<WorkspaceData>("/api/settings", { signal }));
@@ -747,6 +846,32 @@
           setRefreshing(false);
           setDashboardFetching(false);
         }
+      }
+    }
+
+    async function loadOlderAuditLogs() {
+      if (loadingOlderAudit || !auditHasMore) return;
+      setLoadingOlderAudit(true);
+      setError("");
+      const nextPage = auditPage + 1;
+      const params = new URLSearchParams({ page: String(nextPage) });
+      if (selectedOutlet) params.set("outletId", selectedOutlet);
+      try {
+        const nextData = await request<WorkspaceData>(`/api/audit?${params}`);
+        setData((current) => ({
+          ...current,
+          logs: [...(current.logs ?? []), ...(nextData.logs ?? [])],
+        }));
+        setAuditPage(nextPage);
+        setAuditHasMore(Boolean(nextData.hasMore));
+      } catch (caught) {
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "Unable to load older activity.",
+        );
+      } finally {
+        setLoadingOlderAudit(false);
       }
     }
 
@@ -1215,13 +1340,19 @@
                 <article className="dashboard-kpi-card">
                   <div className="dashboard-kpi-top">
                     <span>Net payroll · all employees</span>
-                    <span className="dashboard-kpi-icon dashboard-kpi-rose"><Banknote size={17} /></span>
+                    {user.permissions.includes("salary.read") && (
+                      <Link href="/salary" className="dashboard-kpi-link">
+                        View payroll <ArrowUpRight size={13} />
+                      </Link>
+                    )}
                   </div>
                   <strong>{data.metrics?.netPayable == null ? "—" : currency(data.metrics.netPayable)}</strong>
-                  <div className="dashboard-kpi-foot">
-                    <span>{data.metrics?.netPayable == null ? "Salary permission required" : `After attendance and deductions through ${formatDate(dashboardDate)}`}</span>
-                    {user.permissions.includes("salary.read") && <Link href="/salary" className="dashboard-kpi-link">View payroll <ArrowUpRight size={13} /></Link>}
-                  </div>
+                  {data.metrics?.netPayable == null && (
+                    <div className="dashboard-kpi-foot">Salary permission required</div>
+                  )}
+                  {data.metrics?.projectedMonthEndBase != null && (
+                    <div className="dashboard-kpi-extra">Fixed salary · no deductions <strong>{currency(data.metrics.projectedMonthEndBase)}</strong></div>
+                  )}
                   {data.metrics?.approvedAdvancesPendingPayroll != null && (
                     <div className="dashboard-kpi-extra">Approved advances <strong>{currency(data.metrics.approvedAdvancesPendingPayroll)}</strong></div>
                   )}
@@ -4913,20 +5044,74 @@
               <div className="panel-heading">
                 <div>
                   <h2>Recent activity</h2>
-                  <p>Latest 50 changes visible to your account</p>
+                  <p>
+                    Activity includes the actor, action, affected record and
+                    available field changes.
+                  </p>
                 </div>
               </div>
               <DataTable
-                headers={["Time", "Actor", "Action", "Entity", "Reason"]}
-                rows={(data.logs ?? []).map((log) => [
-                  formatDateTime(log.at),
-                  log.actorEmail,
-                  log.action,
-                  `${log.entityType} · ${log.entityId}`,
-                  log.reason ?? "—",
-                ])}
+                className="active-logs-table"
+                headers={["Time", "Actor", "Action", "Record", "Details"]}
+                rowKeys={(data.logs ?? []).map((log) => log._id)}
+                rows={(data.logs ?? []).map((log) => {
+                  const changes = Object.entries(log.changes ?? {});
+                  return [
+                    formatDateTime(log.at),
+                    log.actorEmail,
+                    formatAuditAction(log.action),
+                    <span className="audit-record" key={`${log._id}-record`}>
+                      <strong>{log.entityLabel ?? log.entityType}</strong>
+                      {!log.entityLabel && (
+                        <small>{log.entityId}</small>
+                      )}
+                    </span>,
+                    <details className="audit-details" key={`${log._id}-details`}>
+                      <summary>
+                        View details{changes.length ? ` (${changes.length})` : ""}
+                      </summary>
+                      <div className="audit-details-content">
+                        {log.reason && (
+                          <p>
+                            <strong>Reason:</strong> {log.reason}
+                          </p>
+                        )}
+                        {changes.length ? (
+                          <dl>
+                            {changes.map(([field, change]) => (
+                              <div key={field}>
+                                <dt>{formatAuditField(field)}</dt>
+                                <dd>
+                                  {formatAuditValue(field, change.before)}
+                                  <span aria-hidden="true"> → </span>
+                                  {formatAuditValue(field, change.after)}
+                                </dd>
+                              </div>
+                            ))}
+                          </dl>
+                        ) : (
+                          <p>
+                            No field-level details were recorded for this
+                            activity.
+                          </p>
+                        )}
+                      </div>
+                    </details>,
+                  ];
+                })}
                 empty="No audit activity recorded."
               />
+              {auditHasMore && (
+                <div className="audit-load-more">
+                  <button
+                    className="button button-small"
+                    disabled={loadingOlderAudit}
+                    onClick={() => void loadOlderAuditLogs()}
+                  >
+                    {loadingOlderAudit ? "Loading…" : "Load older activity"}
+                  </button>
+                </div>
+              )}
             </section>
           )}
         </div>
@@ -6667,9 +6852,10 @@
           ) : (
             <>
               <div className="dashboard-payroll-values">
+                <div><span>Fixed salary · no deductions</span><strong className="payroll-value-highlight">{metrics.projectedMonthEndBase == null ? "—" : currency(metrics.projectedMonthEndBase)}</strong></div>
                 <div><span>Approved advances</span><strong className="payroll-value-highlight">{metrics.approvedAdvancesPendingPayroll == null ? "—" : currency(metrics.approvedAdvancesPendingPayroll)}</strong><small>Approved this month</small></div>
                 <div><span>{hasGeneratedPayroll ? "Loan deductions in generated payroll" : "Scheduled loan deductions this month"}</span><strong className="payroll-value-highlight">{currency(loanDeductions)}</strong></div>
-                <div><span>Net payroll · all employees</span><strong className="payroll-value-net payroll-value-highlight">{currency(net)}</strong><small>After attendance and deductions through {formatDate(accrualDate)}</small></div>
+                <div><span>Net payroll · all employees</span><strong className="payroll-value-net payroll-value-highlight">{currency(net)}</strong></div>
                 <div><span>Average net / active employee</span><strong className="payroll-value-highlight">{employeeCount ? currency(net / employeeCount) : currency(0)}</strong><small>Current month-to-date amount</small></div>
               </div>
               <p className="dashboard-payroll-note">

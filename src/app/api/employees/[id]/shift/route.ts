@@ -36,14 +36,31 @@ export async function PATCH(
     if (!employee) throw new Error("NOT_FOUND");
     assertOutletAccess(actor, employee.outletId);
     const updatedAt = new Date();
+    const update = {
+      $set: {
+        updatedAt,
+        ...(input.shiftStartTime && input.shiftEndTime
+          ? {
+              shiftStartTime: input.shiftStartTime,
+              shiftEndTime: input.shiftEndTime,
+            }
+          : {}),
+        ...(typeof input.shiftDurationHours === "number"
+          ? { shiftDurationHours: input.shiftDurationHours }
+          : {}),
+      },
+      $unset: {
+        ...(!input.shiftStartTime || !input.shiftEndTime
+          ? { shiftStartTime: true as const, shiftEndTime: true as const }
+          : {}),
+        ...(input.shiftDurationHours === null
+          ? { shiftDurationHours: true as const }
+          : {}),
+      },
+    };
     await employees.updateOne(
       { _id: employee._id },
-      {
-        $set: {
-          ...input,
-          updatedAt,
-        },
-      },
+      update,
     );
     await writeAudit({
       actorId: actor.id,
@@ -51,6 +68,7 @@ export async function PATCH(
       action: "EMPLOYEE_SHIFT_UPDATED",
       entityType: "employee",
       entityId: id,
+      entityLabel: `${employee.employeeCode} · ${employee.fullName}`,
       outletId: employee.outletId,
       changes: {
         shiftStartTime: {
@@ -59,7 +77,11 @@ export async function PATCH(
         },
         shiftEndTime: {
           before: employee.shiftEndTime ?? null,
-          after: input.shiftEndTime,
+          after: input.shiftEndTime ?? null,
+        },
+        shiftDurationHours: {
+          before: employee.shiftDurationHours ?? null,
+          after: input.shiftDurationHours ?? employee.shiftDurationHours ?? null,
         },
       },
     });

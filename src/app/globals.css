@@ -12313,6 +12313,70 @@ select option { background: var(--surface); color: var(--text); }
     }
 }
 
+.active-logs-table .table-wrap {
+    overflow-x: auto;
+}
+
+.active-logs-table table {
+    min-width: 760px;
+}
+
+.audit-record {
+    display: grid;
+    gap: 3px;
+}
+
+.audit-record small {
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+
+.audit-details summary {
+    color: var(--accent);
+    cursor: pointer;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.audit-details-content {
+    min-width: 260px;
+    max-width: min(520px, 70vw);
+    padding: 10px 0 2px;
+    white-space: normal;
+}
+
+.audit-details-content p {
+    margin: 0 0 8px;
+}
+
+.audit-details-content dl {
+    display: grid;
+    gap: 7px;
+    margin: 0;
+}
+
+.audit-details-content dl > div {
+    display: grid;
+    gap: 2px;
+}
+
+.audit-details-content dt {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.audit-details-content dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.audit-load-more {
+    display: flex;
+    justify-content: center;
+    padding: 12px;
+}
+
 @media (hover: none) {
     .outlet-order-bar .button:hover:not(:disabled) {
         transform: none;
@@ -12421,26 +12485,6 @@ select option { background: var(--surface); color: var(--text); }
     color: var(--text-muted);
     font-size: 12px;
     overflow-wrap: anywhere;
-}
-
-.kiosk-toast {
-    position: fixed;
-    z-index: 1000;
-    top: 20px;
-    left: 50%;
-    width: max-content;
-    max-width: min(560px, calc(100vw - 32px));
-    padding: 13px 18px;
-    border: 1px solid color-mix(in srgb, var(--status-present) 35%, transparent);
-    border-radius: 12px;
-    background: var(--surface);
-    color: var(--status-present);
-    font-weight: 650;
-    line-height: 1.5;
-    text-align: center;
-    overflow-wrap: anywhere;
-    box-shadow: 0 12px 36px rgb(0 0 0 / 18%);
-    transform: translateX(-50%);
 }
 
 .kiosk-token-panel {
@@ -13355,4 +13399,978 @@ button, a, [role="button"], select, summary, label { touch-action: manipulation;
 .dashboard-kpi-card .dashboard-avatar-stack > .dashboard-avatar-empty {
     background: var(--pill-present-bg);
     color: var(--pill-present-text);
+}
+
+.face-log-page {
+    display: grid;
+    gap: 16px;
+}
+
+.face-log-export-actions,
+.face-log-viewbar,
+.face-log-pagination,
+.face-log-summary-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.face-log-export-actions {
+    justify-content: flex-end;
+}
+
+.face-log-filters {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(170px, 1fr) minmax(185px, 1.15fr) minmax(185px, 1.15fr) auto;
+    align-items: end;
+    gap: 14px;
+}
+
+.face-log-filter-button {
+    min-height: 42px;
+}
+
+.face-log-multi-picker {
+    position: relative;
+    min-width: 0;
+}
+
+.face-log-multi-picker > summary {
+    min-height: 42px;
+    padding: 8px 11px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+    cursor: pointer;
+    list-style: none;
+}
+
+.face-log-multi-picker > summary::-webkit-details-marker {
+    display: none;
+}
+
+.face-log-multi-picker > summary span {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.face-log-multi-picker > summary strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.face-log-multi-menu,
+.face-log-column-menu {
+    position: absolute;
+    z-index: 20;
+    top: calc(100% + 5px);
+    left: 0;
+    width: min(320px, calc(100vw - 40px));
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+}
+
+.face-log-picker-search {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: 5px;
+}
+
+.face-log-picker-search input {
+    min-width: 0;
+    width: 100%;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--ink);
+}
+
+.face-log-select-all,
+.face-log-picker-options label,
+.face-log-column-menu label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px;
+    cursor: pointer;
+}
+
+.face-log-select-all {
+    width: 100%;
+    margin-top: 5px;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+}
+
+.face-log-picker-options {
+    max-height: 230px;
+    overflow: auto;
+    border-top: 1px solid var(--line);
+}
+
+.face-log-picker-options label span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.face-log-viewbar {
+    justify-content: space-between;
+}
+
+.face-log-view-toggle {
+    display: inline-flex;
+    padding: 3px;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+}
+
+.face-log-view-toggle button {
+    padding: 8px 12px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--ink);
+}
+
+.face-log-view-toggle button.is-selected {
+    background: var(--rail);
+    color: var(--on-cherry);
+}
+
+.face-log-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: min(260px, 100%);
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+}
+
+.face-log-search input {
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--ink);
+}
+
+.face-log-column-picker {
+    position: relative;
+}
+
+.face-log-column-picker > summary {
+    display: flex;
+    align-items: center;
+    list-style: none;
+    cursor: pointer;
+}
+
+.face-log-column-picker > summary::-webkit-details-marker {
+    display: none;
+}
+
+.face-log-column-menu {
+    right: 0;
+    left: auto;
+    width: 190px;
+}
+
+.face-log-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+}
+
+.face-log-table {
+    width: 100%;
+    border-collapse: collapse;
+    white-space: nowrap;
+}
+
+.face-log-table th,
+.face-log-table td {
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: middle;
+}
+
+.face-log-table th {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.face-log-sort-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+}
+
+.face-log-table td .button {
+    margin-left: 8px;
+}
+
+.face-log-status {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 7px;
+    padding: 2px 6px;
+    border-radius: 999px;
+    background: color-mix(in srgb, #f59e0b 18%, transparent);
+    color: light-dark(#92400e, #fbbf24);
+    font-size: 10px;
+    font-weight: 700;
+    vertical-align: middle;
+}
+
+.face-log-empty {
+    padding: 28px 12px;
+    color: var(--muted);
+    text-align: center;
+}
+
+.face-log-pagination {
+    justify-content: flex-end;
+    padding-top: 12px;
+}
+
+.face-log-pagination > span:first-child {
+    margin-right: auto;
+}
+
+.face-log-pagination label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+}
+
+.face-log-summary-bar {
+    justify-content: space-around;
+    padding: 14px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+}
+
+.face-log-summary-bar > div {
+    display: grid;
+    gap: 4px;
+}
+
+.face-log-summary-bar span,
+.face-log-edit-meta {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.face-log-edit-meta {
+    display: block;
+    margin-top: 3px;
+}
+
+.face-log-notice {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: var(--pill-present-bg);
+    color: var(--pill-present-text);
+}
+
+.face-log-notice.is-error {
+    background: var(--pill-absent-bg);
+    color: var(--pill-absent-text);
+}
+
+.face-log-notice button {
+    border: 0;
+    background: transparent;
+    color: inherit;
+}
+
+.face-log-modal-backdrop {
+    position: fixed;
+    z-index: 80;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+    background: color-mix(in srgb, #000 55%, transparent);
+}
+
+.face-log-edit-modal {
+    width: min(480px, 100%);
+    padding: 20px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow);
+}
+
+.face-log-edit-modal > header,
+.face-log-edit-modal > header > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.face-log-edit-modal > header > div {
+    flex-direction: column;
+    gap: 3px;
+}
+
+.face-log-edit-modal h2,
+.face-log-edit-modal p {
+    margin: 0;
+}
+
+.face-log-edit-modal p {
+    color: var(--muted);
+}
+
+.face-log-edit-modal form {
+    display: grid;
+    gap: 14px;
+    margin-top: 18px;
+}
+
+.face-log-edit-modal textarea {
+    min-height: 90px;
+    resize: vertical;
+}
+
+@media (max-width: 950px) {
+    .face-log-filters {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 680px) {
+    .face-log-filters {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .face-log-page .page-head,
+    .face-log-viewbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .face-log-export-actions {
+        justify-content: flex-start;
+    }
+
+    .face-log-summary-bar {
+        justify-content: flex-start;
+    }
+
+    .face-log-summary-bar > div {
+        min-width: 30%;
+    }
+}
+
+/* ===== FACE LOG REPORT PAGE: UI FIX (append at END of globals.css) ===== */
+
+.face-log-page {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.face-log-page .page-head {
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 0;
+}
+.face-log-page .page-head p.eyebrow {
+  margin: 0 0 6px;
+  color: var(--accent) !important;
+  font-size: 11px;
+}
+.face-log-page .page-head h1 {
+  margin: 0;
+  font-size: clamp(24px, 2.4vw, 30px);
+}
+.face-log-page .page-head p:not(.eyebrow) {
+  margin: 6px 0 0;
+  font-size: 13px;
+}
+.face-log-export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.face-log-export-actions .button {
+  height: 36px;
+  padding: 0 14px;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.face-log-page .face-log-filters {
+  position: relative;
+  z-index: 6;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  align-items: end;
+  gap: 14px;
+  margin-bottom: 0;
+  padding: 18px 20px;
+  overflow: visible;
+}
+.face-log-page .face-log-filters .field,
+.face-log-page .face-log-field {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.face-log-page .face-log-filters .field > span,
+.face-log-page .face-log-field-label {
+  color: var(--text-muted) !important;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.face-log-page .face-log-filters select,
+.face-log-page .face-log-filters input[type="month"],
+.face-log-page .face-log-filters input[type="date"],
+.face-log-page .face-log-multi-trigger {
+  width: 100%;
+  height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px;
+  background: var(--input-bg) !important;
+  color: var(--text) !important;
+  font-size: 14px;
+}
+.face-log-page .face-log-filter-button {
+  height: 44px;
+  align-self: end;
+  padding: 0 22px;
+  border-radius: 12px;
+}
+
+.face-log-page .face-log-multi-details {
+  position: relative;
+}
+.face-log-page .face-log-multi-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+}
+.face-log-page .face-log-multi-trigger::-webkit-details-marker {
+  display: none;
+}
+.face-log-page .face-log-multi-trigger strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.face-log-page .face-log-multi-trigger svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transition: transform 0.16s ease;
+}
+.face-log-page .face-log-multi-details[open] .face-log-multi-trigger {
+  border-color: var(--accent) !important;
+}
+.face-log-page .face-log-multi-details[open] .face-log-multi-trigger svg {
+  transform: rotate(180deg);
+}
+.face-log-page .face-log-multi-menu,
+.face-log-page .face-log-column-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  width: max(100%, 300px);
+  max-width: min(360px, calc(100vw - 32px));
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 16px 40px var(--shadow-color);
+}
+.face-log-page .face-log-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--input-bg);
+  color: var(--text-muted);
+}
+.face-log-page .face-log-picker-search input,
+.face-log-page .face-log-picker-search input:hover,
+.face-log-page .face-log-picker-search input:focus {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  font-size: 13px;
+}
+.face-log-page .face-log-select-all,
+.face-log-page .face-log-picker-options label,
+.face-log-page .face-log-column-menu label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.face-log-page .face-log-select-all {
+  width: 100%;
+  margin-top: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  text-align: left;
+}
+.face-log-page .face-log-picker-options {
+  max-height: 240px;
+  margin-top: 6px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+.face-log-page .face-log-picker-options label span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.face-log-page input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+@media (hover: hover) and (pointer: fine) {
+  .face-log-page .face-log-picker-options label:hover,
+  .face-log-page .face-log-column-menu label:hover {
+    background: var(--hover-bg);
+  }
+}
+
+.face-log-page .face-log-viewbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+}
+.face-log-page .face-log-view-toggle {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.face-log-page .face-log-view-toggle button {
+  height: 36px;
+  padding: 0 14px;
+  border: 0 !important;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text) !important;
+  font-size: 13px;
+  font-weight: 600;
+}
+.face-log-page .face-log-view-toggle button.is-selected,
+.face-log-page .face-log-view-toggle button.is-selected:hover {
+  background: var(--accent) !important;
+  color: var(--on-accent) !important;
+}
+.face-log-page .face-log-search {
+  display: flex;
+  flex: 1 1 260px;
+  align-items: center;
+  gap: 8px;
+  max-width: 380px;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.face-log-page .face-log-search:focus-within {
+  border-color: var(--accent);
+}
+.face-log-page .face-log-search input,
+.face-log-page .face-log-search input:hover,
+.face-log-page .face-log-search input:focus {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text);
+  font-size: 13px;
+}
+.face-log-page .face-log-column-picker {
+  position: relative;
+  margin-left: auto;
+}
+.face-log-page .face-log-column-picker > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  font-size: 12px;
+}
+.face-log-page .face-log-column-menu {
+  right: 0;
+  left: auto;
+  width: 220px;
+}
+
+.face-log-page .face-log-table-panel {
+  margin-bottom: 0;
+  overflow: hidden;
+}
+.face-log-page .face-log-table-panel .panel-heading {
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface) !important;
+}
+.face-log-page .face-log-table-panel .panel-heading h2 {
+  font-size: 20px;
+}
+.face-log-page .face-log-table-panel .panel-heading p {
+  max-width: 720px;
+  font-size: 12px;
+}
+.face-log-page .face-log-table-wrap {
+  width: 100%;
+  max-height: min(68dvh, 720px);
+  overflow: auto;
+}
+.face-log-page .face-log-table {
+  width: 100%;
+  min-width: 920px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.face-log-page .face-log-table th,
+.face-log-page .face-log-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.face-log-page .face-log-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface) !important;
+  color: var(--text-muted) !important;
+  font-size: 11px !important;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.face-log-page .face-log-table th:nth-child(1),
+.face-log-page .face-log-table td:nth-child(1),
+.face-log-page .face-log-table th:nth-last-child(1),
+.face-log-page .face-log-table td:nth-last-child(1) {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.face-log-page .face-log-table .face-log-sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent !important;
+  color: inherit !important;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+}
+.face-log-page .face-log-table .face-log-sort-button:hover {
+  background: transparent !important;
+  color: var(--accent-text) !important;
+}
+.face-log-page .face-log-table td .button {
+  height: 28px;
+  margin-left: 10px;
+  padding: 0 10px;
+  font-size: 11px;
+}
+.face-log-page .face-log-status {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 3px 8px;
+  border: 1px solid var(--pill-half-border);
+  border-radius: 999px;
+  background: var(--pill-half-bg);
+  color: var(--pill-half-text) !important;
+  font-size: 10px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+.face-log-page .face-log-edit-meta {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-muted) !important;
+  font-size: 11px;
+}
+.face-log-page .face-log-empty {
+  padding: 40px 16px;
+  color: var(--text-muted) !important;
+  font-size: 14px;
+  text-align: center;
+}
+
+.face-log-page .face-log-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.face-log-page .face-log-pagination > span:first-child {
+  margin-right: auto;
+}
+.face-log-page .face-log-pagination label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.face-log-page .face-log-pagination select {
+  width: auto;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+.face-log-page .face-log-pagination .icon-button {
+  width: 34px;
+  height: 34px;
+}
+
+.face-log-page .face-log-summary-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.face-log-page .face-log-summary-bar > div {
+  display: grid;
+  gap: 6px;
+  padding: 14px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.face-log-page .face-log-summary-bar span {
+  color: var(--text-muted) !important;
+  font-size: 12px;
+}
+.face-log-page .face-log-summary-bar strong {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.face-log-page .face-log-notice {
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--pill-present-bg);
+  color: var(--pill-present-text) !important;
+}
+.face-log-page .face-log-notice span {
+  color: inherit !important;
+}
+.face-log-page .face-log-notice.is-error,
+.face-log-page .face-log-notice.is-error span {
+  background: var(--pill-absent-bg);
+  color: var(--pill-absent-text) !important;
+}
+
+.face-log-page .face-log-modal-backdrop {
+  position: fixed;
+  z-index: 1300;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--overlay);
+}
+.face-log-page .face-log-edit-modal {
+  width: min(480px, 100%);
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 24px 60px var(--shadow-color);
+}
+.face-log-page .face-log-edit-modal > header {
+  align-items: flex-start;
+}
+.face-log-page .face-log-edit-modal form {
+  gap: 16px;
+}
+.face-log-page .face-log-edit-modal textarea {
+  width: 100%;
+  min-height: 90px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--input-bg);
+  color: var(--text);
+  resize: vertical;
+}
+
+@media (max-width: 680px) {
+  .face-log-page .page-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .face-log-export-actions {
+    justify-content: flex-start;
+  }
+  .face-log-page .face-log-filters {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 14px;
+  }
+  .face-log-page .face-log-viewbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .face-log-page .face-log-search {
+    max-width: none;
+  }
+  .face-log-page .face-log-column-picker {
+    margin-left: 0;
+  }
+  .face-log-page .face-log-column-menu {
+    left: 0;
+    right: auto;
+  }
+  .face-log-page .face-log-summary-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .face-log-page .face-log-table {
+    min-width: 860px;
+  }
+}
+
+@media print {
+  .face-log-page .face-log-filters,
+  .face-log-page .face-log-viewbar,
+  .face-log-page .face-log-export-actions,
+  .face-log-page .face-log-pagination {
+    display: none !important;
+  }
+  .face-log-page .face-log-table-wrap {
+    max-height: none;
+    overflow: visible;
+  }
+}
+
+/* ---------- Login page color adjustments ---------- */
+.login-screen .login-art {
+  background: var(--cherry) !important;
+  color: var(--on-cherry) !important;
+}
+.login-screen .login-art :not(svg):not(path),
+.login-screen .login-art strong,
+.login-screen .login-art span {
+  color: var(--on-cherry) !important;
+}
+.login-screen .login-art::before {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--on-cherry) 12%, transparent), transparent),
+    repeating-linear-gradient(0deg, transparent 0 69px, color-mix(in srgb, var(--on-cherry) 7%, transparent) 70px),
+    repeating-linear-gradient(90deg, transparent 0 69px, color-mix(in srgb, var(--on-cherry) 7%, transparent) 70px) !important;
+}
+.login-screen .login-art::after,
+.login-screen .login-art .login-orbit {
+  border-color: color-mix(in srgb, var(--on-cherry) 28%, transparent) !important;
+  box-shadow:
+    0 0 0 56px color-mix(in srgb, var(--on-cherry) 4%, transparent),
+    0 0 0 113px color-mix(in srgb, var(--on-cherry) 4%, transparent) !important;
+}
+.login-screen .login-art .login-stamp {
+  border-color: color-mix(in srgb, var(--on-cherry) 45%, transparent) !important;
+}
+.login-screen .login-panel {
+  background: var(--cream) !important;
+}
+.login-screen .login-form .field input {
+  background: color-mix(in srgb, var(--cream) 72%, var(--cream-light)) !important;
+  border-color: color-mix(in srgb, var(--cream-dark) 78%, var(--cherry) 22%) !important;
 }

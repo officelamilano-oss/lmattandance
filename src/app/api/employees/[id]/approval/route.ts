@@ -4,7 +4,7 @@ import { z } from "zod";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError, readJson } from "@/lib/http";
-import { writeAudit } from "@/lib/audit";
+import { employeeAuditChanges, writeAudit } from "@/lib/audit";
 import type { EmployeeDocument, EmployeeFileDocument } from "@/lib/models";
 import { isDeliveryRiderDesignation } from "@/lib/employee-designations";
 import { requiredEmployeeDocumentTypes } from "@/lib/employee-documents-config";
@@ -93,7 +93,11 @@ export async function POST(
         action: "EMPLOYEE_REQUEST_REJECTED",
         entityType: "employee",
         entityId: employee._id.toHexString(),
+        entityLabel: `${employee.employeeCode} · ${employee.fullName}`,
         outletId: employee.outletId,
+        changes: {
+          approvalStatus: { before: "PENDING", after: "REJECTED" },
+        },
       });
       return NextResponse.json({ ok: true, approvalStatus: "REJECTED" });
     }
@@ -154,13 +158,14 @@ export async function POST(
       action: "EMPLOYEE_REQUEST_APPROVED",
       entityType: "employee",
       entityId: employee._id.toHexString(),
+      entityLabel: `${employee.employeeCode} · ${employee.fullName}`,
       outletId: employee.outletId,
-      changes: {
-        monthlyBaseSalary: {
-          before: employee.monthlyBaseSalary,
-          after: input.monthlyBaseSalary,
-        },
-      },
+      changes: employeeAuditChanges(employee, {
+        ...employee,
+        ...input,
+        active: true,
+        approvalStatus: "APPROVED",
+      }),
     });
     return NextResponse.json({ ok: true, approvalStatus: "APPROVED" });
   } catch (error) {

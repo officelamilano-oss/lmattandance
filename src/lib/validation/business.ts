@@ -17,6 +17,7 @@ export const employeeSchema = z.object({
   designationKey: z.string().trim().max(80).nullable().optional(),
   designationGroup: z.enum(["HEAD_OFFICE", "OUTLET"]).nullable().optional(),
   employmentType: z.enum(["FULL_TIME", "PART_TIME"]).default("FULL_TIME"),
+  shiftDurationHours: z.number().finite().min(0.5).max(24).optional(),
   mobile: z.preprocess(
     (value) => (value === "" ? null : value),
     z.string().trim().min(7).max(20).nullable().optional(),
@@ -90,13 +91,33 @@ export const employeeSchema = z.object({
 
 export const employeeShiftSchema = z
   .object({
-    shiftStartTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-    shiftEndTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    shiftStartTime: z.preprocess(
+      (value) => (value === "" || value === null ? undefined : value),
+      z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+    ),
+    shiftEndTime: z.preprocess(
+      (value) => (value === "" || value === null ? undefined : value),
+      z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+    ),
+    shiftDurationHours: z
+      .number()
+      .finite()
+      .min(0.5)
+      .max(24)
+      .nullable()
+      .optional(),
   })
-  .refine((shift) => shift.shiftStartTime !== shift.shiftEndTime, {
-    message: "Shift start and end times must be different.",
-    path: ["shiftEndTime"],
-  });
+  .refine(
+    (shift) =>
+      Boolean(shift.shiftStartTime) === Boolean(shift.shiftEndTime) &&
+      (!shift.shiftStartTime ||
+        !shift.shiftEndTime ||
+        shift.shiftStartTime !== shift.shiftEndTime),
+    {
+      message: "Enter both shift times, or leave both empty.",
+      path: ["shiftEndTime"],
+    },
+  );
 
 export const outletEmployeeRequiredDetailsSchema = z.object({
   gender: z.enum(["MALE", "FEMALE"]),

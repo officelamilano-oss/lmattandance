@@ -72,6 +72,7 @@ export interface EmployeeDocument {
   employmentType?: EmploymentType;
   shiftStartTime?: string;
   shiftEndTime?: string;
+  shiftDurationHours?: number;
   mobile?: string | null;
   outletId: ObjectId;
   monthlyBaseSalary: number;
@@ -194,6 +195,28 @@ export interface AttendancePunchDocument {
   date: string;
   checkInAt?: Date;
   checkOutAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface FaceAttendanceLogDocument {
+  _id: ObjectId;
+  employeeId: ObjectId;
+  employeeCode: string;
+  employeeName: string;
+  outletId: ObjectId;
+  outletCode: string;
+  outletName: string;
+  companyName: string;
+  clockIn?: Date;
+  clockOut?: Date | null;
+  isOpen?: boolean;
+  source: "face";
+  missingClockOut?: boolean;
+  editedBy?: ObjectId;
+  editedAt?: Date;
+  notes?: string;
+  shiftDurationHours?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -397,6 +420,7 @@ export interface AuditLogDocument {
   action: string;
   entityType: string;
   entityId: string;
+  entityLabel?: string;
   outletId?: ObjectId;
   at: Date;
   reason?: string;

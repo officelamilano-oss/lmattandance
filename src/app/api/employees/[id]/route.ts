@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb, getMongoClient } from "@/lib/mongodb";
 import { apiError, assertSameOrigin, readJson } from "@/lib/http";
-import { writeAudit } from "@/lib/audit";
+import { employeeAuditChanges, writeAudit } from "@/lib/audit";
 import type {
   EmployeeDocument,
   EmployeeFaceTemplateDocument,
@@ -52,7 +52,11 @@ async function removeEmployeeFaceEnrollment(
       action: "EMPLOYEE_FACE_DELETED",
       entityType: "employee",
       entityId: employee._id.toHexString(),
+      entityLabel: `${employee.employeeCode} · ${employee.fullName}`,
       outletId: employee.outletId,
+      changes: {
+        faceEnrollment: { before: "Enrolled", after: "Removed" },
+      },
       reason,
     });
 }
@@ -96,6 +100,7 @@ export async function GET(
             employmentType: 1,
             shiftStartTime: 1,
             shiftEndTime: 1,
+            shiftDurationHours: 1,
             mobile: 1,
             outletId: 1,
             monthlyBaseSalary: 1,
@@ -217,7 +222,12 @@ export async function DELETE(
       action: "EMPLOYEE_DELETED",
       entityType: "employee",
       entityId: id,
+      entityLabel: `${employee.employeeCode} · ${employee.fullName}`,
       outletId: employee.outletId,
+      changes: {
+        employeeCode: { before: employee.employeeCode, after: "" },
+        fullName: { before: employee.fullName, after: "" },
+      },
     });
     return NextResponse.json({ ok: true });
   } catch (error) {
@@ -303,7 +313,9 @@ export async function PATCH(
           action: "EMPLOYEE_ACTIVATED",
           entityType: "employee",
           entityId: id,
+          entityLabel: `${current.employeeCode} · ${current.fullName}`,
           outletId: current.outletId,
+          changes: { active: { before: false, after: true } },
         });
         return NextResponse.json({ ok: true });
       }
@@ -332,7 +344,9 @@ export async function PATCH(
         action: "EMPLOYEE_DEACTIVATED",
         entityType: "employee",
         entityId: id,
+        entityLabel: `${current.employeeCode} · ${current.fullName}`,
         outletId: current.outletId,
+        changes: { active: { before: true, after: false } },
       });
       return NextResponse.json({ ok: true });
     }
@@ -565,43 +579,15 @@ export async function PATCH(
           .updateOne({ _id: document._id }, { $set: updatedFile });
       }
     }
-    const changes = Object.fromEntries(
-      Object.entries({
-        employeeCode: input.employeeCode,
-        fullName: input.fullName,
-        designation: input.designation,
-        employmentType: input.employmentType,
-        mobile: input.mobile,
-        outletId: input.outletId,
-        monthlyBaseSalary: input.monthlyBaseSalary,
-        salaryMethod: input.salaryMethod,
-        pfEnabled: input.pfEnabled,
-        employeePfPercent: input.employeePfPercent,
-        employerPfPercent: input.employerPfPercent,
-        esiEnabled: input.esiEnabled,
-        esiPercent: input.esiPercent,
-      })
-        .filter(
-          ([key, after]) =>
-            current[key as keyof EmployeeDocument]?.toString() !==
-            after?.toString(),
-        )
-        .map(([key, after]) => [
-          key,
-          {
-            before: String(current[key as keyof EmployeeDocument] ?? ""),
-            after: String(after ?? ""),
-          },
-        ]),
-    );
     await writeAudit({
       actorId: actor.id,
       actorEmail: actor.email,
       action: "EMPLOYEE_UPDATED",
       entityType: "employee",
       entityId: id,
+      entityLabel: `${input.employeeCode} · ${input.fullName}`,
       outletId: current.outletId,
-      changes,
+      changes: employeeAuditChanges(current, input),
     });
     await Promise.all(
       uniformDocuments.map((deduction) =>

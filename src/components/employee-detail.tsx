@@ -202,6 +202,7 @@ export function EmployeeDetail({
   const [shiftSuccess, setShiftSuccess] = useState("");
   const [shiftStartTime, setShiftStartTime] = useState("");
   const [shiftEndTime, setShiftEndTime] = useState("");
+  const [shiftDurationHours, setShiftDurationHours] = useState("");
   const [outletId, setOutletId] = useState("");
   const [designationKey, setDesignationKey] = useState("");
   const [designationLabel, setDesignationLabel] = useState("");
@@ -242,6 +243,11 @@ export function EmployeeDetail({
       setOutletId(loaded.outletId);
       setShiftStartTime(loaded.shiftStartTime ?? "");
       setShiftEndTime(loaded.shiftEndTime ?? "");
+      setShiftDurationHours(
+        loaded.shiftDurationHours === undefined
+          ? ""
+          : String(loaded.shiftDurationHours),
+      );
       setDesignationKey(
         EMPLOYEE_DESIGNATIONS.some((item) => item.key === loaded.designationKey)
           ? loaded.designationKey ?? "LEGACY"
@@ -444,8 +450,11 @@ export function EmployeeDetail({
     event.preventDefault();
     setShiftError("");
     setShiftSuccess("");
-    if (!shiftStartTime || !shiftEndTime || shiftStartTime === shiftEndTime) {
-      setShiftError("Enter different shift start and end times.");
+    if (
+      Boolean(shiftStartTime) !== Boolean(shiftEndTime) ||
+      (shiftStartTime && shiftStartTime === shiftEndTime)
+    ) {
+      setShiftError("Enter both shift times, or leave both empty.");
       return;
     }
     setShiftBusy(true);
@@ -453,15 +462,30 @@ export function EmployeeDetail({
       const response = await fetch(`/api/employees/${id}/shift`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shiftStartTime, shiftEndTime }),
+        body: JSON.stringify({
+          shiftStartTime: shiftStartTime || null,
+          shiftEndTime: shiftEndTime || null,
+          shiftDurationHours: shiftDurationHours
+            ? Number(shiftDurationHours)
+            : null,
+        }),
       });
       const result = await response.json();
       if (!response.ok)
         throw new Error(result.error ?? "Unable to save shift schedule.");
       setEmployee((current) =>
-        current ? { ...current, shiftStartTime, shiftEndTime } : current,
+        current
+          ? {
+              ...current,
+              shiftStartTime: shiftStartTime || undefined,
+              shiftEndTime: shiftEndTime || undefined,
+              shiftDurationHours: shiftDurationHours
+                ? Number(shiftDurationHours)
+                : undefined,
+            }
+          : current,
       );
-      setShiftSuccess("Shift schedule saved. The absence grace period is 30 minutes.");
+      setShiftSuccess("Employee shift details saved.");
     } catch (caught) {
       setShiftError(
         caught instanceof Error
@@ -1186,7 +1210,25 @@ export function EmployeeDetail({
                 required={!!canManageShift}
               />
             </label>
-            <p className="muted">Late grace period: 30 minutes.</p>
+            <label className="field">
+              <span>Ye employee kitne ghante ki job karta hai</span>
+              <input
+                type="number"
+                min="0.5"
+                max="24"
+                step="0.5"
+                placeholder="Optional, e.g. 8"
+                value={shiftDurationHours}
+                onChange={(event) =>
+                  setShiftDurationHours(event.target.value)
+                }
+                disabled={!canManageShift || shiftBusy}
+              />
+            </label>
+            <p className="muted">
+              Shift times are optional and only used for schedule reference.
+              Late grace period remains 30 minutes when a schedule is set.
+            </p>
             {canManageShift && (
               <div className="form-actions">
                 <button className="button button-primary" disabled={shiftBusy}>

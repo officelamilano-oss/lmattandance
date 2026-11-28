@@ -9,7 +9,7 @@ import {
 } from "@/lib/validation/business";
 import { paginationSchema } from "@/lib/validation/common";
 import { apiError, readJson } from "@/lib/http";
-import { writeAudit } from "@/lib/audit";
+import { employeeAuditChanges, writeAudit } from "@/lib/audit";
 import type {
   EmployeeDocument,
   OutletDocument,
@@ -281,7 +281,9 @@ export async function POST(request: Request) {
       );
     const payload = body as Record<string, unknown>;
     const hasShiftFields =
-      "shiftStartTime" in payload || "shiftEndTime" in payload;
+      "shiftStartTime" in payload ||
+      "shiftEndTime" in payload ||
+      "shiftDurationHours" in payload;
     if (
       hasShiftFields &&
       !actor.permissions.includes("employees.shift.manage")
@@ -446,6 +448,10 @@ export async function POST(request: Request) {
     const input = employeeCreateSchema.parse({
       ...payload,
       ...normalizedPayload,
+      ...(payload.shiftDurationHours === "" ||
+      payload.shiftDurationHours === null
+        ? { shiftDurationHours: undefined }
+        : {}),
       ...(!canManageCompensation
         ? {
             monthlyBaseSalary: 0,
@@ -472,6 +478,10 @@ export async function POST(request: Request) {
       _id: new ObjectId(),
       ...input,
       ...(shiftSchedule ?? {}),
+      shiftDurationHours:
+        shiftSchedule?.shiftDurationHours ??
+        input.shiftDurationHours ??
+        undefined,
       termsAccepted: true,
       termsVersion: EMPLOYEE_TERMS_VERSION,
       acceptedAt: now,
@@ -540,7 +550,9 @@ export async function POST(request: Request) {
       action: isOutletUser ? "EMPLOYEE_REQUESTED" : "EMPLOYEE_CREATED",
       entityType: "employee",
       entityId: document._id.toHexString(),
+      entityLabel: `${document.employeeCode} · ${document.fullName}`,
       outletId,
+      changes: employeeAuditChanges(undefined, document),
     });
     await Promise.all(
       uniformDocuments.map((deduction) =>

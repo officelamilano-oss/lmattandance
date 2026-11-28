@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getActor, assertOutletAccess } from "@/lib/permissions";
 import { getDb } from "@/lib/mongodb";
 import { apiError, assertSameOrigin } from "@/lib/http";
+import { writeAudit } from "@/lib/audit";
 import type {
   EmployeeDocument,
   EmployeeFileDocument,
@@ -217,6 +218,22 @@ export async function POST(
       createdDocumentIds.push(document._id);
     }
     await db.collection<EmployeeFileDocument>("employeeFiles").insertMany(documents);
+    await writeAudit({
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: "EMPLOYEE_DOCUMENTS_UPLOADED",
+      entityType: "employee",
+      entityId: employee._id.toHexString(),
+      entityLabel: `${employee.employeeCode} · ${employee.fullName}`,
+      outletId: employee.outletId,
+      changes: {
+        documentsUploaded: { before: 0, after: documents.length },
+        documentTypes: {
+          before: "",
+          after: [...new Set(documents.map((document) => document.documentType))].join(", "),
+        },
+      },
+    });
     return NextResponse.json({
       documents: documents.map(serializeDocument),
     });
@@ -294,6 +311,18 @@ export async function DELETE(
         .insertOne(document);
       throw error;
     }
+    await writeAudit({
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: "EMPLOYEE_DOCUMENT_DELETED",
+      entityType: "employee",
+      entityId: employee._id.toHexString(),
+      entityLabel: `${employee.employeeCode} · ${employee.fullName}`,
+      outletId: employee.outletId,
+      changes: {
+        documentType: { before: document.documentType, after: "" },
+      },
+    });
     return NextResponse.json({ ok: true });
   } catch (error) {
     return apiError(error);
