@@ -320,7 +320,7 @@ export const designationSchema = z.object({
   description: z.string().trim().max(240).default(""),
   permissions: z
     .array(z.enum(staffPermissionValues))
-    .max(20)
+    .max(30)
     .refine(
       (permissions) => new Set(permissions).size === permissions.length,
       "Permissions must not contain duplicates.",

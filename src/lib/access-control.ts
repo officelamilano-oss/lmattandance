@@ -60,16 +60,34 @@ export const designationPermissionGroups: Array<{
     title: "About Us",
     permissions: [{ value: "about.read", label: "View About Us" }],
   },
+  {
+    title: "Face attendance",
+    permissions: [
+      { value: "attendance.write", label: "Use Face Attendance Kiosk" },
+      { value: "employees.read", label: "View Face Attendance Reports" },
+    ],
+  },
+  {
+    title: "Loans",
+    permissions: [{ value: "salary.read", label: "View loans" }],
+  },
+  {
+    title: "Outlets",
+    permissions: [{ value: "outlets.manage", label: "Manage outlets" }],
+  },
+  {
+    title: "User management",
+    permissions: [{ value: "access.manage", label: "Manage users and designations" }],
+  },
+  {
+    title: "Active logs",
+    permissions: [{ value: "audit.read", label: "View active logs" }],
+  },
+  {
+    title: "Settings",
+    permissions: [{ value: "settings.manage", label: "Manage settings" }],
+  },
 ];
-
-export const staffPermissionValues = designationPermissionGroups.flatMap(
-  (group) => group.permissions.map((permission) => permission.value),
-) as [
-  Permission,
-  ...Permission[],
-];
-
-export const staffPermissionSet = new Set<Permission>(staffPermissionValues);
 
 export const designationOnlyPermissionSet = new Set<Permission>(["about.read"]);
 
@@ -80,10 +98,17 @@ export const mainAdminPermissionValues = [
   "audit.read",
 ] as const satisfies readonly [Permission, ...Permission[]];
 
-export const allPermissionValues = [
-  ...staffPermissionValues,
-  ...mainAdminPermissionValues,
-] as [Permission, ...Permission[]];
+export const allPermissionValues = Array.from(
+  new Set<Permission>([
+    ...designationPermissionGroups.flatMap((group) =>
+      group.permissions.map((permission) => permission.value),
+    ),
+    ...mainAdminPermissionValues,
+  ]),
+) as [Permission, ...Permission[]];
+
+export const staffPermissionValues = allPermissionValues;
+export const staffPermissionSet = new Set<Permission>(staffPermissionValues);
 
 export const legacyOutletDefaultPermissions: Permission[] = [
   "dashboard.read",

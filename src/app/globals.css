@@ -4664,17 +4664,6 @@ tbody tr:hover {
     white-space: nowrap
 }
 
-.dashboard-checkin-filters button:hover {
-    background: var(--status-present);
-    color: var(--status-present)
-}
-
-.dashboard-checkin-filters button.dashboard-filter-active {
-    background: var(--on-cherry);
-    color: var(--status-present);
-    box-shadow: 0 1px 3px color-mix(in srgb, var(--status-present) 10%, transparent)
-}
-
 .dashboard-late-unavailable {
     display: inline-flex;
     align-items: center;
@@ -5602,7 +5591,6 @@ tbody tr:hover {
 :root[data-theme="dark"] .dashboard-filter-row .toolbar select,
 :root[data-theme="dark"] .dashboard-filter-row .toolbar input,
 :root[data-theme="dark"] .dashboard-checkin-filters,
-:root[data-theme="dark"] .dashboard-checkin-filters button.dashboard-filter-active,
 :root[data-theme="dark"] .about-expand-all,
 :root[data-theme="dark"] .topbar-utility {
     border-color: var(--line);
@@ -6342,18 +6330,6 @@ select {
     font-size: 13.5px;
 }
 
-.dashboard-checkin-filters button:hover {
-    background: color-mix(in srgb, var(--status-present) 10%, transparent);
-    color: var(--green-dark);
-}
-
-.dashboard-checkin-filters button.dashboard-filter-active {
-    background: var(--ink);
-    color: var(--on-cherry);
-    box-shadow: 0 6px 14px color-mix(in srgb, var(--ink) 25%, transparent);
-}
-
-
 /* ---------- Tables ---------- */
 
 table {
@@ -6921,12 +6897,6 @@ tbody tr:nth-child(3) .dashboard-employee-avatar {
 :root[data-theme="dark"] .dashboard-checkin-filters {
     background: var(--ink);
 }
-
-:root[data-theme="dark"] .dashboard-checkin-filters button.dashboard-filter-active {
-    background: var(--status-present);
-    color: var(--ink);
-}
-
 
 /* ---------- Responsive ---------- */
 
@@ -10234,7 +10204,6 @@ tbody tr:hover {
     padding: 4px;
 }
 
-.dashboard-checkin-filters button.dashboard-filter-active,
 [role="tab"][aria-selected="true"],
 .tabs [aria-selected="true"],
 .filter-pills [aria-pressed="true"] {
@@ -10523,8 +10492,7 @@ u {
 
 .dashboard-team-row:hover,
 .dashboard-ranking-row:hover:not(.dashboard-ranking-selected),
- :root[data-theme="dark"] .dashboard-ranking-row:hover:not(.dashboard-ranking-selected),
-.dashboard-checkin-filters button:not(.dashboard-filter-active):hover {
+ :root[data-theme="dark"] .dashboard-ranking-row:hover:not(.dashboard-ranking-selected) {
     background: transparent !important;
 }
 
@@ -10926,15 +10894,15 @@ tbody tr:nth-child(even):hover,
 }
 
 :root {
-    --interactive-hover-bg: color-mix(in srgb, var(--cherry) 10%, var(--cream-light));
-    --interactive-hover-border: color-mix(in srgb, var(--cherry) 36%, var(--cream-dark));
+    --interactive-hover-bg: color-mix(in srgb, var(--text) 15%, var(--surface));
+    --interactive-hover-border: var(--border);
     --sidebar-hover-bg: color-mix(in srgb, var(--on-cherry) 10%, transparent);
     --active-nav-hover-bg: color-mix(in srgb, var(--cherry) 10%, var(--on-cherry));
 }
 
 :root[data-theme="dark"] {
-    --interactive-hover-bg: color-mix(in srgb, var(--cherry) 14%, var(--cream-light));
-    --interactive-hover-border: color-mix(in srgb, var(--cherry) 44%, var(--cream-dark));
+    --interactive-hover-bg: color-mix(in srgb, var(--text) 8%, var(--surface));
+    --interactive-hover-border: var(--border);
     --sidebar-hover-bg: color-mix(in srgb, var(--cream-light) 14%, transparent);
     --active-nav-hover-bg: color-mix(in srgb, var(--cherry) 14%, var(--on-cherry));
 }
@@ -12718,16 +12686,12 @@ select option { background: var(--surface); color: var(--text); }
 .attendance-date-list time, .attendance-date-picker, .attendance-count-chip,
 .attendance-single-outlet, .attendance-confirmation-toggle,
 .attendance-outlet-select select, .count-chip, .google-button,
-.dashboard-insights>span, .dashboard-checkin-filters, .about-expand-all {
+.dashboard-insights>span, .about-expand-all {
     background: var(--surface);
     color: var(--text);
     border-color: var(--border);
 }
 .dashboard-checkin-filters { background: var(--surface-2); }
-.dashboard-checkin-filters button.dashboard-filter-active {
-    background: var(--accent);
-    color: var(--on-accent);
-}
 
 .password-hash-note { background: var(--pill-half-bg); color: var(--pill-half-text); }
 .dashboard-pending-chip { background: var(--pill-half-bg); color: var(--pill-half-text); }
@@ -13336,6 +13300,60 @@ button, a, [role="button"], select, summary, label { touch-action: manipulation;
 .dd-item[aria-disabled="true"] {
     cursor: not-allowed;
     opacity: 0.5;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    :root body tbody tr:hover,
+    :root body tbody tr:nth-child(odd):hover,
+    :root body tbody tr:nth-child(even):hover,
+    :root body .attendance-panel tbody tr:hover {
+        background: color-mix(in srgb, var(--text) 5%, var(--surface)) !important;
+        background-color: color-mix(in srgb, var(--text) 5%, var(--surface)) !important;
+    }
+
+    :root body tbody tr:hover > td,
+    :root body tbody tr:nth-child(odd):hover > td,
+    :root body tbody tr:nth-child(even):hover > td,
+    :root body .attendance-panel tbody tr:hover > td {
+        background: color-mix(in srgb, var(--text) 5%, var(--surface)) !important;
+        background-color: color-mix(in srgb, var(--text) 5%, var(--surface)) !important;
+    }
+
+    :root body .attendance-status-option:not(.is-selected):hover {
+        background: var(--surface) !important;
+        background-color: var(--surface) !important;
+    }
+
+    :root body .dashboard-checkin-filters button:not(.dashboard-filter-active):hover {
+        background: var(--interactive-hover-bg) !important;
+        background-color: var(--interactive-hover-bg) !important;
+        color: var(--text) !important;
+        box-shadow: none !important;
+    }
+}
+
+:root body .dashboard-checkin-filters button.dashboard-filter-active {
+    background: var(--accent) !important;
+    border-color: var(--accent) !important;
+    color: var(--on-accent) !important;
+    font-weight: 600;
+    box-shadow: none !important;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    :root body .dashboard-checkin-filters button.dashboard-filter-active:hover {
+        background: var(--accent) !important;
+        background-color: var(--accent) !important;
+        color: var(--on-accent) !important;
+    }
+}
+
+:root body .badge.attendance-status-p,
+:root body .badge.attendance-status-a,
+:root body .badge.attendance-status-hd,
+:root body .badge.attendance-status-wo,
+:root body .badge.badge-unmarked {
+    box-shadow: none !important;
 }
 
 :root[data-theme="dark"] .dd-panel {
@@ -14373,4 +14391,156 @@ button, a, [role="button"], select, summary, label { touch-action: manipulation;
 .login-screen .login-form .field input {
   background: color-mix(in srgb, var(--cream) 72%, var(--cream-light)) !important;
   border-color: color-mix(in srgb, var(--cream-dark) 78%, var(--cherry) 22%) !important;
+}
+
+.access-modal-backdrop.designation-drawer-backdrop {
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  padding: 0;
+}
+
+.access-modal.designation-modal.designation-drawer {
+  width: min(680px, 100vw);
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  border-radius: 20px 0 0 20px;
+  animation: designation-drawer-enter 180ms ease-out;
+}
+
+@keyframes designation-drawer-enter {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.permission-toggle-grid label,
+.user-permission-groups label {
+  justify-content: space-between;
+  min-height: 40px;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.designation-permissions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.designation-permissions-heading {
+  grid-column: 1 / -1;
+}
+
+.designation-permissions fieldset {
+  min-width: 0;
+}
+
+.permission-toggle-grid label > span,
+.user-permission-groups label > span {
+  flex: 1;
+}
+
+.permission-toggle-grid input[role="switch"],
+.user-permission-groups input[role="switch"],
+.toggle-row input.user-management-switch {
+  position: relative;
+  flex: 0 0 38px;
+  width: 38px !important;
+  min-width: 38px;
+  height: 22px !important;
+  padding: 0 !important;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2) !important;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.permission-toggle-grid input[role="switch"]::before,
+.user-permission-groups input[role="switch"]::before,
+.toggle-row input.user-management-switch::before {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface);
+  content: "";
+  transition: transform 140ms ease, background-color 140ms ease;
+}
+
+.permission-toggle-grid input[role="switch"]:checked,
+.user-permission-groups input[role="switch"]:checked,
+.toggle-row input.user-management-switch:checked {
+  border-color: var(--accent);
+  background: var(--accent) !important;
+}
+
+.permission-toggle-grid input[role="switch"]:checked::before,
+.user-permission-groups input[role="switch"]:checked::before,
+.toggle-row input.user-management-switch:checked::before {
+  background: var(--on-accent);
+  transform: translateX(16px);
+}
+
+.permission-toggle-grid input[role="switch"]:focus-visible,
+.user-permission-groups input[role="switch"]:focus-visible,
+.toggle-row input.user-management-switch:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 2px;
+}
+
+.permission-toggle-grid input[role="switch"]:disabled,
+.user-permission-groups input[role="switch"]:disabled,
+.toggle-row input.user-management-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 760px) {
+  .access-modal.designation-modal.designation-drawer {
+    width: 100vw;
+    border-radius: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .designation-permissions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .access-modal.designation-modal.designation-drawer,
+  .permission-toggle-grid input[role="switch"],
+  .user-permission-groups input[role="switch"],
+  .toggle-row input.user-management-switch,
+  .permission-toggle-grid input[role="switch"]::before,
+  .user-permission-groups input[role="switch"]::before,
+  .toggle-row input.user-management-switch::before {
+    animation: none;
+    transition: none;
+  }
+}
+
+:root:has([aria-modal="true"]),
+body:has([aria-modal="true"]),
+:root:has(.mobile-scrim),
+body:has(.mobile-scrim) {
+  overflow: hidden !important;
+  overscroll-behavior: none;
 }

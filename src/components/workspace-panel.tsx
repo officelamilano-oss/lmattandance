@@ -71,7 +71,7 @@
     WorkspaceData,
   } from "@/lib/ui-types";
   import {
-    adminOnlyPages,
+    allPermissionValues,
     designationPermissionGroups,
     designationOnlyPermissionSet,
     legacyOutletDefaultPermissions,
@@ -4878,7 +4878,7 @@
       return (
         <div className="content-area">
           <PageHead
-            title="Access management"
+            title="User management"
             description="Create reusable designations with page permissions, then assign them to accounts and outlets."
           />
           <Notice error={error} success={success} refreshing={refreshing} />
@@ -7990,8 +7990,25 @@
     const [permissions, setPermissions] = useState<Permission[]>([]);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState("");
+    const permissionGroups = [
+      ...designationPermissionGroups.filter(
+        (group) => group.permissions.length > 1 || group.title === "Dashboard",
+      ),
+      ...designationPermissionGroups.filter(
+        (group) => group.permissions.length === 1 && group.title !== "Dashboard",
+      ),
+    ];
 
     function beginEdit(id: string) {
+      if (!id) {
+        setIsOpen(true);
+        setEditingId("");
+        setName("");
+        setDescription("");
+        setPermissions([...allPermissionValues]);
+        setError("");
+        return;
+      }
       const designation = designations.find((item) => item._id === id);
       setIsOpen(true);
       setEditingId(id);
@@ -8097,9 +8114,9 @@
             </small>
           </div>
         )}
-        {isOpen && <ModalPortal><div className="access-modal-backdrop">
+        {isOpen && <ModalPortal><div className="access-modal-backdrop designation-drawer-backdrop">
               <section
-                className="access-modal designation-modal"
+                className="access-modal designation-modal designation-drawer"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="designation-modal-title"
@@ -8152,14 +8169,24 @@
                 {permissions.length} selected · applies to assigned users
               </span>
                     </div>
-                    {designationPermissionGroups.map((group) => (
-                      <fieldset key={group.title}>
+                    {permissionGroups.map((group) => (
+                      <fieldset
+                        key={group.title}
+                        style={{
+                          gridColumn:
+                            group.permissions.length > 1 ||
+                            group.title === "Dashboard"
+                              ? "1 / -1"
+                              : undefined,
+                        }}
+                      >
                         <legend>{group.title}</legend>
                         <div className="permission-toggle-grid">
                           {group.permissions.map((permission) => (
                             <label key={permission.value}>
                               <input
                                 type="checkbox"
+                                role="switch"
                                 checked={permissions.includes(permission.value)}
                                 onChange={(event) =>
                                   setPermissions((current) =>
@@ -8177,15 +8204,6 @@
                         </div>
                       </fieldset>
                     ))}
-                    <fieldset className="admin-only-permissions">
-                      <legend>Admin-only pages</legend>
-                      {adminOnlyPages.map((page) => (
-                        <div key={page.title}>
-                          <span>{page.title}</span>
-                          <small>MAIN_ADMIN only</small>
-                        </div>
-                      ))}
-                    </fieldset>
                   </div>
                   <div className="form-actions">
                     <button className="button button-primary" disabled={busy}>
@@ -8377,6 +8395,7 @@
                       <label key={permission.value}>
                         <input
                           type="checkbox"
+                          role="switch"
                           checked={
                             role === "MAIN_ADMIN" ||
                             permissions.includes(permission.value)
@@ -8392,28 +8411,19 @@
                             )
                           }
                         />
-                        {permission.label}
+                        <span>{permission.label}</span>
                       </label>
                     ))}
                 </fieldset>
               ))}
-              {role === "MAIN_ADMIN" && (
-                <fieldset className="admin-only-permissions">
-                  <legend>Admin-only pages</legend>
-                  {adminOnlyPages.map((page) => (
-                    <div key={page.title}>
-                      <span>{page.title}</span>
-                      <small>MAIN_ADMIN only</small>
-                    </div>
-                  ))}
-                </fieldset>
-              )}
             </div>
           )}
           <label className="toggle-row">
             <span>Account active</span>
             <input
               type="checkbox"
+              role="switch"
+              className="user-management-switch"
               checked={active}
               onChange={(event) => setActive(event.target.checked)}
             />
